@@ -1,0 +1,35 @@
+# ForkHub configuration
+# Copy to ~/.config/forkhub/forkhub.toml or project root
+
+[github]
+# token = "ghp_..."                      # Or use GITHUB_TOKEN env var
+# username = "your-username"             # For auto-discovery of owned repos
+
+[anthropic]
+# api_key = "sk-ant-..."                 # Or use ANTHROPIC_API_KEY env var
+analysis_budget_usd = 0.50               # Max spend per sync analysis run
+model = "sonnet"                         # Default model for analysis agent
+digest_model = "haiku"                   # Model for digest composition
+
+[database]
+path = "~/.local/share/forkhub/forkhub.db"
+
+[sync]
+polling_interval = "6h"
+max_forks_per_repo = 5000
+
+[embedding]
+provider = "local"                       # "local", "voyage", "openai"
+model = "all-MiniLM-L6-v2"
+
+[digest]
+frequency = "weekly"                     # daily, weekly, on_demand
+day_of_week = "monday"
+time = "09:00"
+min_significance = 5
+backends = ["console"]
+
+[tracking]
+default_fork_depth = 1
+auto_discover_owned = true
+track_sibling_forks = true

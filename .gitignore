@@ -1,4 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+
+# ruff
+.ruff_cache/
+
+# Database
+*.db
 
 # Dolt database files (added by bd init)
 .dolt/
-*.db
+
+# OS
+.DS_Store
+
+# Logs
+logs/
+
+# Config (may contain secrets)
+forkhub.toml
+
+# Worktrees
+.worktrees/
