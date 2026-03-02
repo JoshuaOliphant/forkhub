@@ -245,9 +245,7 @@ class GitHubProvider:
         data = await self._get(f"/repos/{owner}/{repo}/commits", params=params)
         return [self._parse_commit(c) for c in data]
 
-    async def get_file_diff(
-        self, owner: str, repo: str, base: str, head: str, path: str
-    ) -> str:
+    async def get_file_diff(self, owner: str, repo: str, base: str, head: str, path: str) -> str:
         """Get the patch diff for a specific file between two refs.
 
         Uses the compare endpoint and filters to the requested file.
