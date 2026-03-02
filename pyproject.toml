@@ -17,6 +17,7 @@ dependencies = [
     "sentence-transformers>=3.3,<4",
     "sqlite-vec>=0.1.6,<1",
     "tomli>=2.2,<3;python_version<'3.12'",
+    "aiosqlite>=0.22.1",
 ]
 
 [project.scripts]
