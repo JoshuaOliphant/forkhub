@@ -42,6 +42,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "integration: marks tests requiring external services (deselect with '-m \"not integration\"')",
+    "slow: marks tests that are slow (e.g., model downloads) (deselect with '-m \"not slow\"')",
 ]
 
 [tool.ruff]
