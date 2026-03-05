@@ -15,7 +15,7 @@ uv add <package>                 # Add dependency
 uv run forkhub <command>         # Run CLI
 
 # Testing
-uv run pytest                    # Run all tests (430 tests)
+uv run pytest                    # Run all tests (450 tests)
 uv run pytest tests/test_foo.py  # Single file
 uv run pytest -k "test_name"    # Single test by name
 uv run pytest -x                # Stop on first failure
@@ -158,7 +158,7 @@ Pydantic Settings `**kwargs` override env vars. The `_merge_env_over_toml()` fun
 
 ## Testing
 
-430 tests across 18 test files. Test conventions:
+450 tests across 18 test files. Test conventions:
 
 - **pytest-asyncio** with `asyncio_mode = "auto"` — async tests just work
 - **respx** for mocking HTTP in GitHub provider tests
@@ -166,21 +166,102 @@ Pydantic Settings `**kwargs` override env vars. The `_merge_env_over_toml()` fun
 - **Integration tests** marked `@pytest.mark.integration` — require real DB, may need API keys
 - **Slow tests** marked `@pytest.mark.slow` — e.g., model downloads
 
+## Non-Interactive Shell Commands
+
+**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+
+Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
+
+```bash
+# Force overwrite without prompting
+cp -f source dest           # NOT: cp source dest
+mv -f source dest           # NOT: mv source dest
+rm -f file                  # NOT: rm file
+
+# For recursive operations
+rm -rf directory            # NOT: rm -r directory
+cp -rf source dest          # NOT: cp -r source dest
+```
+
+Other commands that may prompt:
+- `scp` - use `-o BatchMode=yes` for non-interactive
+- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
+- `apt-get` - use `-y` flag
+- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+
 ## Issue Tracking
 
-This project uses **bd (beads)** for issue tracking.
-Run `bd prime` for workflow context, or install hooks (`bd hooks install`) for auto-injection.
+This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
 
 **Quick reference:**
-- `bd ready` - Find unblocked work
-- `bd create "Title" --type task --priority 2` - Create issue
-- `bd close <id>` - Complete work
-- `bd dolt push` - Push beads to remote
 
-For full workflow details: `bd prime`
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work atomically
+bd close <id>         # Complete work
+bd sync               # Sync with git
+```
+
+### Creating issues
+
+```bash
+bd create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
+bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
+```
+
+### Issue types and priorities
+
+| Type | Description |
+|------|-------------|
+| `bug` | Something broken |
+| `feature` | New functionality |
+| `task` | Work item (tests, docs, refactoring) |
+| `epic` | Large feature with subtasks |
+| `chore` | Maintenance (dependencies, tooling) |
+
+Priorities: `0` critical, `1` high, `2` medium (default), `3` low, `4` backlog.
+
+### Agent workflow
+
+1. **Check ready work**: `bd ready` shows unblocked issues
+2. **Claim your task atomically**: `bd update <id> --claim`
+3. **Work on it**: Implement, test, document
+4. **Discover new work?** Create linked issue with `--deps discovered-from:<parent-id>`
+5. **Complete**: `bd close <id> --reason "Done"`
+
+### Rules
+
+- Use bd for ALL task tracking — no markdown TODOs, no external trackers
+- Always use `--json` flag for programmatic use
+- Link discovered work with `discovered-from` dependencies
+- Check `bd ready` before asking "what should I work on?"
+- bd auto-syncs to `.beads/issues.jsonl` after changes (5s debounce)
+
+## Session Completion
+
+**When ending a work session**, complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+1. **File issues for remaining work** — Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) — Tests, linters, builds
+3. **Update issue status** — Close finished work, update in-progress items
+4. **Push to remote** — This is mandatory:
+   ```bash
+   git pull --rebase
+   bd sync
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** — Clear stashes, prune remote branches
+6. **Verify** — All changes committed AND pushed
+7. **Hand off** — Provide context for next session
+
+**Critical rules:**
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing — that leaves work stranded locally
+- NEVER say "ready to push when you are" — YOU must push
+- If push fails, resolve and retry until it succeeds
 
 ## Spec
 
-The full technical specification is in [spec.md](spec.md). Reference it for data model schemas, agent tool signatures, CLI command tree, config format, and cost estimates.k
-
-@AGENTS.md
+The full technical specification is in [spec.md](spec.md). Reference it for data model schemas, agent tool signatures, CLI command tree, config format, and cost estimates.
