@@ -24,11 +24,33 @@ class AnthropicSettings(BaseSettings):
     """Anthropic API settings for agent-based analysis."""
 
     api_key: str = ""
+    oauth_token: str = ""
     analysis_budget_usd: float = 0.50
     model: str = "sonnet"
     digest_model: str = "haiku"
 
     model_config = SettingsConfigDict(env_prefix="ANTHROPIC_")
+
+    @property
+    def has_auth(self) -> bool:
+        """Return True if any form of authentication is configured."""
+        return bool(self.api_key) or bool(self.oauth_token)
+
+    @property
+    def effective_token(self) -> str:
+        """Return the active token, preferring api_key over oauth_token."""
+        if self.api_key:
+            return self.api_key
+        return self.oauth_token
+
+    @property
+    def auth_method(self) -> str | None:
+        """Return which auth method is active, or None if neither."""
+        if self.api_key:
+            return "api_key"
+        if self.oauth_token:
+            return "oauth"
+        return None
 
 
 class DatabaseSettings(BaseSettings):
@@ -101,6 +123,18 @@ class ForkHubSettings(BaseSettings):
     tracking: TrackingSettings = Field(default_factory=TrackingSettings)
 
 
+def load_dotenv_file(dotenv_path: Path | None = None) -> None:
+    """Load .env file into os.environ if it exists.
+
+    Searches cwd for .env by default. Pass dotenv_path to load a specific file.
+    Existing env vars are NOT overridden — .env values only fill in gaps.
+    Called once at CLI startup before any settings are loaded.
+    """
+    from dotenv import load_dotenv
+
+    load_dotenv(dotenv_path=dotenv_path, override=False)
+
+
 def _find_config_file() -> Path | None:
     """Search for a config file in cwd then ~/.config/forkhub/.
 
@@ -132,6 +166,12 @@ def _env_prefix_for(settings_cls: type[BaseSettings]) -> str:
     return settings_cls.model_config.get("env_prefix", "")
 
 
+# Fields where the env var name differs from the standard {prefix}{field} pattern.
+_CUSTOM_ENV_VARS: dict[type[BaseSettings], dict[str, str]] = {
+    AnthropicSettings: {"oauth_token": "CLAUDE_ACCESS_TOKEN"},
+}
+
+
 def _merge_env_over_toml(
     settings_cls: type[BaseSettings], toml_section: dict[str, Any]
 ) -> dict[str, Any]:
@@ -140,12 +180,17 @@ def _merge_env_over_toml(
     For each field in the settings class, checks if the corresponding env var is
     set (using the class's env_prefix). If the env var exists, its value takes
     precedence over the TOML value. Otherwise the TOML value is kept.
+
+    Some fields have custom env var names (e.g., oauth_token -> CLAUDE_ACCESS_TOKEN).
+    These are defined in _CUSTOM_ENV_VARS above.
     """
     merged = dict(toml_section)
     prefix = _env_prefix_for(settings_cls)
+    custom = _CUSTOM_ENV_VARS.get(settings_cls, {})
 
     for field_name in settings_cls.model_fields:
-        env_key = f"{prefix}{field_name}".upper()
+        # Use custom env var name if defined, otherwise follow the prefix convention
+        env_key = custom.get(field_name, f"{prefix}{field_name}".upper())
         env_val = os.environ.get(env_key)
         if env_val is not None:
             merged[field_name] = env_val

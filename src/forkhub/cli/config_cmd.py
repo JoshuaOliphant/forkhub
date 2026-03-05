@@ -48,6 +48,23 @@ async def _config_show_impl(
     _output(f"  username: {settings.github.username}", capture_output)
 
     _output("", capture_output)
+    _output("[cyan]Anthropic[/cyan]", capture_output)
+    auth_method = settings.anthropic.auth_method
+    if auth_method == "api_key":
+        key = settings.anthropic.api_key
+        masked = f"{key[:8]}..." if len(key) > 8 else "***"
+        _output(f"  auth: API key ({masked})", capture_output)
+    elif auth_method == "oauth":
+        tok = settings.anthropic.oauth_token
+        masked = f"{tok[:8]}..." if len(tok) > 8 else "***"
+        _output(f"  auth: OAuth token ({masked})", capture_output)
+    else:
+        _output("  auth: [yellow]not configured[/yellow]", capture_output)
+    _output(f"  analysis_budget_usd: {settings.anthropic.analysis_budget_usd}", capture_output)
+    _output(f"  model: {settings.anthropic.model}", capture_output)
+    _output(f"  digest_model: {settings.anthropic.digest_model}", capture_output)
+
+    _output("", capture_output)
     _output("[cyan]Database[/cyan]", capture_output)
     _output(f"  path: {settings.database.path}", capture_output)
 

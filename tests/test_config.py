@@ -412,6 +412,152 @@ class TestDirectoryHelpers:
 
 
 # ===========================================================================
+# Test: .env file loading via load_dotenv
+# ===========================================================================
+
+
+class TestDotenvLoading:
+    """Verify that load_dotenv_file() loads .env into os.environ."""
+
+    def test_load_dotenv_populates_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from forkhub.config import load_dotenv_file
+
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text('GITHUB_TOKEN="ghp_dotenvtest"\nANTHROPIC_API_KEY="sk-dotenv"\n')
+
+        load_dotenv_file(dotenv_path=env_file)
+
+        import os
+
+        assert os.environ.get("GITHUB_TOKEN") == "ghp_dotenvtest"
+        assert os.environ.get("ANTHROPIC_API_KEY") == "sk-dotenv"
+
+    def test_load_dotenv_does_not_override_existing_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from forkhub.config import load_dotenv_file
+
+        monkeypatch.setenv("GITHUB_TOKEN", "existing-value")
+
+        env_file = tmp_path / ".env"
+        env_file.write_text('GITHUB_TOKEN="from-dotenv"\n')
+
+        load_dotenv_file(dotenv_path=env_file)
+
+        import os
+
+        assert os.environ.get("GITHUB_TOKEN") == "existing-value"
+
+    def test_load_dotenv_no_file_is_noop(self, tmp_path: Path) -> None:
+        from forkhub.config import load_dotenv_file
+
+        nonexistent = tmp_path / ".env"
+        # Should not raise when .env doesn't exist
+        load_dotenv_file(dotenv_path=nonexistent)
+
+    def test_dotenv_values_flow_into_settings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from forkhub.config import load_dotenv_file
+
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text('GITHUB_TOKEN="ghp_settings_test"\n')
+
+        load_dotenv_file(dotenv_path=env_file)
+
+        settings = load_settings(config_path=Path("/nonexistent/forkhub.toml"))
+        assert settings.github.token == "ghp_settings_test"
+
+
+# ===========================================================================
+# Test: OAuth token support (CLAUDE_ACCESS_TOKEN)
+# ===========================================================================
+
+
+class TestOAuthTokenSupport:
+    """AnthropicSettings should support OAuth tokens from `claude set-token`."""
+
+    def test_oauth_token_defaults_to_empty(self) -> None:
+        settings = AnthropicSettings()
+        assert settings.oauth_token == ""
+
+    def test_oauth_token_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_ACCESS_TOKEN", "oauth-token-123")
+        settings = load_settings(config_path=Path("/nonexistent/forkhub.toml"))
+        assert settings.anthropic.oauth_token == "oauth-token-123"
+
+    def test_oauth_token_from_toml(self, tmp_path: Path) -> None:
+        toml = tmp_path / "forkhub.toml"
+        toml.write_text('[anthropic]\noauth_token = "toml-oauth-token"\n')
+        settings = load_settings(config_path=toml)
+        assert settings.anthropic.oauth_token == "toml-oauth-token"
+
+    def test_has_auth_with_api_key_only(self) -> None:
+        settings = AnthropicSettings(api_key="sk-ant-test")
+        assert settings.has_auth is True
+
+    def test_has_auth_with_oauth_token_only(self) -> None:
+        settings = AnthropicSettings(oauth_token="oauth-test")
+        assert settings.has_auth is True
+
+    def test_has_auth_with_both(self) -> None:
+        settings = AnthropicSettings(api_key="sk-ant-test", oauth_token="oauth-test")
+        assert settings.has_auth is True
+
+    def test_has_auth_with_neither(self) -> None:
+        settings = AnthropicSettings()
+        assert settings.has_auth is False
+
+    def test_effective_token_prefers_api_key(self) -> None:
+        settings = AnthropicSettings(api_key="sk-ant-test", oauth_token="oauth-test")
+        assert settings.effective_token == "sk-ant-test"
+
+    def test_effective_token_falls_back_to_oauth(self) -> None:
+        settings = AnthropicSettings(oauth_token="oauth-test")
+        assert settings.effective_token == "oauth-test"
+
+    def test_effective_token_empty_when_neither(self) -> None:
+        settings = AnthropicSettings()
+        assert settings.effective_token == ""
+
+    def test_auth_method_api_key(self) -> None:
+        settings = AnthropicSettings(api_key="sk-ant-test")
+        assert settings.auth_method == "api_key"
+
+    def test_auth_method_oauth(self) -> None:
+        settings = AnthropicSettings(oauth_token="oauth-test")
+        assert settings.auth_method == "oauth"
+
+    def test_auth_method_none(self) -> None:
+        settings = AnthropicSettings()
+        assert settings.auth_method is None
+
+    def test_env_overrides_toml_oauth_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        toml = tmp_path / "forkhub.toml"
+        toml.write_text('[anthropic]\noauth_token = "toml-value"\n')
+        monkeypatch.setenv("CLAUDE_ACCESS_TOKEN", "env-value")
+        settings = load_settings(config_path=toml)
+        assert settings.anthropic.oauth_token == "env-value"
+
+    def test_merge_env_handles_oauth_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_merge_env_over_toml picks up CLAUDE_ACCESS_TOKEN."""
+        from forkhub.config import _merge_env_over_toml
+
+        monkeypatch.setenv("CLAUDE_ACCESS_TOKEN", "merged-token")
+        merged = _merge_env_over_toml(AnthropicSettings, {})
+        assert merged["oauth_token"] == "merged-token"
+
+
+# ===========================================================================
 # Test: Nested settings load properly
 # ===========================================================================
 

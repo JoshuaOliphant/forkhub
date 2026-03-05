@@ -280,6 +280,55 @@ class TestInitCommand:
         modes = [r["tracking_mode"] for r in repos]
         assert "upstream" in modes
 
+    async def test_init_token_from_env(
+        self,
+        db: Database,
+        provider: StubGitProvider,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """init should use GITHUB_TOKEN from env when --token is not passed."""
+        from forkhub.cli.init_cmd import _init_impl
+
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_from_env")
+        output_lines: list[str] = []
+        await _init_impl(
+            username="testuser",
+            token=None,
+            config_dir=tmp_path,
+            db=db,
+            provider=provider,
+            capture_output=output_lines,
+        )
+
+        config_file = tmp_path / "forkhub.toml"
+        content = config_file.read_text()
+        assert "ghp_from_env" in content
+
+    async def test_init_fails_without_token(
+        self,
+        db: Database,
+        provider: StubGitProvider,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """init should error when no token is provided and GITHUB_TOKEN is unset."""
+        from forkhub.cli.init_cmd import _init_impl
+
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        output_lines: list[str] = []
+        await _init_impl(
+            username="testuser",
+            token=None,
+            config_dir=tmp_path,
+            db=db,
+            provider=provider,
+            capture_output=output_lines,
+        )
+
+        output = "\n".join(output_lines)
+        assert "GITHUB_TOKEN" in output or "token" in output.lower()
+
 
 # ---------------------------------------------------------------------------
 # track / untrack / exclude / include commands

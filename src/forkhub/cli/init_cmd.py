@@ -21,7 +21,7 @@ console = Console()
 
 async def _init_impl(
     username: str,
-    token: str,
+    token: str | None = None,
     config_dir: Path | None = None,
     db: Database | None = None,
     provider: GitProvider | None = None,
@@ -29,13 +29,30 @@ async def _init_impl(
 ) -> None:
     """Core init logic, testable without CLI boilerplate.
 
+    If token is None, falls back to GITHUB_TOKEN env var.
     If db/provider are None, they are created from real settings.
     If capture_output is provided, output lines are appended there instead of printed.
     """
+    import os
+
     from forkhub.config import get_config_dir, get_db_path, load_settings
     from forkhub.database import Database as DatabaseImpl
     from forkhub.providers.github import GitHubProvider
     from forkhub.services.tracker import TrackerService
+
+    def _output(line: str) -> None:
+        if capture_output is not None:
+            capture_output.append(line)
+        else:
+            console.print(line)
+
+    # Resolve token: explicit arg > GITHUB_TOKEN env var
+    if not token:
+        token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        _output("[red]Error: No GitHub token provided.[/red]")
+        _output("Pass --token or set GITHUB_TOKEN in your .env file.")
+        return
 
     # Determine config directory
     if config_dir is None:
@@ -46,12 +63,6 @@ async def _init_impl(
     config_file = config_dir / "forkhub.toml"
     config_content = f'[github]\ntoken = "{token}"\nusername = "{username}"\n'
     config_file.write_text(config_content)
-
-    def _output(line: str) -> None:
-        if capture_output is not None:
-            capture_output.append(line)
-        else:
-            console.print(line)
 
     _output(f"Configuration written to {config_file}")
 
@@ -93,7 +104,9 @@ async def _init_impl(
 @async_command
 async def init_command(
     username: str = typer.Option(..., "--user", "-u", help="GitHub username"),
-    token: str = typer.Option(..., "--token", "-t", help="GitHub personal access token"),
+    token: str | None = typer.Option(
+        None, "--token", "-t", help="GitHub token (defaults to GITHUB_TOKEN env var)"
+    ),
 ) -> None:
     """Initialize ForkHub: create config, discover repos."""
     await _init_impl(username=username, token=token)

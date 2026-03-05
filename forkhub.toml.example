@@ -7,6 +7,10 @@
 
 [anthropic]
 # api_key = "sk-ant-..."                 # Or use ANTHROPIC_API_KEY env var
+# oauth_token = "..."                    # Or use CLAUDE_ACCESS_TOKEN env var
+#                                        # Set via: claude set-token
+# Note: api_key takes precedence if both are set.
+# The Agent SDK also uses the claude CLI's stored auth automatically.
 analysis_budget_usd = 0.50               # Max spend per sync analysis run
 model = "sonnet"                         # Default model for analysis agent
 digest_model = "haiku"                   # Model for digest composition
