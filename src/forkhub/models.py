@@ -40,6 +40,17 @@ class ForkVitality(StrEnum):
     UNKNOWN = "unknown"
 
 
+class BackfillStatus(StrEnum):
+    """Outcome of a backfill attempt for a fork signal."""
+
+    PENDING = "pending"
+    PATCH_FAILED = "patch_failed"
+    TESTS_FAILED = "tests_failed"
+    CONFLICT = "conflict"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
 # ── Helper ───────────────────────────────────────────────────
 
 
@@ -171,6 +182,35 @@ class Annotation(BaseModel):
     body: str
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
+
+
+class BackfillAttempt(BaseModel):
+    """Record of an attempt to backfill a fork's change into the local repo."""
+
+    id: str = Field(default_factory=_new_uuid)
+    signal_id: str
+    fork_id: str
+    tracked_repo_id: str
+    status: BackfillStatus = Field(default=BackfillStatus.PENDING)
+    branch_name: str | None = None
+    patch_summary: str | None = None
+    test_output: str | None = None
+    error: str | None = None
+    files_patched: list[str] = Field(default_factory=list)
+    score: float | None = None
+    created_at: datetime = Field(default_factory=_utc_now)
+
+
+class BackfillResult(BaseModel):
+    """Summary of a backfill run across multiple signals."""
+
+    total_evaluated: int = 0
+    attempted: int = 0
+    accepted: int = 0
+    patch_failed: int = 0
+    tests_failed: int = 0
+    conflicts: int = 0
+    branches_created: list[str] = Field(default_factory=list)
 
 
 # ── API Response Models (from GitProvider) ──────────────────

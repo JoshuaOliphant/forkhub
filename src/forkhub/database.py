@@ -126,6 +126,24 @@ CREATE TABLE IF NOT EXISTS sync_state (
     value TEXT NOT NULL,
     updated TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS backfill_attempts (
+    id TEXT PRIMARY KEY,
+    signal_id TEXT NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+    fork_id TEXT NOT NULL REFERENCES forks(id) ON DELETE CASCADE,
+    tracked_repo_id TEXT NOT NULL REFERENCES tracked_repos(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    branch_name TEXT,
+    patch_summary TEXT,
+    test_output TEXT,
+    error TEXT,
+    files_patched TEXT NOT NULL DEFAULT '[]',
+    score REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_backfill_signal ON backfill_attempts(signal_id);
+CREATE INDEX IF NOT EXISTS idx_backfill_status ON backfill_attempts(status);
+CREATE INDEX IF NOT EXISTS idx_backfill_repo ON backfill_attempts(tracked_repo_id);
 """
 
 
@@ -482,6 +500,84 @@ class Database:
     async def get_annotation_by_fork(self, fork_id: str) -> dict[str, Any] | None:
         cursor = await self._db.execute("SELECT * FROM annotations WHERE fork_id = ?", (fork_id,))
         return await cursor.fetchone()
+
+    # ------------------------------------------------------------------
+    # BackfillAttempt CRUD
+    # ------------------------------------------------------------------
+
+    async def insert_backfill_attempt(self, attempt: dict[str, Any]) -> None:
+        await self._db.execute(
+            """
+            INSERT INTO backfill_attempts
+                (id, signal_id, fork_id, tracked_repo_id, status,
+                 branch_name, patch_summary, test_output, error,
+                 files_patched, score, created_at)
+            VALUES
+                (:id, :signal_id, :fork_id, :tracked_repo_id, :status,
+                 :branch_name, :patch_summary, :test_output, :error,
+                 :files_patched, :score, :created_at)
+            """,
+            attempt,
+        )
+        await self._db.commit()
+
+    async def update_backfill_attempt(self, attempt: dict[str, Any]) -> None:
+        await self._db.execute(
+            """
+            UPDATE backfill_attempts SET
+                status = :status, branch_name = :branch_name,
+                patch_summary = :patch_summary, test_output = :test_output,
+                error = :error, files_patched = :files_patched, score = :score
+            WHERE id = :id
+            """,
+            attempt,
+        )
+        await self._db.commit()
+
+    async def get_backfill_attempt(self, attempt_id: str) -> dict[str, Any] | None:
+        cursor = await self._db.execute(
+            "SELECT * FROM backfill_attempts WHERE id = ?", (attempt_id,)
+        )
+        return await cursor.fetchone()
+
+    async def list_backfill_attempts(
+        self,
+        repo_id: str | None = None,
+        status: str | None = None,
+        signal_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if repo_id is not None:
+            clauses.append("tracked_repo_id = ?")
+            params.append(repo_id)
+
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+
+        if signal_id is not None:
+            clauses.append("signal_id = ?")
+            params.append(signal_id)
+
+        where = ""
+        if clauses:
+            where = "WHERE " + " AND ".join(clauses)
+
+        cursor = await self._db.execute(
+            f"SELECT * FROM backfill_attempts {where} ORDER BY created_at DESC",
+            params,
+        )
+        return await cursor.fetchall()
+
+    async def has_backfill_for_signal(self, signal_id: str) -> bool:
+        """Check if any backfill attempt exists for a given signal."""
+        cursor = await self._db.execute(
+            "SELECT 1 FROM backfill_attempts WHERE signal_id = ? LIMIT 1",
+            (signal_id,),
+        )
+        return await cursor.fetchone() is not None
 
     # ------------------------------------------------------------------
     # Sync State

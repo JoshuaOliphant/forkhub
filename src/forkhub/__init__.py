@@ -9,11 +9,13 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from datetime import datetime
+    from pathlib import Path
 
     from forkhub.config import ForkHubSettings
     from forkhub.database import Database
     from forkhub.interfaces import EmbeddingProvider, GitProvider, NotificationBackend
     from forkhub.models import (
+        BackfillResult,
         Cluster,
         DeliveryResult,
         Digest,
@@ -169,3 +171,60 @@ class ForkHub:
     async def deliver_digest(self, digest: Digest) -> list[DeliveryResult]:
         """Deliver a digest via configured backends."""
         return await self._digest.deliver_digest(digest)
+
+    async def backfill(
+        self,
+        repo: str | None = None,
+        *,
+        since: datetime | None = None,
+        dry_run: bool = False,
+        repo_path: Path | None = None,
+        min_significance: int = 5,
+        max_attempts: int = 10,
+        auto_fix_tests: bool = True,
+        test_command: str = "uv run pytest -x --tb=short -q",
+    ) -> BackfillResult:
+        """Run the agentic backfill loop to cherry-pick valuable fork changes.
+
+        Evaluates high-significance signals from fork analysis, attempts to
+        apply their patches to the local repo, runs the test suite to score
+        the result, and creates candidate branches for accepted patches.
+        """
+        from forkhub.services.backfill import BackfillService
+
+        backfill_service = BackfillService(
+            db=self._db,
+            provider=self._provider,
+            repo_path=repo_path,
+            test_command=test_command,
+            min_significance=min_significance,
+            max_attempts=max_attempts,
+            auto_fix_tests=auto_fix_tests,
+        )
+
+        if repo:
+            owner, name = repo.split("/", 1)
+            repo_row = await self._db.get_tracked_repo_by_name(f"{owner}/{name}")
+            if repo_row is None:
+                raise ValueError(f"Repository {repo} is not tracked")
+            return await backfill_service.run_backfill(
+                repo_row["id"], since=since, dry_run=dry_run
+            )
+
+        # Backfill all tracked repos
+        from forkhub.models import BackfillResult as _BackfillResult
+
+        combined = _BackfillResult()
+        repos = await self._db.list_tracked_repos()
+        for repo_row in repos:
+            result = await backfill_service.run_backfill(
+                repo_row["id"], since=since, dry_run=dry_run
+            )
+            combined.total_evaluated += result.total_evaluated
+            combined.attempted += result.attempted
+            combined.accepted += result.accepted
+            combined.patch_failed += result.patch_failed
+            combined.tests_failed += result.tests_failed
+            combined.conflicts += result.conflicts
+            combined.branches_created.extend(result.branches_created)
+        return combined
