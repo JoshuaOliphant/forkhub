@@ -21,7 +21,7 @@ if TYPE_CHECKING:
         TrackedRepo,
         TrackingMode,
     )
-    from forkhub.services.sync import SyncResult
+    from forkhub.services.sync import ReconcileResult, SyncResult
 
 __version__ = "0.1.0"
 
@@ -142,7 +142,29 @@ class ForkHub:
                 results=[result],
                 errors=result.errors,
             )
-        return await self._sync.sync_all()
+        return await self._sync.sync_all(
+            username=self._settings.github.username or None,
+            reconcile=True,
+        )
+
+    async def reconcile(self) -> ReconcileResult:
+        """Health-check inaccessible repos and auto-discover new owned repos."""
+        return await self._sync.reconcile(
+            username=self._settings.github.username or None,
+            tracker_service=self._tracker,
+        )
+
+    async def retry_repo(self, owner: str, repo: str) -> None:
+        """Reset an inaccessible repo's sync_status back to ok for retry."""
+        from forkhub.models import SyncStatus
+
+        full_name = f"{owner}/{repo}"
+        repo_row = await self._db.get_tracked_repo_by_name(full_name)
+        if repo_row is None:
+            raise ValueError(f"Repository {full_name} is not tracked")
+        repo_row["sync_status"] = str(SyncStatus.OK)
+        repo_row["last_sync_error"] = None
+        await self._db.update_tracked_repo(repo_row)
 
     async def get_clusters(self, owner: str, repo: str, min_size: int = 2) -> list[Cluster]:
         """Get signal clusters for a repository."""

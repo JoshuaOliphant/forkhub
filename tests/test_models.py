@@ -26,6 +26,7 @@ from forkhub.models import (
     RepoInfo,
     Signal,
     SignalCategory,
+    SyncStatus,
     TrackedRepo,
     TrackingMode,
     WebhookAction,
@@ -88,6 +89,23 @@ class TestForkVitality:
         assert isinstance(ForkVitality.ACTIVE, str)
 
 
+class TestSyncStatus:
+    def test_values(self):
+        assert SyncStatus.OK == "ok"
+        assert SyncStatus.INACCESSIBLE == "inaccessible"
+        assert SyncStatus.ERROR == "error"
+
+    def test_all_members(self):
+        assert set(SyncStatus) == {
+            SyncStatus.OK,
+            SyncStatus.INACCESSIBLE,
+            SyncStatus.ERROR,
+        }
+
+    def test_is_str(self):
+        assert isinstance(SyncStatus.OK, str)
+
+
 # ── TrackedRepo Tests ────────────────────────────────────────
 
 
@@ -115,6 +133,8 @@ class TestTrackedRepo:
         assert repo.webhook_id is None
         assert repo.last_synced_at is None
         assert isinstance(repo.created_at, datetime)
+        assert repo.sync_status == SyncStatus.OK
+        assert repo.last_sync_error is None
 
     def test_full_construction(self):
         now = datetime.now(tz=UTC)

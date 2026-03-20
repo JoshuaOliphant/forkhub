@@ -38,6 +38,8 @@ def _make_tracked_repo(**overrides) -> dict:
         "fork_depth": 1,
         "excluded": False,
         "webhook_id": None,
+        "sync_status": "ok",
+        "last_sync_error": None,
         "last_synced_at": None,
         "created_at": _now_iso(),
     }
@@ -341,6 +343,75 @@ class TestTrackedRepoCRUD:
         await db.insert_tracked_repo(repo1)
         with pytest.raises(aiosqlite.IntegrityError):
             await db.insert_tracked_repo(repo2)
+
+    async def test_insert_with_default_sync_status(self, db: Database):
+        """Repos inserted without sync_status get default 'ok'."""
+        repo = _make_tracked_repo()
+        await db.insert_tracked_repo(repo)
+        result = await db.get_tracked_repo(repo["id"])
+        assert result is not None
+        assert result["sync_status"] == "ok"
+        assert result["last_sync_error"] is None
+
+    async def test_insert_with_inaccessible_status(self, db: Database):
+        """Repos can be inserted with inaccessible sync_status and error message."""
+        repo = _make_tracked_repo(
+            sync_status="inaccessible",
+            last_sync_error="404 Not Found",
+        )
+        await db.insert_tracked_repo(repo)
+        result = await db.get_tracked_repo(repo["id"])
+        assert result is not None
+        assert result["sync_status"] == "inaccessible"
+        assert result["last_sync_error"] == "404 Not Found"
+
+    async def test_update_sync_status(self, db: Database):
+        """sync_status can be updated from ok to inaccessible."""
+        repo = _make_tracked_repo()
+        await db.insert_tracked_repo(repo)
+        repo["sync_status"] = "inaccessible"
+        repo["last_sync_error"] = "403 Forbidden"
+        await db.update_tracked_repo(repo)
+        result = await db.get_tracked_repo(repo["id"])
+        assert result is not None
+        assert result["sync_status"] == "inaccessible"
+        assert result["last_sync_error"] == "403 Forbidden"
+
+    async def test_list_filtered_by_sync_status(self, db: Database):
+        """list_tracked_repos(sync_status=...) filters correctly."""
+        repo_ok = _make_tracked_repo(
+            github_id=1, owner="a", name="r1", full_name="a/r1", sync_status="ok"
+        )
+        repo_bad = _make_tracked_repo(
+            github_id=2,
+            owner="b",
+            name="r2",
+            full_name="b/r2",
+            sync_status="inaccessible",
+            last_sync_error="404",
+        )
+        await db.insert_tracked_repo(repo_ok)
+        await db.insert_tracked_repo(repo_bad)
+
+        results = await db.list_tracked_repos(sync_status="inaccessible")
+        assert len(results) == 1
+        assert results[0]["sync_status"] == "inaccessible"
+
+        results_ok = await db.list_tracked_repos(sync_status="ok")
+        assert len(results_ok) == 1
+        assert results_ok[0]["sync_status"] == "ok"
+
+    async def test_migration_adds_columns_to_existing_db(self, db: Database):
+        """Re-connecting after schema change adds new columns via ALTER TABLE migration."""
+        await db.close()
+        db2 = Database(":memory:")
+        await db2.connect()
+        repo = _make_tracked_repo()
+        await db2.insert_tracked_repo(repo)
+        result = await db2.get_tracked_repo(repo["id"])
+        assert result is not None
+        assert result["sync_status"] == "ok"
+        await db2.close()
 
 
 # ---------------------------------------------------------------------------

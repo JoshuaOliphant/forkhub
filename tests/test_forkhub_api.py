@@ -492,3 +492,52 @@ class TestDeliverDigest:
         assert results[0].success is True
         assert results[0].backend_name == "stub"
         assert len(backend.delivered) == 1
+
+
+# ---------------------------------------------------------------------------
+# reconcile()
+# ---------------------------------------------------------------------------
+
+
+class TestReconcile:
+    async def test_sync_triggers_reconciliation(self, hub):
+        """sync() should trigger reconciliation."""
+        await hub.track("testuser", "alpha")
+        result = await hub.sync()
+        assert isinstance(result, SyncResult)
+
+    async def test_reconcile_standalone(self, hub, db: Database):
+        """reconcile() as standalone method should work."""
+        from forkhub.services.sync import ReconcileResult
+
+        await hub.track("testuser", "alpha")
+        result = await hub.reconcile()
+        assert isinstance(result, ReconcileResult)
+
+
+# ---------------------------------------------------------------------------
+# retry_repo()
+# ---------------------------------------------------------------------------
+
+
+class TestRetryRepo:
+    async def test_retry_repo_resets_inaccessible(self, hub, db: Database):
+        """retry_repo() should reset sync_status back to 'ok'."""
+        await hub.track("testuser", "alpha")
+        # Mark as inaccessible
+        row = await db.get_tracked_repo_by_name("testuser/alpha")
+        assert row is not None
+        row["sync_status"] = "inaccessible"
+        row["last_sync_error"] = "404 Not Found"
+        await db.update_tracked_repo(row)
+
+        await hub.retry_repo("testuser", "alpha")
+        row = await db.get_tracked_repo_by_name("testuser/alpha")
+        assert row is not None
+        assert row["sync_status"] == "ok"
+        assert row["last_sync_error"] is None
+
+    async def test_retry_repo_raises_on_untracked(self, hub):
+        """retry_repo() should raise ValueError for untracked repo."""
+        with pytest.raises(ValueError, match="not tracked"):
+            await hub.retry_repo("nobody", "nothing")

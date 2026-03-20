@@ -8,15 +8,25 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from forkhub.models import Fork, ForkVitality, TrackedRepo
+from forkhub.models import Fork, ForkVitality, SyncStatus, TrackedRepo
 
 if TYPE_CHECKING:
     from forkhub.config import SyncSettings
     from forkhub.database import Database
     from forkhub.interfaces import GitProvider
     from forkhub.models import ForkInfo
+    from forkhub.services.tracker import TrackerService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ReconcileResult:
+    """Result of reconciling tracked repos against actual GitHub state."""
+
+    repos_recovered: list[str] = field(default_factory=list)
+    repos_still_inaccessible: list[str] = field(default_factory=list)
+    new_repos_discovered: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -39,6 +49,7 @@ class SyncResult:
     total_new_releases: int = 0
     results: list[RepoSyncResult] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    reconcile: ReconcileResult | None = None
 
 
 class SyncService:
@@ -62,12 +73,25 @@ class SyncService:
         self._settings = settings
         self._clock = clock
 
-    async def sync_all(self) -> SyncResult:
+    async def sync_all(
+        self,
+        username: str | None = None,
+        reconcile: bool = True,
+    ) -> SyncResult:
         """Sync all non-excluded tracked repos and aggregate results."""
         result = SyncResult()
+
+        # Run reconciliation if username is provided and reconcile is enabled
+        if reconcile and username:
+            result.reconcile = await self.reconcile(username=username)
+
         repo_rows = await self._db.list_tracked_repos(include_excluded=False)
 
         for repo_row in repo_rows:
+            # Skip inaccessible repos — reconcile already tried them
+            if repo_row.get("sync_status") == str(SyncStatus.INACCESSIBLE):
+                continue
+
             try:
                 repo_result = await self.sync_repo(repo_row["id"])
                 result.results.append(repo_result)
@@ -79,6 +103,46 @@ class SyncService:
                 error_msg = f"Error syncing {repo_row['full_name']}: {exc}"
                 result.errors.append(error_msg)
                 logger.exception(error_msg)
+
+        return result
+
+    async def reconcile(
+        self,
+        username: str | None = None,
+        tracker_service: TrackerService | None = None,
+    ) -> ReconcileResult:
+        """Reconcile tracked repos against actual GitHub state.
+
+        1. Health-check repos marked inaccessible: try get_repo(), reset if accessible.
+        2. Auto-discover new owned repos if tracker_service is provided.
+        """
+        result = ReconcileResult()
+
+        # Phase 1: Health-check inaccessible repos
+        inaccessible_rows = await self._db.list_tracked_repos(
+            sync_status=str(SyncStatus.INACCESSIBLE),
+            include_excluded=True,
+        )
+        for row in inaccessible_rows:
+            try:
+                await self._provider.get_repo(row["owner"], row["name"])
+                # Repo is accessible again — reset status
+                row["sync_status"] = str(SyncStatus.OK)
+                row["last_sync_error"] = None
+                await self._db.update_tracked_repo(row)
+                result.repos_recovered.append(row["full_name"])
+                logger.info("Repo %s is accessible again", row["full_name"])
+            except Exception as exc:
+                status = getattr(exc, "status_code", None)
+                if status in (403, 404):
+                    result.repos_still_inaccessible.append(row["full_name"])
+                else:
+                    result.repos_still_inaccessible.append(row["full_name"])
+
+        # Phase 2: Auto-discover new owned repos
+        if username and tracker_service is not None:
+            new_repos = await tracker_service.discover_owned_repos(username)
+            result.new_repos_discovered = [r.full_name for r in new_repos]
 
         return result
 
@@ -103,12 +167,28 @@ class SyncService:
         # Step 1: Discover forks (paginated)
         all_forks_info = []
         page = 1
-        while True:
-            fork_page = await self._provider.get_forks(repo.owner, repo.name, page=page)
-            all_forks_info.extend(fork_page.forks)
-            if not fork_page.has_next or len(all_forks_info) >= self._settings.max_forks_per_repo:
-                break
-            page += 1
+        try:
+            while True:
+                fork_page = await self._provider.get_forks(repo.owner, repo.name, page=page)
+                all_forks_info.extend(fork_page.forks)
+                at_limit = len(all_forks_info) >= self._settings.max_forks_per_repo
+                if not fork_page.has_next or at_limit:
+                    break
+                page += 1
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            if status in (403, 404):
+                repo_row["sync_status"] = str(SyncStatus.INACCESSIBLE)
+                repo_row["last_sync_error"] = str(exc)
+                await self._db.update_tracked_repo(repo_row)
+                logger.warning("Repo %s is inaccessible (HTTP %s)", repo.full_name, status)
+                return result
+            else:
+                repo_row["sync_status"] = str(SyncStatus.ERROR)
+                repo_row["last_sync_error"] = str(exc)
+                await self._db.update_tracked_repo(repo_row)
+                logger.warning("Repo %s sync error: %s", repo.full_name, exc)
+                return result
 
         # Step 2-5: Process each fork
         for fork_info in all_forks_info:

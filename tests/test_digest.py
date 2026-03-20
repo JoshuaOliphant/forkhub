@@ -43,6 +43,8 @@ def _make_tracked_repo(**overrides) -> dict:
         "fork_depth": 1,
         "excluded": False,
         "webhook_id": None,
+        "sync_status": "ok",
+        "last_sync_error": None,
         "last_synced_at": None,
         "created_at": _now_iso(),
     }

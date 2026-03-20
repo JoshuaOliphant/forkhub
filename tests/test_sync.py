@@ -19,10 +19,12 @@ from forkhub.models import (
     RateLimitInfo,
     Release,
     RepoInfo,
+    SyncStatus,
     TrackedRepo,
     TrackingMode,
 )
-from forkhub.services.sync import RepoSyncResult, SyncResult, SyncService
+from forkhub.services.sync import ReconcileResult, RepoSyncResult, SyncResult, SyncService
+from forkhub.services.tracker import TrackerService
 
 # ---------------------------------------------------------------------------
 # Time constants
@@ -143,12 +145,20 @@ class SyncStubGitProvider:
         }
         # Flag to simulate errors for specific forks
         self._error_forks: set[str] = set()
+        # Mapping of full_name -> HTTP status code for repos that should error
+        self._error_repos: dict[str, int] = {}
+        # Extra user repos for discovery testing
+        self._user_repos: dict[str, list[RepoInfo]] = {}
 
     async def get_user_repos(self, username: str) -> list[RepoInfo]:
-        return []
+        return self._user_repos.get(username, [])
 
     async def get_repo(self, owner: str, repo: str) -> RepoInfo:
         full_name = f"{owner}/{repo}"
+        if full_name in self._error_repos:
+            exc = RuntimeError(f"HTTP {self._error_repos[full_name]} for {full_name}")
+            exc.status_code = self._error_repos[full_name]  # type: ignore[attr-defined]
+            raise exc
         return RepoInfo(
             github_id=hash(full_name) % 100000,
             owner=owner,
@@ -165,6 +175,10 @@ class SyncStubGitProvider:
 
     async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
         full_name = f"{owner}/{repo}"
+        if full_name in self._error_repos:
+            exc = RuntimeError(f"HTTP {self._error_repos[full_name]} for {full_name}")
+            exc.status_code = self._error_repos[full_name]  # type: ignore[attr-defined]
+            raise exc
         forks = self._forks.get(full_name, [])
         return ForkPage(
             forks=forks,
@@ -247,6 +261,8 @@ async def _insert_tracked_repo(
     name: str = "repo-a",
     github_id: int = 1001,
     last_synced_at: datetime | None = None,
+    sync_status: str = "ok",
+    last_sync_error: str | None = None,
 ) -> TrackedRepo:
     """Helper to insert a tracked repo into the database."""
     repo = TrackedRepo(
@@ -257,10 +273,13 @@ async def _insert_tracked_repo(
         tracking_mode=TrackingMode.WATCHED,
         default_branch="main",
         last_synced_at=last_synced_at,
+        sync_status=SyncStatus(sync_status),
+        last_sync_error=last_sync_error,
     )
     d = repo.model_dump()
     d["created_at"] = repo.created_at.isoformat()
     d["last_synced_at"] = repo.last_synced_at.isoformat() if repo.last_synced_at else None
+    d["sync_status"] = str(repo.sync_status)
     await db.insert_tracked_repo(d)
     return repo
 
@@ -561,3 +580,317 @@ class TestVitalityDuringSync:
         fork3 = await db.get_fork_by_name("forker3/repo-a")
         assert fork3 is not None
         assert fork3["vitality"] == "dead"
+
+
+# ---------------------------------------------------------------------------
+# Inaccessible repo detection
+# ---------------------------------------------------------------------------
+
+
+class TestInaccessibleRepoDetection:
+    async def test_404_on_get_forks_marks_repo_inaccessible(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """A 404 from get_forks should mark the repo as inaccessible."""
+        repo = await _insert_tracked_repo(db)
+        provider._error_repos["owner/repo-a"] = 404
+        result = await sync_service.sync_repo(repo.id)
+        row = await db.get_tracked_repo(repo.id)
+        assert row is not None
+        assert row["sync_status"] == "inaccessible"
+        assert "404" in (row["last_sync_error"] or "")
+        assert result.new_forks == 0
+
+    async def test_403_on_get_forks_marks_repo_inaccessible(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """A 403 from get_forks should mark the repo as inaccessible."""
+        repo = await _insert_tracked_repo(db)
+        provider._error_repos["owner/repo-a"] = 403
+        await sync_service.sync_repo(repo.id)
+        row = await db.get_tracked_repo(repo.id)
+        assert row is not None
+        assert row["sync_status"] == "inaccessible"
+
+    async def test_500_error_marks_repo_as_error_not_inaccessible(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """A 500 from get_forks should mark as 'error', not 'inaccessible'."""
+        repo = await _insert_tracked_repo(db)
+        provider._error_repos["owner/repo-a"] = 500
+        await sync_service.sync_repo(repo.id)
+        row = await db.get_tracked_repo(repo.id)
+        assert row is not None
+        assert row["sync_status"] == "error"
+
+    async def test_inaccessible_repos_skipped_in_sync_all(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """sync_all should skip repos with sync_status='inaccessible'."""
+        await _insert_tracked_repo(
+            db,
+            owner="owner",
+            name="repo-a",
+            github_id=1001,
+            sync_status="inaccessible",
+            last_sync_error="404",
+        )
+        await _insert_tracked_repo(
+            db,
+            owner="owner",
+            name="repo-b",
+            github_id=1002,
+        )
+        result = await sync_service.sync_all()
+        # Only repo-b should be synced
+        assert result.repos_synced == 1
+        assert result.results[0].repo_full_name == "owner/repo-b"
+
+    async def test_network_error_does_not_mark_inaccessible(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """A network error (no status_code) should mark as 'error', not 'inaccessible'."""
+        repo = await _insert_tracked_repo(db)
+        original_get_forks = provider.get_forks
+
+        async def failing_get_forks(owner, repo_name, *, page=1):
+            raise ConnectionError("Network unreachable")
+
+        provider.get_forks = failing_get_forks  # type: ignore[assignment]
+        await sync_service.sync_repo(repo.id)
+        row = await db.get_tracked_repo(repo.id)
+        assert row is not None
+        assert row["sync_status"] == "error"
+        assert row["sync_status"] != "inaccessible"
+        provider.get_forks = original_get_forks  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation
+# ---------------------------------------------------------------------------
+
+
+class TestReconciliation:
+    async def test_health_check_recovers_accessible_repo(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """Reconcile should reset inaccessible repos that are now accessible."""
+        repo = await _insert_tracked_repo(
+            db,
+            sync_status="inaccessible",
+            last_sync_error="404",
+        )
+        result = await sync_service.reconcile()
+        assert repo.full_name in result.repos_recovered
+        row = await db.get_tracked_repo(repo.id)
+        assert row is not None
+        assert row["sync_status"] == "ok"
+        assert row["last_sync_error"] is None
+
+    async def test_health_check_leaves_inaccessible_repo_alone(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """Reconcile should leave repos that are still inaccessible."""
+        repo = await _insert_tracked_repo(
+            db,
+            sync_status="inaccessible",
+            last_sync_error="404",
+        )
+        provider._error_repos["owner/repo-a"] = 404
+        result = await sync_service.reconcile()
+        assert repo.full_name in result.repos_still_inaccessible
+        row = await db.get_tracked_repo(repo.id)
+        assert row is not None
+        assert row["sync_status"] == "inaccessible"
+
+    async def test_discovers_new_owned_repos(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """Reconcile should discover new owned repos when tracker_service is provided."""
+        tracker = TrackerService(db=db, provider=provider)
+        provider._user_repos["testuser"] = [
+            RepoInfo(
+                github_id=9999,
+                owner="testuser",
+                name="new-repo",
+                full_name="testuser/new-repo",
+                default_branch="main",
+                description="Brand new",
+                is_fork=False,
+                parent_full_name=None,
+                stars=0,
+                forks_count=0,
+                last_pushed_at=_NOW,
+            ),
+        ]
+        result = await sync_service.reconcile(
+            username="testuser",
+            tracker_service=tracker,
+        )
+        assert "testuser/new-repo" in result.new_repos_discovered
+        row = await db.get_tracked_repo_by_name("testuser/new-repo")
+        assert row is not None
+
+    async def test_does_not_rediscover_existing_repos(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """Reconcile should not re-add already tracked repos."""
+        await _insert_tracked_repo(db, owner="testuser", name="existing", github_id=8888)
+        tracker = TrackerService(db=db, provider=provider)
+        provider._user_repos["testuser"] = [
+            RepoInfo(
+                github_id=8888,
+                owner="testuser",
+                name="existing",
+                full_name="testuser/existing",
+                default_branch="main",
+                description=None,
+                is_fork=False,
+                parent_full_name=None,
+                stars=0,
+                forks_count=0,
+                last_pushed_at=_NOW,
+            ),
+        ]
+        result = await sync_service.reconcile(
+            username="testuser",
+            tracker_service=tracker,
+        )
+        assert "testuser/existing" not in result.new_repos_discovered
+
+    async def test_does_not_discover_forks_as_owned(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """Reconcile should not track user's forks as owned repos."""
+        tracker = TrackerService(db=db, provider=provider)
+        provider._user_repos["testuser"] = [
+            RepoInfo(
+                github_id=7777,
+                owner="testuser",
+                name="forked-lib",
+                full_name="testuser/forked-lib",
+                default_branch="main",
+                description=None,
+                is_fork=True,
+                parent_full_name="upstream/forked-lib",
+                stars=0,
+                forks_count=0,
+                last_pushed_at=_NOW,
+            ),
+        ]
+        result = await sync_service.reconcile(
+            username="testuser",
+            tracker_service=tracker,
+        )
+        assert "testuser/forked-lib" not in result.new_repos_discovered
+
+    async def test_reconcile_without_tracker_skips_discovery(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """Reconcile without tracker_service should skip auto-discovery."""
+        result = await sync_service.reconcile(username="testuser")
+        assert result.new_repos_discovered == []
+
+    async def test_reconcile_result_tracks_all_categories(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """ReconcileResult should track recovered, still-inaccessible, and new repos."""
+        await _insert_tracked_repo(
+            db,
+            owner="owner",
+            name="repo-a",
+            github_id=1001,
+            sync_status="inaccessible",
+            last_sync_error="404",
+        )
+        await _insert_tracked_repo(
+            db,
+            owner="owner",
+            name="repo-c",
+            github_id=1003,
+            sync_status="inaccessible",
+            last_sync_error="403",
+        )
+        provider._error_repos["owner/repo-c"] = 403
+
+        tracker = TrackerService(db=db, provider=provider)
+        provider._user_repos["testuser"] = [
+            RepoInfo(
+                github_id=6666,
+                owner="testuser",
+                name="brand-new",
+                full_name="testuser/brand-new",
+                default_branch="main",
+                description=None,
+                is_fork=False,
+                parent_full_name=None,
+                stars=0,
+                forks_count=0,
+                last_pushed_at=_NOW,
+            ),
+        ]
+        result = await sync_service.reconcile(
+            username="testuser",
+            tracker_service=tracker,
+        )
+        assert "owner/repo-a" in result.repos_recovered
+        assert "owner/repo-c" in result.repos_still_inaccessible
+        assert "testuser/brand-new" in result.new_repos_discovered
+
+
+# ---------------------------------------------------------------------------
+# sync_all with reconciliation
+# ---------------------------------------------------------------------------
+
+
+class TestSyncAllWithReconciliation:
+    async def test_sync_all_with_username_calls_reconcile(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """sync_all with username should run reconcile and include results."""
+        await _insert_tracked_repo(
+            db,
+            owner="owner",
+            name="repo-a",
+            github_id=1001,
+            sync_status="inaccessible",
+            last_sync_error="404",
+        )
+        await _insert_tracked_repo(
+            db,
+            owner="owner",
+            name="repo-b",
+            github_id=1002,
+        )
+        result = await sync_service.sync_all(username="testuser")
+        assert result.reconcile is not None
+        assert "owner/repo-a" in result.reconcile.repos_recovered
+
+    async def test_sync_all_without_username_skips_reconcile(
+        self, sync_service: SyncService, db: Database
+    ):
+        """sync_all without username should not run reconcile."""
+        await _insert_tracked_repo(db)
+        result = await sync_service.sync_all()
+        assert result.reconcile is None
+
+    async def test_sync_all_reconcile_false_skips_reconcile(
+        self, sync_service: SyncService, db: Database
+    ):
+        """sync_all with reconcile=False should skip reconcile even with username."""
+        await _insert_tracked_repo(db)
+        result = await sync_service.sync_all(username="testuser", reconcile=False)
+        assert result.reconcile is None
+
+    async def test_reconcile_results_in_sync_result(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """Reconcile results should be accessible from SyncResult."""
+        await _insert_tracked_repo(
+            db,
+            sync_status="inaccessible",
+            last_sync_error="404",
+        )
+        result = await sync_service.sync_all(username="testuser")
+        assert result.reconcile is not None
+        assert isinstance(result.reconcile, ReconcileResult)

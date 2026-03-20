@@ -747,6 +747,70 @@ class TestSyncCommand:
         output = "\n".join(output_lines)
         assert "not found" in output.lower() or "not tracked" in output.lower()
 
+    async def test_sync_no_reconcile_flag(self, db: Database, provider: StubGitProvider):
+        """sync --no-reconcile should skip reconciliation."""
+        from forkhub.cli.sync_cmd import _sync_impl
+        from forkhub.cli.track_cmd import _track_impl
+        from forkhub.config import SyncSettings
+
+        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
+
+        output_lines: list[str] = []
+        await _sync_impl(
+            repo=None,
+            no_reconcile=True,
+            db=db,
+            provider=provider,
+            sync_settings=SyncSettings(),
+            capture_output=output_lines,
+        )
+
+        output = "\n".join(output_lines)
+        assert "sync" in output.lower()
+        assert "reconciled" not in output.lower()
+
+
+# ---------------------------------------------------------------------------
+# repos with sync_status
+# ---------------------------------------------------------------------------
+
+
+class TestReposWithSyncStatus:
+    async def test_repos_shows_status_column(self, db: Database, provider: StubGitProvider):
+        """repos output should include sync_status."""
+        from forkhub.cli.repos_cmd import _repos_impl
+        from forkhub.cli.track_cmd import _track_impl
+
+        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
+
+        output_lines: list[str] = []
+        await _repos_impl(db=db, mode=None, capture_output=output_lines)
+
+        output = "\n".join(output_lines)
+        assert "ok" in output
+
+    async def test_repos_inaccessible_filter(self, db: Database, provider: StubGitProvider):
+        """repos --inaccessible should only show inaccessible repos."""
+        from forkhub.cli.repos_cmd import _repos_impl
+        from forkhub.cli.track_cmd import _track_impl
+
+        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
+        await _track_impl(repo="testuser/beta", db=db, provider=provider)
+
+        # Mark beta as inaccessible
+        row = await db.get_tracked_repo_by_name("testuser/beta")
+        assert row is not None
+        row["sync_status"] = "inaccessible"
+        row["last_sync_error"] = "404 Not Found"
+        await db.update_tracked_repo(row)
+
+        output_lines: list[str] = []
+        await _repos_impl(db=db, sync_status="inaccessible", capture_output=output_lines)
+
+        output = "\n".join(output_lines)
+        assert "testuser/beta" in output
+        assert "testuser/alpha" not in output
+
 
 # ---------------------------------------------------------------------------
 # digest command

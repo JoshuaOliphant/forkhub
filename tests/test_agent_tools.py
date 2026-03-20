@@ -289,6 +289,7 @@ async def _insert_tracked_repo(db: Database) -> TrackedRepo:
     d = repo.model_dump()
     d["created_at"] = repo.created_at.isoformat()
     d["last_synced_at"] = repo.last_synced_at.isoformat() if repo.last_synced_at else None
+    d["sync_status"] = str(repo.sync_status)
     await db.insert_tracked_repo(d)
     return repo
 

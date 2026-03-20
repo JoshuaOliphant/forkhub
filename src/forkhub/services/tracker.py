@@ -168,4 +168,5 @@ def _repo_to_dict(repo: TrackedRepo) -> dict:
     d = repo.model_dump()
     d["created_at"] = repo.created_at.isoformat()
     d["last_synced_at"] = repo.last_synced_at.isoformat() if repo.last_synced_at else None
+    d["sync_status"] = str(repo.sync_status)
     return d

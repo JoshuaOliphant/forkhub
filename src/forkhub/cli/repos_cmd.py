@@ -28,6 +28,7 @@ def _output(line: str, capture: list[str] | None = None) -> None:
 async def _repos_impl(
     db: Database | None = None,
     mode: str | None = None,
+    sync_status: str | None = None,
     capture_output: list[str] | None = None,
 ) -> None:
     """Core repos listing logic, testable without CLI boilerplate."""
@@ -42,7 +43,7 @@ async def _repos_impl(
     try:
         # Query repos directly from DB
         mode_str = mode if mode else None
-        rows = await db.list_tracked_repos(mode=mode_str)
+        rows = await db.list_tracked_repos(mode=mode_str, sync_status=sync_status)
 
         if not rows:
             msg = "No tracked repositories found. Run 'forkhub init' or 'forkhub track' first."
@@ -60,7 +61,7 @@ async def _repos_impl(
                 )
                 _output(
                     f"  {repo.full_name} | {repo.tracking_mode} | "
-                    f"{repo.description or '-'} | {last_synced}",
+                    f"{repo.sync_status} | {repo.description or '-'} | {last_synced}",
                     capture_output,
                 )
         else:
@@ -75,6 +76,9 @@ async def repos_command(
     owned: bool = typer.Option(False, "--owned", help="Show only owned repositories"),
     watched: bool = typer.Option(False, "--watched", help="Show only watched repositories"),
     upstream: bool = typer.Option(False, "--upstream", help="Show only upstream repositories"),
+    inaccessible: bool = typer.Option(
+        False, "--inaccessible", help="Show only inaccessible repositories"
+    ),
 ) -> None:
     """List tracked repositories."""
     mode = None
@@ -84,4 +88,5 @@ async def repos_command(
         mode = "watched"
     elif upstream:
         mode = "upstream"
-    await _repos_impl(mode=mode)
+    sync_status = "inaccessible" if inaccessible else None
+    await _repos_impl(mode=mode, sync_status=sync_status)

@@ -27,6 +27,7 @@ def _output(line: str, capture: list[str] | None = None) -> None:
 
 async def _sync_impl(
     repo: str | None = None,
+    no_reconcile: bool = False,
     db: Database | None = None,
     provider: GitProvider | None = None,
     sync_settings: SyncSettings | None = None,
@@ -38,6 +39,7 @@ async def _sync_impl(
     from forkhub.services.sync import SyncService
 
     owns_db = False
+    settings = None
     if db is None or provider is None:
         settings, db, provider = await get_services()
         owns_db = True
@@ -78,7 +80,30 @@ async def _sync_impl(
         else:
             # Sync all repos
             _output("Syncing all tracked repositories...", capture_output)
-            result = await sync_service.sync_all()
+
+            # Determine username for reconciliation
+            username = None
+            if not no_reconcile and settings is not None:
+                username = settings.github.username or None
+
+            result = await sync_service.sync_all(
+                username=username,
+                reconcile=not no_reconcile,
+            )
+
+            # Show reconciliation results if present
+            if result.reconcile is not None:
+                r = result.reconcile
+                recovered = len(r.repos_recovered)
+                still_bad = len(r.repos_still_inaccessible)
+                discovered = len(r.new_repos_discovered)
+                if recovered or still_bad or discovered:
+                    _output(
+                        f"  Reconciled: {recovered} recovered, "
+                        f"{still_bad} inaccessible, "
+                        f"{discovered} new repos",
+                        capture_output,
+                    )
 
             _output("\nSync complete:", capture_output)
             _output(f"  Repos synced: {result.repos_synced}", capture_output)
@@ -108,6 +133,9 @@ async def sync_command(
     repo: str | None = typer.Option(
         None, "--repo", "-r", help="Sync only this repository (owner/repo)"
     ),
+    no_reconcile: bool = typer.Option(
+        False, "--no-reconcile", help="Skip repo reconciliation (health check + auto-discover)"
+    ),
 ) -> None:
     """Run the sync pipeline to discover and compare forks."""
-    await _sync_impl(repo=repo)
+    await _sync_impl(repo=repo, no_reconcile=no_reconcile)
