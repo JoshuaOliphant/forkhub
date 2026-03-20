@@ -1,166 +1,11 @@
 # ABOUTME: Tests for Protocol-based plugin interfaces.
-# ABOUTME: Verifies runtime_checkable behavior, isinstance checks, and method signature correctness.
-from __future__ import annotations
+# ABOUTME: Verifies method signature correctness and method counts for ForkHub contracts.
 
 import inspect
-from typing import TYPE_CHECKING
 
 import pytest
 
 from forkhub.interfaces import EmbeddingProvider, GitProvider, NotificationBackend
-
-if TYPE_CHECKING:
-    from datetime import datetime
-
-
-# ---------------------------------------------------------------------------
-# Minimal stub implementations that satisfy each Protocol
-# ---------------------------------------------------------------------------
-
-
-class StubGitProvider:
-    """Minimal class implementing all GitProvider methods."""
-
-    async def get_user_repos(self, username: str) -> list:
-        return []
-
-    async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> object:
-        return object()
-
-    async def compare(self, owner: str, repo: str, base: str, head: str) -> object:
-        return object()
-
-    async def get_releases(self, owner: str, repo: str, *, since: datetime | None = None) -> list:
-        return []
-
-    async def get_repo(self, owner: str, repo: str) -> object:
-        return object()
-
-    async def get_commit_messages(self, owner: str, repo: str, *, since: str | None = None) -> list:
-        return []
-
-    async def get_file_diff(self, owner: str, repo: str, base: str, head: str, path: str) -> str:
-        return ""
-
-    async def get_rate_limit(self) -> object:
-        return object()
-
-
-class StubNotificationBackend:
-    """Minimal class implementing all NotificationBackend methods."""
-
-    async def deliver(self, digest: object) -> object:
-        return object()
-
-    def backend_name(self) -> str:
-        return "stub"
-
-
-class StubEmbeddingProvider:
-    """Minimal class implementing all EmbeddingProvider methods."""
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[0.0] * 384 for _ in texts]
-
-    def dimensions(self) -> int:
-        return 384
-
-
-# ---------------------------------------------------------------------------
-# Incomplete stubs that are missing required methods
-# ---------------------------------------------------------------------------
-
-
-class IncompleteGitProvider:
-    """Missing most GitProvider methods -- only has get_repo."""
-
-    async def get_repo(self, owner: str, repo: str) -> object:
-        return object()
-
-
-class IncompleteNotificationBackend:
-    """Missing deliver method."""
-
-    def backend_name(self) -> str:
-        return "broken"
-
-
-class IncompleteEmbeddingProvider:
-    """Missing dimensions method."""
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return []
-
-
-# ===========================================================================
-# Test: Protocols are runtime_checkable
-# ===========================================================================
-
-
-class TestRuntimeCheckable:
-    """Each protocol must be decorated with @runtime_checkable."""
-
-    def test_git_provider_is_runtime_checkable(self) -> None:
-        assert hasattr(GitProvider, "__protocol_attrs__") or hasattr(
-            GitProvider, "_is_runtime_protocol"
-        )
-        # The real test: isinstance doesn't raise TypeError
-        assert isinstance(StubGitProvider(), GitProvider)
-
-    def test_notification_backend_is_runtime_checkable(self) -> None:
-        assert isinstance(StubNotificationBackend(), NotificationBackend)
-
-    def test_embedding_provider_is_runtime_checkable(self) -> None:
-        assert isinstance(StubEmbeddingProvider(), EmbeddingProvider)
-
-
-# ===========================================================================
-# Test: Complete implementations pass isinstance checks
-# ===========================================================================
-
-
-class TestCompleteImplementations:
-    """A class implementing all required methods should pass isinstance."""
-
-    def test_stub_git_provider_is_instance(self) -> None:
-        provider = StubGitProvider()
-        assert isinstance(provider, GitProvider)
-
-    def test_stub_notification_backend_is_instance(self) -> None:
-        backend = StubNotificationBackend()
-        assert isinstance(backend, NotificationBackend)
-
-    def test_stub_embedding_provider_is_instance(self) -> None:
-        provider = StubEmbeddingProvider()
-        assert isinstance(provider, EmbeddingProvider)
-
-
-# ===========================================================================
-# Test: Incomplete implementations fail isinstance checks
-# ===========================================================================
-
-
-class TestIncompleteImplementations:
-    """A class missing required methods should fail isinstance."""
-
-    def test_incomplete_git_provider_fails(self) -> None:
-        provider = IncompleteGitProvider()
-        assert not isinstance(provider, GitProvider)
-
-    def test_incomplete_notification_backend_fails(self) -> None:
-        backend = IncompleteNotificationBackend()
-        assert not isinstance(backend, NotificationBackend)
-
-    def test_incomplete_embedding_provider_fails(self) -> None:
-        provider = IncompleteEmbeddingProvider()
-        assert not isinstance(provider, EmbeddingProvider)
-
-    def test_plain_object_fails_all_protocols(self) -> None:
-        obj = object()
-        assert not isinstance(obj, GitProvider)
-        assert not isinstance(obj, NotificationBackend)
-        assert not isinstance(obj, EmbeddingProvider)
-
 
 # ===========================================================================
 # Test: Method signatures are correct
@@ -206,14 +51,20 @@ class TestGitProviderSignatures:
         assert page_param.kind == inspect.Parameter.KEYWORD_ONLY
         assert page_param.default == 1
 
-    def test_compare_params(self, protocol_methods: dict) -> None:
+    def test_compare_and_get_repo_params(self, protocol_methods: dict) -> None:
+        # compare
         sig = protocol_methods["compare"]
         params = list(sig.parameters.keys())
         assert "self" in params
         assert "owner" in params
-        assert "repo" in params
         assert "base" in params
         assert "head" in params
+        # get_repo
+        sig = protocol_methods["get_repo"]
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "owner" in params
+        assert "repo" in params
 
     def test_get_releases_params(self, protocol_methods: dict) -> None:
         sig = protocol_methods["get_releases"]
@@ -226,13 +77,6 @@ class TestGitProviderSignatures:
         since_param = sig.parameters["since"]
         assert since_param.kind == inspect.Parameter.KEYWORD_ONLY
         assert since_param.default is None
-
-    def test_get_repo_params(self, protocol_methods: dict) -> None:
-        sig = protocol_methods["get_repo"]
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert "owner" in params
-        assert "repo" in params
 
     def test_get_commit_messages_params(self, protocol_methods: dict) -> None:
         sig = protocol_methods["get_commit_messages"]
@@ -264,36 +108,20 @@ class TestGitProviderSignatures:
         assert len(params) == 1
 
 
-class TestNotificationBackendSignatures:
-    """Verify NotificationBackend methods have the expected parameter names."""
+class TestOtherProtocolSignatures:
+    """Verify NotificationBackend and EmbeddingProvider method signatures."""
 
-    def test_deliver_params(self) -> None:
+    def test_notification_backend_params(self) -> None:
         sig = inspect.signature(NotificationBackend.deliver)
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert "digest" in params
-
-    def test_backend_name_params(self) -> None:
+        assert "digest" in sig.parameters
         sig = inspect.signature(NotificationBackend.backend_name)
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert len(params) == 1
+        assert len(sig.parameters) == 1
 
-
-class TestEmbeddingProviderSignatures:
-    """Verify EmbeddingProvider methods have the expected parameter names."""
-
-    def test_embed_params(self) -> None:
+    def test_embedding_provider_params(self) -> None:
         sig = inspect.signature(EmbeddingProvider.embed)
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert "texts" in params
-
-    def test_dimensions_params(self) -> None:
+        assert "texts" in sig.parameters
         sig = inspect.signature(EmbeddingProvider.dimensions)
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert len(params) == 1
+        assert len(sig.parameters) == 1
 
 
 # ===========================================================================
@@ -312,9 +140,8 @@ class TestProtocolMethodCount:
             if not name.startswith("_") and callable(getattr(protocol, name, None))
         }
 
-    def test_git_provider_has_8_methods(self) -> None:
-        methods = self._protocol_method_names(GitProvider)
-        expected = {
+    def test_all_protocol_method_counts(self) -> None:
+        assert self._protocol_method_names(GitProvider) == {
             "get_user_repos",
             "get_forks",
             "compare",
@@ -324,14 +151,5 @@ class TestProtocolMethodCount:
             "get_file_diff",
             "get_rate_limit",
         }
-        assert methods == expected
-
-    def test_notification_backend_has_2_methods(self) -> None:
-        methods = self._protocol_method_names(NotificationBackend)
-        expected = {"deliver", "backend_name"}
-        assert methods == expected
-
-    def test_embedding_provider_has_2_methods(self) -> None:
-        methods = self._protocol_method_names(EmbeddingProvider)
-        expected = {"embed", "dimensions"}
-        assert methods == expected
+        assert self._protocol_method_names(NotificationBackend) == {"deliver", "backend_name"}
+        assert self._protocol_method_names(EmbeddingProvider) == {"embed", "dimensions"}

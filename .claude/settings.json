@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' | grep -q 'git commit' && { uv run ruff format --check src/ tests/ 2>&1 && uv run ruff check src/ tests/ 2>&1; } || true",
+            "timeout": 30,
+            "statusMessage": "Checking ruff format + lint..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; echo \"$f\" | grep -qE '\\.py$' && uv run ruff format \"$f\" || true; } 2>/dev/null || true",
+            "timeout": 15,
+            "statusMessage": "Formatting Python file..."
+          }
+        ]
+      }
+    ]
+  }
+}

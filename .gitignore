@@ -45,3 +45,7 @@ forkhub.toml
 
 # Worktrees
 .worktrees/
+
+# Autoloop
+results.tsv
+run.log

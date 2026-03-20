@@ -16,6 +16,7 @@ from forkhub.models import (
     ForkVitality,
     Signal,
     SignalCategory,
+    SyncStatus,
     TrackedRepo,
 )
 
@@ -40,6 +41,13 @@ VITALITY_STYLES: dict[ForkVitality, tuple[str, str]] = {
     ForkVitality.DORMANT: ("yellow", "dormant"),
     ForkVitality.DEAD: ("red", "dead"),
     ForkVitality.UNKNOWN: ("dim", "unknown"),
+}
+
+# SyncStatus display configuration: (color, label)
+SYNC_STATUS_STYLES: dict[SyncStatus, tuple[str, str]] = {
+    SyncStatus.OK: ("green", "ok"),
+    SyncStatus.INACCESSIBLE: ("red", "inaccessible"),
+    SyncStatus.ERROR: ("yellow", "error"),
 }
 
 
@@ -85,14 +93,19 @@ def render_repo_table(console: Console, repos: list[TrackedRepo]) -> None:
     table = Table(title="Tracked Repositories")
     table.add_column("Repository", style="cyan")
     table.add_column("Mode", style="green")
+    table.add_column("Status")
     table.add_column("Description")
     table.add_column("Last Synced")
 
     for repo in repos:
         last_synced = repo.last_synced_at.strftime("%Y-%m-%d %H:%M") if repo.last_synced_at else "-"
+        status_style, status_label = SYNC_STATUS_STYLES.get(
+            repo.sync_status, ("dim", str(repo.sync_status))
+        )
         table.add_row(
             repo.full_name,
             str(repo.tracking_mode),
+            Text(status_label, style=status_style),
             repo.description or "-",
             last_synced,
         )

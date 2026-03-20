@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS tracked_repos (
     fork_depth INTEGER NOT NULL DEFAULT 1,
     excluded BOOLEAN NOT NULL DEFAULT 0,
     webhook_id INTEGER,
+    sync_status TEXT NOT NULL DEFAULT 'ok',
+    last_sync_error TEXT,
     last_synced_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(owner, name)
@@ -188,6 +190,26 @@ class Database:
 
     async def _create_schema(self) -> None:
         await self._db.executescript(_SCHEMA_SQL)
+        await self._migrate_schema()
+
+    async def _migrate_schema(self) -> None:
+        """Add columns that may be missing from older databases.
+
+        Only suppresses 'duplicate column' errors from ALTER TABLE.
+        Other errors (disk full, locked DB, syntax) are re-raised.
+        """
+        migrations = [
+            "ALTER TABLE tracked_repos ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'ok'",
+            "ALTER TABLE tracked_repos ADD COLUMN last_sync_error TEXT",
+        ]
+        for sql in migrations:
+            try:
+                await self._db.execute(sql)
+            except Exception as exc:
+                if "duplicate column" in str(exc).lower():
+                    pass
+                else:
+                    raise
 
     async def _load_sqlite_vec(self) -> None:
         """Try to load the sqlite-vec extension for vector similarity."""
@@ -236,11 +258,13 @@ class Database:
             INSERT INTO tracked_repos
                 (id, github_id, owner, name, full_name, tracking_mode,
                  default_branch, description, fork_depth, excluded,
-                 webhook_id, last_synced_at, created_at)
+                 webhook_id, sync_status, last_sync_error,
+                 last_synced_at, created_at)
             VALUES
                 (:id, :github_id, :owner, :name, :full_name, :tracking_mode,
                  :default_branch, :description, :fork_depth, :excluded,
-                 :webhook_id, :last_synced_at, :created_at)
+                 :webhook_id, :sync_status, :last_sync_error,
+                 :last_synced_at, :created_at)
             """,
             repo,
         )
@@ -260,6 +284,7 @@ class Database:
         self,
         mode: str | None = None,
         include_excluded: bool = False,
+        sync_status: str | None = None,
     ) -> list[dict[str, Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -270,6 +295,10 @@ class Database:
         if mode is not None:
             clauses.append("tracking_mode = ?")
             params.append(mode)
+
+        if sync_status is not None:
+            clauses.append("sync_status = ?")
+            params.append(sync_status)
 
         where = ""
         if clauses:
@@ -288,7 +317,9 @@ class Database:
                 full_name = :full_name, tracking_mode = :tracking_mode,
                 default_branch = :default_branch, description = :description,
                 fork_depth = :fork_depth, excluded = :excluded,
-                webhook_id = :webhook_id, last_synced_at = :last_synced_at
+                webhook_id = :webhook_id, sync_status = :sync_status,
+                last_sync_error = :last_sync_error,
+                last_synced_at = :last_synced_at
             WHERE id = :id
             """,
             repo,

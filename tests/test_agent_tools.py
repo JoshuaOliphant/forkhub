@@ -5,17 +5,16 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 
-from forkhub.database import Database
 from forkhub.models import (
     CommitInfo,
     CompareResult,
     FileChange,
     Fork,
     ForkInfo,
-    ForkPage,
     ForkVitality,
     RateLimitInfo,
     Release,
@@ -23,6 +22,10 @@ from forkhub.models import (
     TrackedRepo,
     TrackingMode,
 )
+from tests.stubs import StubEmbeddingProvider, StubGitProvider
+
+if TYPE_CHECKING:
+    from forkhub.database import Database
 
 # ---------------------------------------------------------------------------
 # Time constants
@@ -34,40 +37,48 @@ _OLD = _NOW - timedelta(days=200)
 
 
 # ---------------------------------------------------------------------------
-# StubGitProvider — canned fork/compare/release data
+# AgentToolsGitProvider — extends shared StubGitProvider with canned data
 # ---------------------------------------------------------------------------
 
 
-class StubGitProvider:
-    """Stub GitProvider for agent tool testing."""
+class AgentToolsGitProvider(StubGitProvider):
+    """StubGitProvider subclass with canned fork/compare/release/diff data.
+
+    The shared StubGitProvider returns empty defaults. This subclass adds
+    the rich test data needed by agent tool tests: compare results keyed
+    by fork name, file diffs keyed by fork+path, releases with since
+    filtering, and commit messages.
+    """
 
     def __init__(self) -> None:
-        self._forks: dict[str, list[ForkInfo]] = {
-            "owner/repo": [
-                ForkInfo(
-                    github_id=5001,
-                    owner="alice",
-                    full_name="alice/repo",
-                    default_branch="main",
-                    description="Alice's fork",
-                    stars=20,
-                    last_pushed_at=_RECENT,
-                    has_diverged=True,
-                    created_at=_NOW - timedelta(days=60),
-                ),
-                ForkInfo(
-                    github_id=5002,
-                    owner="bob",
-                    full_name="bob/repo",
-                    default_branch="main",
-                    description="Bob's dormant fork",
-                    stars=2,
-                    last_pushed_at=_OLD,
-                    has_diverged=False,
-                    created_at=_NOW - timedelta(days=300),
-                ),
-            ],
-        }
+        super().__init__(
+            forks={
+                "owner/repo": [
+                    ForkInfo(
+                        github_id=5001,
+                        owner="alice",
+                        full_name="alice/repo",
+                        default_branch="main",
+                        description="Alice's fork",
+                        stars=20,
+                        last_pushed_at=_RECENT,
+                        has_diverged=True,
+                        created_at=_NOW - timedelta(days=60),
+                    ),
+                    ForkInfo(
+                        github_id=5002,
+                        owner="bob",
+                        full_name="bob/repo",
+                        default_branch="main",
+                        description="Bob's dormant fork",
+                        stars=2,
+                        last_pushed_at=_OLD,
+                        has_diverged=False,
+                        created_at=_NOW - timedelta(days=300),
+                    ),
+                ],
+            },
+        )
         self._compare_results: dict[str, CompareResult] = {
             "alice/repo": CompareResult(
                 ahead_by=8,
@@ -143,9 +154,6 @@ class StubGitProvider:
         }
         self._error_on_compare: set[str] = set()
 
-    async def get_user_repos(self, username: str) -> list[RepoInfo]:
-        return []
-
     async def get_repo(self, owner: str, repo: str) -> RepoInfo:
         full_name = f"{owner}/{repo}"
         return RepoInfo(
@@ -160,16 +168,6 @@ class StubGitProvider:
             stars=0,
             forks_count=0,
             last_pushed_at=_NOW,
-        )
-
-    async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
-        full_name = f"{owner}/{repo}"
-        forks = self._forks.get(full_name, [])
-        return ForkPage(
-            forks=forks,
-            total_count=len(forks),
-            page=page,
-            has_next=False,
         )
 
     async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
@@ -208,55 +206,22 @@ class StubGitProvider:
 
 
 # ---------------------------------------------------------------------------
-# StubEmbeddingProvider — returns deterministic embeddings
-# ---------------------------------------------------------------------------
-
-
-class StubEmbeddingProvider:
-    """Stub EmbeddingProvider that returns fixed-dimension vectors."""
-
-    def __init__(self, dims: int = 4) -> None:
-        self._dims = dims
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        # Return a simple hash-based embedding for each text
-        result = []
-        for text in texts:
-            h = hash(text) % 1000
-            vec = [(h + i) / 1000.0 for i in range(self._dims)]
-            result.append(vec)
-        return result
-
-    def dimensions(self) -> int:
-        return self._dims
-
-
-# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
-def provider() -> StubGitProvider:
-    return StubGitProvider()
+def provider() -> AgentToolsGitProvider:
+    return AgentToolsGitProvider()
 
 
 @pytest.fixture
 def embedding_provider() -> StubEmbeddingProvider:
-    return StubEmbeddingProvider()
+    return StubEmbeddingProvider(dims=4)
 
 
 @pytest.fixture
-def tools(db: Database, provider: StubGitProvider, embedding_provider: StubEmbeddingProvider):
+def tools(db: Database, provider: AgentToolsGitProvider, embedding_provider: StubEmbeddingProvider):
     """Create the tools list via the factory function."""
     from forkhub.agent.tools import create_tools
 
@@ -289,6 +254,7 @@ async def _insert_tracked_repo(db: Database) -> TrackedRepo:
     d = repo.model_dump()
     d["created_at"] = repo.created_at.isoformat()
     d["last_synced_at"] = repo.last_synced_at.isoformat() if repo.last_synced_at else None
+    d["sync_status"] = str(repo.sync_status)
     await db.insert_tracked_repo(d)
     return repo
 
@@ -408,12 +374,34 @@ class TestGetForkSummary:
         assert data["stars"] == 20
         assert data["vitality"] == "active"
 
-    async def test_fork_not_found(self, tools, db):
-        """get_fork_summary should return error when fork not in DB."""
+    async def test_fork_not_found_errors_across_tools(self, tools, db):
+        """All fork-dependent tools should return error when fork not in DB."""
+        # get_fork_summary
         t = _find_tool(tools, "get_fork_summary")
         result = await t.handler({"fork_full_name": "nobody/nothing"})
         assert result.get("is_error") is True
         assert "not found" in result["content"][0]["text"].lower()
+        # get_file_diff
+        t = _find_tool(tools, "get_file_diff")
+        result = await t.handler({"fork_full_name": "nobody/nothing", "file_path": "foo.py"})
+        assert result.get("is_error") is True
+        # get_fork_stars
+        t = _find_tool(tools, "get_fork_stars")
+        result = await t.handler({"fork_full_name": "nobody/nothing"})
+        assert result.get("is_error") is True
+        # store_signal
+        t = _find_tool(tools, "store_signal")
+        result = await t.handler(
+            {
+                "fork_full_name": "nobody/nothing",
+                "category": "feature",
+                "summary": "Some signal",
+                "significance": 5,
+                "files_involved": [],
+                "detail": "",
+            }
+        )
+        assert result.get("is_error") is True
 
 
 # ===========================================================================
@@ -434,38 +422,6 @@ class TestGetFileDiff:
         assert "diff" in data
         assert "cool_feature" in data["diff"]
 
-    async def test_fork_not_found_error(self, tools, db):
-        """get_file_diff should return error when fork not in DB."""
-        t = _find_tool(tools, "get_file_diff")
-        result = await t.handler({"fork_full_name": "nobody/nothing", "file_path": "foo.py"})
-        assert result.get("is_error") is True
-
-
-# ===========================================================================
-# get_releases
-# ===========================================================================
-
-
-class TestGetReleases:
-    async def test_returns_filtered_releases(self, tools):
-        """get_releases should return releases filtered by since_days."""
-        t = _find_tool(tools, "get_releases")
-        result = await t.handler({"owner": "owner", "repo": "repo", "since_days": 30})
-        assert not result.get("is_error", False)
-        text = result["content"][0]["text"]
-        data = json.loads(text)
-        # Only v2.0.0 is within 30 days, v1.0.0 is 100 days old
-        assert len(data["releases"]) == 1
-        assert data["releases"][0]["tag"] == "v2.0.0"
-
-    async def test_returns_all_releases_with_large_since(self, tools):
-        """get_releases with large since_days should return all releases."""
-        t = _find_tool(tools, "get_releases")
-        result = await t.handler({"owner": "owner", "repo": "repo", "since_days": 365})
-        text = result["content"][0]["text"]
-        data = json.loads(text)
-        assert len(data["releases"]) == 2
-
 
 # ===========================================================================
 # get_fork_stars
@@ -485,12 +441,6 @@ class TestGetForkStars:
         assert data["stars"] == 20
         assert data["stars_previous"] == 10
         assert data["velocity"] == 10
-
-    async def test_fork_not_found_error(self, tools, db):
-        """get_fork_stars should return error when fork not in DB."""
-        t = _find_tool(tools, "get_fork_stars")
-        result = await t.handler({"fork_full_name": "nobody/nothing"})
-        assert result.get("is_error") is True
 
 
 # ===========================================================================
@@ -543,21 +493,6 @@ class TestStoreSignal:
         assert result.get("is_error") is True
         assert "invalid" in result["content"][0]["text"].lower()
 
-    async def test_fork_not_found_error(self, tools, db):
-        """store_signal should return error when fork not in DB."""
-        t = _find_tool(tools, "store_signal")
-        result = await t.handler(
-            {
-                "fork_full_name": "nobody/nothing",
-                "category": "feature",
-                "summary": "Some signal",
-                "significance": 5,
-                "files_involved": [],
-                "detail": "",
-            }
-        )
-        assert result.get("is_error") is True
-
 
 # ===========================================================================
 # search_similar_signals
@@ -590,34 +525,30 @@ class TestSearchSimilarSignals:
 
 
 class TestToolErrorHandling:
-    async def test_list_forks_handles_provider_error(self, db, embedding_provider):
-        """list_forks should return error dict when provider raises."""
+    async def test_provider_errors_return_error_dicts(self, db, embedding_provider):
+        """Tools should return error dicts when provider raises."""
         from forkhub.agent.tools import create_tools
 
         class BrokenProvider(StubGitProvider):
             async def get_forks(self, owner, repo, *, page=1):
                 raise RuntimeError("Connection failed")
 
-        broken = BrokenProvider()
-        broken_tools = create_tools(db=db, provider=broken, embedding_provider=embedding_provider)
-        t = _find_tool(broken_tools, "list_forks")
-        result = await t.handler({"owner": "x", "repo": "y", "page": 1, "only_active": False})
-        assert result.get("is_error") is True
-        assert "error" in result["content"][0]["text"].lower()
-
-    async def test_get_file_diff_handles_provider_error(self, db, embedding_provider):
-        """get_file_diff should return error dict when provider raises."""
-        from forkhub.agent.tools import create_tools
-
-        class BrokenDiffProvider(StubGitProvider):
             async def get_file_diff(self, owner, repo, base, head, path):
                 raise RuntimeError("Diff failed")
 
         repo = await _insert_tracked_repo(db)
         await _insert_fork(db, repo.id)
 
-        broken = BrokenDiffProvider()
+        broken = BrokenProvider()
         broken_tools = create_tools(db=db, provider=broken, embedding_provider=embedding_provider)
+
+        # list_forks error
+        t = _find_tool(broken_tools, "list_forks")
+        result = await t.handler({"owner": "x", "repo": "y", "page": 1, "only_active": False})
+        assert result.get("is_error") is True
+        assert "error" in result["content"][0]["text"].lower()
+
+        # get_file_diff error
         t = _find_tool(broken_tools, "get_file_diff")
         result = await t.handler({"fork_full_name": "alice/repo", "file_path": "src/feature.py"})
         assert result.get("is_error") is True

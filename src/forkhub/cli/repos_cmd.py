@@ -10,10 +10,10 @@ from rich.console import Console
 
 from forkhub.cli.formatting import render_repo_table
 from forkhub.cli.helpers import async_command
-from forkhub.models import TrackedRepo
 
 if TYPE_CHECKING:
     from forkhub.database import Database
+    from forkhub.interfaces import GitProvider
 
 console = Console()
 
@@ -27,29 +27,33 @@ def _output(line: str, capture: list[str] | None = None) -> None:
 
 async def _repos_impl(
     db: Database | None = None,
+    provider: GitProvider | None = None,
     mode: str | None = None,
+    sync_status: str | None = None,
     capture_output: list[str] | None = None,
 ) -> None:
     """Core repos listing logic, testable without CLI boilerplate."""
     from forkhub.cli.helpers import get_services
+    from forkhub.models import TrackingMode
+    from forkhub.services.tracker import TrackerService
 
     owns_db = False
-    provider = None
-    if db is None:
+    if db is None or provider is None:
         settings, db, provider = await get_services()
         owns_db = True
 
     try:
-        # Query repos directly from DB
-        mode_str = mode if mode else None
-        rows = await db.list_tracked_repos(mode=mode_str)
+        tracker = TrackerService(db=db, provider=provider)
+        mode_enum = TrackingMode(mode) if mode else None
+        repos = await tracker.list_tracked_repos(
+            mode=mode_enum,
+            sync_status=sync_status,
+        )
 
-        if not rows:
+        if not repos:
             msg = "No tracked repositories found. Run 'forkhub init' or 'forkhub track' first."
             _output(msg, capture_output)
             return
-
-        repos = [TrackedRepo(**row) for row in rows]
 
         if capture_output is not None:
             # For testing: output repo names as plain text
@@ -60,7 +64,7 @@ async def _repos_impl(
                 )
                 _output(
                     f"  {repo.full_name} | {repo.tracking_mode} | "
-                    f"{repo.description or '-'} | {last_synced}",
+                    f"{repo.sync_status} | {repo.description or '-'} | {last_synced}",
                     capture_output,
                 )
         else:
@@ -75,6 +79,9 @@ async def repos_command(
     owned: bool = typer.Option(False, "--owned", help="Show only owned repositories"),
     watched: bool = typer.Option(False, "--watched", help="Show only watched repositories"),
     upstream: bool = typer.Option(False, "--upstream", help="Show only upstream repositories"),
+    inaccessible: bool = typer.Option(
+        False, "--inaccessible", help="Show only inaccessible repositories"
+    ),
 ) -> None:
     """List tracked repositories."""
     mode = None
@@ -84,4 +91,5 @@ async def repos_command(
         mode = "watched"
     elif upstream:
         mode = "upstream"
-    await _repos_impl(mode=mode)
+    sync_status = "inaccessible" if inaccessible else None
+    await _repos_impl(mode=mode, sync_status=sync_status)

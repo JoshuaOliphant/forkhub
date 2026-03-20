@@ -40,6 +40,14 @@ class ForkVitality(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SyncStatus(StrEnum):
+    """Health status of a tracked repo during sync."""
+
+    OK = "ok"  # Repo is accessible and syncs normally
+    INACCESSIBLE = "inaccessible"  # HTTP 403/404 — repo deleted, private, or token revoked
+    ERROR = "error"  # Transient failure (500, network timeout) — will retry next sync
+
+
 # ── Helper ───────────────────────────────────────────────────
 
 
@@ -70,6 +78,8 @@ class TrackedRepo(BaseModel):
     fork_depth: int = Field(default=1)
     excluded: bool = Field(default=False)
     webhook_id: int | None = None
+    sync_status: SyncStatus = Field(default=SyncStatus.OK)
+    last_sync_error: str | None = None
     last_synced_at: datetime | None = None
     created_at: datetime = Field(default_factory=_utc_now)
 

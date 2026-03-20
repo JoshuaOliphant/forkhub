@@ -147,6 +147,8 @@ Pydantic Settings `**kwargs` override env vars. The `_merge_env_over_toml()` fun
 - Use ETag caching for GitHub API conditional requests to minimize rate limit usage
 - Track HEAD SHA per fork to skip unchanged forks during sync
 - Use real stubs (protocol-conforming classes) in tests, never `unittest.mock`
+- Use shared stubs from `tests/stubs.py` and fixtures from `tests/conftest.py` — don't duplicate
+- Check existing tests before adding new ones — parameterize or extend instead of duplicating
 - All files start with 2-line `ABOUTME:` comments
 
 ## Don'ts
@@ -156,16 +158,21 @@ Pydantic Settings `**kwargs` override env vars. The `_merge_env_over_toml()` fun
 - Don't pass `**toml_data` directly to Pydantic Settings constructors — use `_merge_env_over_toml()`
 - Don't assume sqlite-vec is available — always gate on `db.vec_enabled`
 - Don't use `claude-ai` or `anthropic` for agent features — the package is `claude-agent-sdk`
+- Don't define local StubGitProvider, db fixtures, or factory helpers in test files — import from `tests/stubs.py` and `tests/conftest.py`
+- Don't add tests that overlap with existing ones — search test files first, then parameterize or extend
 
 ## Testing
 
-450 tests across 18 test files. Test conventions:
+Test conventions:
 
 - **pytest-asyncio** with `asyncio_mode = "auto"` — async tests just work
 - **respx** for mocking HTTP in GitHub provider tests
-- **Real stubs** in `tests/` and `tests/fixtures/` — no mock patching
+- **Shared stubs** in `tests/stubs.py` — `StubGitProvider`, `StubNotificationBackend`, `StubEmbeddingProvider`, and factory helpers (`make_tracked_repo`, `make_fork`, etc.)
+- **Shared fixtures** in `tests/conftest.py` — `db`, `provider`, `backend`, `embedding_provider`, `repo_in_db`, `fork_in_db`
+- **Real stubs** only — no `unittest.mock` patching
 - **Integration tests** marked `@pytest.mark.integration` — require real DB, may need API keys
 - **Slow tests** marked `@pytest.mark.slow` — e.g., model downloads
+- **Before adding tests**: always check existing test files for overlapping coverage. Prefer parameterizing existing tests over adding new ones. Use `tests/stubs.py` stubs instead of defining local copies
 
 ## Non-Interactive Shell Commands
 

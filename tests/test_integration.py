@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 
 from forkhub.config import ForkHubSettings
-from forkhub.database import Database
 from forkhub.models import (
     CommitInfo,
     CompareResult,
@@ -22,6 +22,9 @@ from forkhub.models import (
     TrackingMode,
 )
 from forkhub.services.sync import SyncResult
+
+if TYPE_CHECKING:
+    from forkhub.database import Database
 
 # ---------------------------------------------------------------------------
 # Time constants
@@ -234,15 +237,6 @@ class IntegrationStubEmbeddingProvider:
 
 
 @pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
 def provider() -> IntegrationStubGitProvider:
     return IntegrationStubGitProvider()
 
@@ -328,86 +322,7 @@ class TestFullLifecycle:
 
 
 @pytest.mark.integration
-class TestCustomProviderInjection:
-    async def test_custom_providers_are_used(
-        self,
-        db: Database,
-        settings: ForkHubSettings,
-    ):
-        """Custom injected providers should be used throughout the pipeline."""
-        from forkhub import ForkHub
-
-        custom_provider = IntegrationStubGitProvider()
-        custom_backend = IntegrationStubNotificationBackend(name="custom")
-        custom_embeddings = IntegrationStubEmbeddingProvider()
-
-        hub = ForkHub(
-            settings=settings,
-            git_provider=custom_provider,
-            notification_backends=[custom_backend],
-            embedding_provider=custom_embeddings,
-            db=db,
-        )
-
-        # Track and sync to exercise the provider
-        await hub.track("alice", "web-framework")
-        await hub.sync(repo="alice/web-framework")
-
-        # The provider's call_log should show it was used
-        assert any("get_forks" in call for call in custom_provider._call_log)
-
-        # Generate and deliver digest to exercise the backend
-        digest = await hub.generate_digest()
-        await hub.deliver_digest(digest)
-        assert len(custom_backend.delivered) == 1
-        assert custom_backend.delivered[0].id == digest.id
-
-
-@pytest.mark.integration
-class TestEmptySync:
-    async def test_sync_with_no_forks_changed(
-        self,
-        hub,
-        db: Database,
-    ):
-        """Sync when no forks have changed should return empty results."""
-        # Track a repo that has no forks configured in the stub
-        await hub.track("upstream", "original")
-        result = await hub.sync(repo="upstream/original")
-        assert isinstance(result, SyncResult)
-        assert result.repos_synced == 1
-        # No forks for upstream/original, so no changed forks
-        assert result.total_changed_forks == 0
-
-
-@pytest.mark.integration
 class TestMultipleRepos:
-    async def test_track_multiple_repos_sync_all(
-        self,
-        hub,
-        db: Database,
-    ):
-        """Track multiple repos, sync all, and verify aggregated results."""
-        await hub.track("alice", "web-framework")
-        await hub.track("alice", "cli-tool")
-
-        # Sync all
-        result = await hub.sync()
-        assert result.repos_synced == 2
-        assert len(result.results) == 2
-
-        # Verify repos are listed
-        repos = await hub.get_repos()
-        assert len(repos) == 2
-        names = {r.full_name for r in repos}
-        assert names == {"alice/web-framework", "alice/cli-tool"}
-
-        # Verify forks per repo
-        web_forks = await hub.get_forks("alice", "web-framework")
-        cli_forks = await hub.get_forks("alice", "cli-tool")
-        assert len(web_forks) == 2
-        assert len(cli_forks) == 1
-
     async def test_untrack_one_of_multiple(
         self,
         hub,

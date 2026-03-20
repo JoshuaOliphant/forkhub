@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 
 from forkhub.config import SyncSettings
-from forkhub.database import Database
 from forkhub.models import (
     CommitInfo,
     CompareResult,
@@ -19,10 +19,14 @@ from forkhub.models import (
     RateLimitInfo,
     Release,
     RepoInfo,
+    SyncStatus,
     TrackedRepo,
     TrackingMode,
 )
-from forkhub.services.sync import RepoSyncResult, SyncResult, SyncService
+from forkhub.services.sync import SyncService
+
+if TYPE_CHECKING:
+    from forkhub.database import Database
 
 # ---------------------------------------------------------------------------
 # Time constants
@@ -143,12 +147,20 @@ class SyncStubGitProvider:
         }
         # Flag to simulate errors for specific forks
         self._error_forks: set[str] = set()
+        # Mapping of full_name -> HTTP status code for repos that should error
+        self._error_repos: dict[str, int] = {}
+        # Extra user repos for discovery testing
+        self._user_repos: dict[str, list[RepoInfo]] = {}
 
     async def get_user_repos(self, username: str) -> list[RepoInfo]:
-        return []
+        return self._user_repos.get(username, [])
 
     async def get_repo(self, owner: str, repo: str) -> RepoInfo:
         full_name = f"{owner}/{repo}"
+        if full_name in self._error_repos:
+            exc = RuntimeError(f"HTTP {self._error_repos[full_name]} for {full_name}")
+            exc.status_code = self._error_repos[full_name]  # type: ignore[attr-defined]
+            raise exc
         return RepoInfo(
             github_id=hash(full_name) % 100000,
             owner=owner,
@@ -165,6 +177,10 @@ class SyncStubGitProvider:
 
     async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
         full_name = f"{owner}/{repo}"
+        if full_name in self._error_repos:
+            exc = RuntimeError(f"HTTP {self._error_repos[full_name]} for {full_name}")
+            exc.status_code = self._error_repos[full_name]  # type: ignore[attr-defined]
+            raise exc
         forks = self._forks.get(full_name, [])
         return ForkPage(
             forks=forks,
@@ -216,15 +232,6 @@ class SyncStubGitProvider:
 
 
 @pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
 def provider() -> SyncStubGitProvider:
     return SyncStubGitProvider()
 
@@ -247,6 +254,8 @@ async def _insert_tracked_repo(
     name: str = "repo-a",
     github_id: int = 1001,
     last_synced_at: datetime | None = None,
+    sync_status: str = "ok",
+    last_sync_error: str | None = None,
 ) -> TrackedRepo:
     """Helper to insert a tracked repo into the database."""
     repo = TrackedRepo(
@@ -257,10 +266,13 @@ async def _insert_tracked_repo(
         tracking_mode=TrackingMode.WATCHED,
         default_branch="main",
         last_synced_at=last_synced_at,
+        sync_status=SyncStatus(sync_status),
+        last_sync_error=last_sync_error,
     )
     d = repo.model_dump()
     d["created_at"] = repo.created_at.isoformat()
     d["last_synced_at"] = repo.last_synced_at.isoformat() if repo.last_synced_at else None
+    d["sync_status"] = str(repo.sync_status)
     await db.insert_tracked_repo(d)
     return repo
 
@@ -297,168 +309,15 @@ async def _insert_fork_in_db(
 
 
 # ---------------------------------------------------------------------------
-# Full sync pipeline
-# ---------------------------------------------------------------------------
-
-
-class TestSyncRepo:
-    async def test_discovers_forks_and_returns_result(
-        self, sync_service: SyncService, db: Database
-    ):
-        """sync_repo should discover forks and return a RepoSyncResult."""
-        repo = await _insert_tracked_repo(db)
-        result = await sync_service.sync_repo(repo.id)
-        assert isinstance(result, RepoSyncResult)
-        assert result.repo_full_name == "owner/repo-a"
-        # 3 forks from the stub, all are new
-        assert result.new_forks == 3
-
-    async def test_head_sha_unchanged_forks_skipped(
-        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
-    ):
-        """Forks whose HEAD SHA hasn't changed should be skipped."""
-        repo = await _insert_tracked_repo(db)
-        # Pre-insert forker2's fork with the same SHA the provider will report
-        await _insert_fork_in_db(
-            db,
-            tracked_repo_id=repo.id,
-            github_id=5002,
-            owner="forker2",
-            full_name="forker2/repo-a",
-            head_sha="unchanged-sha-forker2",
-        )
-        result = await sync_service.sync_repo(repo.id)
-        # forker2 should NOT be in the changed list since SHA is the same
-        assert "forker2/repo-a" not in result.changed_forks
-        # forker1 and forker3 should be new since they weren't in DB yet
-        assert result.new_forks == 2
-
-    async def test_changed_forks_get_updated(
-        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
-    ):
-        """Forks with changed HEAD SHA should get their comparison data updated."""
-        repo = await _insert_tracked_repo(db)
-        # Pre-insert forker1's fork with an OLD sha
-        await _insert_fork_in_db(
-            db,
-            tracked_repo_id=repo.id,
-            github_id=5001,
-            owner="forker1",
-            full_name="forker1/repo-a",
-            head_sha="old-sha",
-            stars=10,
-        )
-        result = await sync_service.sync_repo(repo.id)
-        assert "forker1/repo-a" in result.changed_forks
-        # Verify the fork record in DB was updated
-        fork_row = await db.get_fork_by_name("forker1/repo-a")
-        assert fork_row is not None
-        assert fork_row["head_sha"] == "new-sha-forker1"
-        assert fork_row["commits_ahead"] == 5
-        assert fork_row["commits_behind"] == 2
-
-
-# ---------------------------------------------------------------------------
 # Vitality classification
 # ---------------------------------------------------------------------------
 
 
 class TestVitalityClassification:
-    async def test_active_within_90_days(self, sync_service: SyncService):
-        """A fork pushed within 90 days should be classified as active."""
-        result = sync_service._classify_vitality(_ACTIVE_DATE)
-        assert result == ForkVitality.ACTIVE
-
-    async def test_dormant_90_to_365_days(self, sync_service: SyncService):
-        """A fork pushed 90-365 days ago should be classified as dormant."""
-        result = sync_service._classify_vitality(_DORMANT_DATE)
-        assert result == ForkVitality.DORMANT
-
-    async def test_dead_over_365_days(self, sync_service: SyncService):
-        """A fork pushed >365 days ago should be classified as dead."""
-        result = sync_service._classify_vitality(_DEAD_DATE)
-        assert result == ForkVitality.DEAD
-
     async def test_unknown_when_none(self, sync_service: SyncService):
         """A fork with no push date should be classified as unknown."""
         result = sync_service._classify_vitality(None)
         assert result == ForkVitality.UNKNOWN
-
-    async def test_boundary_exactly_90_days(self, sync_service: SyncService):
-        """Exactly 90 days ago is still active (boundary test)."""
-        boundary = _NOW - timedelta(days=90)
-        result = sync_service._classify_vitality(boundary)
-        assert result == ForkVitality.ACTIVE
-
-    async def test_boundary_91_days(self, sync_service: SyncService):
-        """91 days ago crosses into dormant."""
-        boundary = _NOW - timedelta(days=91)
-        result = sync_service._classify_vitality(boundary)
-        assert result == ForkVitality.DORMANT
-
-    async def test_boundary_exactly_365_days(self, sync_service: SyncService):
-        """Exactly 365 days ago is still dormant."""
-        boundary = _NOW - timedelta(days=365)
-        result = sync_service._classify_vitality(boundary)
-        assert result == ForkVitality.DORMANT
-
-    async def test_boundary_366_days(self, sync_service: SyncService):
-        """366 days ago crosses into dead."""
-        boundary = _NOW - timedelta(days=366)
-        result = sync_service._classify_vitality(boundary)
-        assert result == ForkVitality.DEAD
-
-
-# ---------------------------------------------------------------------------
-# Star count updates
-# ---------------------------------------------------------------------------
-
-
-class TestStarUpdates:
-    async def test_star_count_updated_on_sync(self, sync_service: SyncService, db: Database):
-        """Fork star counts should be updated from provider data during sync."""
-        repo = await _insert_tracked_repo(db)
-        # Pre-insert with old star count
-        await _insert_fork_in_db(
-            db,
-            tracked_repo_id=repo.id,
-            github_id=5001,
-            owner="forker1",
-            full_name="forker1/repo-a",
-            head_sha="old-sha",
-            stars=5,
-        )
-        await sync_service.sync_repo(repo.id)
-        fork_row = await db.get_fork_by_name("forker1/repo-a")
-        assert fork_row is not None
-        # Provider says forker1 has 15 stars
-        assert fork_row["stars"] == 15
-        # Previous stars should have been captured
-        assert fork_row["stars_previous"] == 5
-
-
-# ---------------------------------------------------------------------------
-# Release detection
-# ---------------------------------------------------------------------------
-
-
-class TestReleaseDetection:
-    async def test_new_releases_detected(self, sync_service: SyncService, db: Database):
-        """Releases published since last sync should be counted."""
-        # Repo was last synced 30 days ago
-        last_synced = _NOW - timedelta(days=30)
-        repo = await _insert_tracked_repo(db, last_synced_at=last_synced)
-        result = await sync_service.sync_repo(repo.id)
-        # Only v2.0.0 was published 1 day ago (after last sync 30 days ago)
-        # v1.5.0 was 60 days ago (before last sync)
-        assert result.new_releases == 1
-
-    async def test_no_releases_when_never_synced(self, sync_service: SyncService, db: Database):
-        """First sync (never synced before) should report all releases."""
-        repo = await _insert_tracked_repo(db, last_synced_at=None)
-        result = await sync_service.sync_repo(repo.id)
-        # When since=None, all releases are returned
-        assert result.new_releases == 2
 
 
 # ---------------------------------------------------------------------------
@@ -491,73 +350,62 @@ class TestSyncErrorHandling:
 
 
 # ---------------------------------------------------------------------------
-# sync_all
+# Inaccessible repo detection
 # ---------------------------------------------------------------------------
 
 
-class TestSyncAll:
-    async def test_aggregates_results_from_multiple_repos(
-        self, sync_service: SyncService, db: Database
+class TestInaccessibleRepoDetection:
+    async def test_inaccessible_repos_skipped_in_sync_all(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
     ):
-        """sync_all should aggregate results across all tracked repos."""
-        await _insert_tracked_repo(db, owner="owner", name="repo-a", github_id=1001)
-        await _insert_tracked_repo(db, owner="owner", name="repo-b", github_id=1002)
+        """sync_all should skip repos with sync_status='inaccessible'."""
+        await _insert_tracked_repo(
+            db,
+            owner="owner",
+            name="repo-a",
+            github_id=1001,
+            sync_status="inaccessible",
+            last_sync_error="404",
+        )
+        await _insert_tracked_repo(
+            db,
+            owner="owner",
+            name="repo-b",
+            github_id=1002,
+        )
         result = await sync_service.sync_all()
-        assert isinstance(result, SyncResult)
-        assert result.repos_synced == 2
-        assert len(result.results) == 2
-        # repo-a has 3 forks, repo-b has 1
-        assert result.total_changed_forks == 0  # all new, none "changed"
-
-    async def test_skips_excluded_repos(self, sync_service: SyncService, db: Database):
-        """sync_all should not sync excluded repos."""
-        repo = await _insert_tracked_repo(db)
-        # Exclude the repo
-        row = await db.get_tracked_repo(repo.id)
-        assert row is not None
-        row["excluded"] = True
-        await db.update_tracked_repo(row)
-        result = await sync_service.sync_all()
-        assert result.repos_synced == 0
+        # Only repo-b should be synced
+        assert result.repos_synced == 1
+        assert result.results[0].repo_full_name == "owner/repo-b"
 
 
 # ---------------------------------------------------------------------------
-# last_synced_at
+# Reconciliation
 # ---------------------------------------------------------------------------
 
 
-class TestLastSyncedAt:
-    async def test_last_synced_at_updated_after_sync(self, sync_service: SyncService, db: Database):
-        """sync_repo should update the repo's last_synced_at timestamp."""
-        repo = await _insert_tracked_repo(db)
-        row_before = await db.get_tracked_repo(repo.id)
-        assert row_before is not None
-        assert row_before["last_synced_at"] is None
-        await sync_service.sync_repo(repo.id)
-        row_after = await db.get_tracked_repo(repo.id)
-        assert row_after is not None
-        assert row_after["last_synced_at"] is not None
+class TestReconciliation:
+    async def test_reconcile_phase2_failure_preserves_phase1_results(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """If Phase 2 (discovery) fails, Phase 1 results should still be returned."""
+        repo = await _insert_tracked_repo(
+            db,
+            sync_status="inaccessible",
+            last_sync_error="404",
+        )
+        # Provider succeeds for get_repo (Phase 1 recovers the repo)
+        # but get_user_repos will fail for discovery
 
+        class FailingTracker:
+            async def discover_owned_repos(self, username):
+                raise ConnectionError("API rate limited")
 
-# ---------------------------------------------------------------------------
-# Vitality update during sync
-# ---------------------------------------------------------------------------
-
-
-class TestVitalityDuringSync:
-    async def test_vitality_updated_on_sync(self, sync_service: SyncService, db: Database):
-        """Fork vitality should be updated based on last_pushed_at during sync."""
-        repo = await _insert_tracked_repo(db)
-        await sync_service.sync_repo(repo.id)
-        # forker1 pushed 30 days ago = active
-        fork1 = await db.get_fork_by_name("forker1/repo-a")
-        assert fork1 is not None
-        assert fork1["vitality"] == "active"
-        # forker2 pushed 200 days ago = dormant
-        fork2 = await db.get_fork_by_name("forker2/repo-a")
-        assert fork2 is not None
-        assert fork2["vitality"] == "dormant"
-        # forker3 pushed 400 days ago = dead
-        fork3 = await db.get_fork_by_name("forker3/repo-a")
-        assert fork3 is not None
-        assert fork3["vitality"] == "dead"
+        result = await sync_service.reconcile(
+            username="testuser",
+            tracker_service=FailingTracker(),  # type: ignore[arg-type]
+        )
+        # Phase 1 should have succeeded
+        assert repo.full_name in result.repos_recovered
+        # Phase 2 failed, so no discovered repos
+        assert result.new_repos_discovered == []

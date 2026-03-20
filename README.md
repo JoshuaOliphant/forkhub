@@ -18,6 +18,16 @@ ForkHub watches the forks around your GitHub repositories, uses a Claude AI agen
 ### Install
 
 ```bash
+# Install as a CLI tool (recommended)
+uv tool install forkhub
+
+# Or with pip
+pip install forkhub
+```
+
+For development:
+
+```bash
 git clone https://github.com/joshuaoliphant/forkhub.git
 cd forkhub
 uv sync
