@@ -374,15 +374,13 @@ class TestGetForkSummary:
         assert data["stars"] == 20
         assert data["vitality"] == "active"
 
-    async def test_fork_not_found(self, tools, db):
-        """get_fork_summary should return error when fork not in DB."""
+    async def test_fork_not_found_errors_across_tools(self, tools, db):
+        """All fork-dependent tools should return error when fork not in DB."""
+        # get_fork_summary
         t = _find_tool(tools, "get_fork_summary")
         result = await t.handler({"fork_full_name": "nobody/nothing"})
         assert result.get("is_error") is True
         assert "not found" in result["content"][0]["text"].lower()
-
-    async def test_fork_not_found_errors_across_tools(self, tools, db):
-        """All fork-dependent tools should return error when fork not in DB."""
         # get_file_diff
         t = _find_tool(tools, "get_file_diff")
         result = await t.handler({"fork_full_name": "nobody/nothing", "file_path": "foo.py"})
