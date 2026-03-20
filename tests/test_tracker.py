@@ -60,21 +60,11 @@ class TestUntrackRepo:
         fork_row = await db.get_fork(fork.id)
         assert fork_row is None
 
-    async def test_untrack_nonexistent_is_noop(self, tracker: TrackerService, db: Database):
-        """Untracking a repo that isn't tracked should not raise."""
-        await tracker.untrack_repo("nobody", "nothing")
-
-
-# ---------------------------------------------------------------------------
-# exclude / include
-# ---------------------------------------------------------------------------
-
-
-class TestExcludeInclude:
-    async def test_exclude_and_include_nonexistent_are_noops(
+    async def test_nonexistent_repo_operations_are_noops(
         self, tracker: TrackerService, db: Database
     ):
-        """Excluding or including a non-tracked repo should not raise."""
+        """Untrack, exclude, and include on non-tracked repos should not raise."""
+        await tracker.untrack_repo("nobody", "nothing")
         await tracker.exclude_repo("nobody/nothing")
         await tracker.include_repo("nobody/nothing")
 
