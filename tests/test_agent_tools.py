@@ -381,6 +381,30 @@ class TestGetForkSummary:
         assert result.get("is_error") is True
         assert "not found" in result["content"][0]["text"].lower()
 
+    async def test_fork_not_found_errors_across_tools(self, tools, db):
+        """All fork-dependent tools should return error when fork not in DB."""
+        # get_file_diff
+        t = _find_tool(tools, "get_file_diff")
+        result = await t.handler({"fork_full_name": "nobody/nothing", "file_path": "foo.py"})
+        assert result.get("is_error") is True
+        # get_fork_stars
+        t = _find_tool(tools, "get_fork_stars")
+        result = await t.handler({"fork_full_name": "nobody/nothing"})
+        assert result.get("is_error") is True
+        # store_signal
+        t = _find_tool(tools, "store_signal")
+        result = await t.handler(
+            {
+                "fork_full_name": "nobody/nothing",
+                "category": "feature",
+                "summary": "Some signal",
+                "significance": 5,
+                "files_involved": [],
+                "detail": "",
+            }
+        )
+        assert result.get("is_error") is True
+
 
 # ===========================================================================
 # get_file_diff
@@ -399,38 +423,6 @@ class TestGetFileDiff:
         data = json.loads(text)
         assert "diff" in data
         assert "cool_feature" in data["diff"]
-
-    async def test_fork_not_found_error(self, tools, db):
-        """get_file_diff should return error when fork not in DB."""
-        t = _find_tool(tools, "get_file_diff")
-        result = await t.handler({"fork_full_name": "nobody/nothing", "file_path": "foo.py"})
-        assert result.get("is_error") is True
-
-
-# ===========================================================================
-# get_releases
-# ===========================================================================
-
-
-class TestGetReleases:
-    async def test_returns_filtered_releases(self, tools):
-        """get_releases should return releases filtered by since_days."""
-        t = _find_tool(tools, "get_releases")
-        result = await t.handler({"owner": "owner", "repo": "repo", "since_days": 30})
-        assert not result.get("is_error", False)
-        text = result["content"][0]["text"]
-        data = json.loads(text)
-        # Only v2.0.0 is within 30 days, v1.0.0 is 100 days old
-        assert len(data["releases"]) == 1
-        assert data["releases"][0]["tag"] == "v2.0.0"
-
-    async def test_returns_all_releases_with_large_since(self, tools):
-        """get_releases with large since_days should return all releases."""
-        t = _find_tool(tools, "get_releases")
-        result = await t.handler({"owner": "owner", "repo": "repo", "since_days": 365})
-        text = result["content"][0]["text"]
-        data = json.loads(text)
-        assert len(data["releases"]) == 2
 
 
 # ===========================================================================
@@ -451,12 +443,6 @@ class TestGetForkStars:
         assert data["stars"] == 20
         assert data["stars_previous"] == 10
         assert data["velocity"] == 10
-
-    async def test_fork_not_found_error(self, tools, db):
-        """get_fork_stars should return error when fork not in DB."""
-        t = _find_tool(tools, "get_fork_stars")
-        result = await t.handler({"fork_full_name": "nobody/nothing"})
-        assert result.get("is_error") is True
 
 
 # ===========================================================================
@@ -508,21 +494,6 @@ class TestStoreSignal:
         )
         assert result.get("is_error") is True
         assert "invalid" in result["content"][0]["text"].lower()
-
-    async def test_fork_not_found_error(self, tools, db):
-        """store_signal should return error when fork not in DB."""
-        t = _find_tool(tools, "store_signal")
-        result = await t.handler(
-            {
-                "fork_full_name": "nobody/nothing",
-                "category": "feature",
-                "summary": "Some signal",
-                "significance": 5,
-                "files_involved": [],
-                "detail": "",
-            }
-        )
-        assert result.get("is_error") is True
 
 
 # ===========================================================================

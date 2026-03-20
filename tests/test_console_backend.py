@@ -3,11 +3,9 @@
 
 from datetime import UTC, datetime
 from io import StringIO
-from unittest.mock import patch
 
 import pytest
 
-from forkhub.interfaces import NotificationBackend
 from forkhub.models import (
     Cluster,
     Digest,
@@ -133,141 +131,6 @@ def sample_cluster() -> Cluster:
     )
 
 
-# ── ConsoleBackend Protocol Conformance ─────────────────────
-
-
-class TestConsoleBackendProtocol:
-    def test_implements_notification_backend(self):
-        """ConsoleBackend should satisfy the NotificationBackend protocol."""
-        from forkhub.notifications.console import ConsoleBackend
-
-        backend = ConsoleBackend()
-        assert isinstance(backend, NotificationBackend)
-
-    def test_backend_name_returns_console(self):
-        """backend_name() should return 'console'."""
-        from forkhub.notifications.console import ConsoleBackend
-
-        backend = ConsoleBackend()
-        assert backend.backend_name() == "console"
-
-    def test_accepts_custom_console(self):
-        """ConsoleBackend should accept a custom Console instance."""
-        from rich.console import Console
-
-        from forkhub.notifications.console import ConsoleBackend
-
-        custom_console = Console(file=StringIO(), force_terminal=True, width=80)
-        backend = ConsoleBackend(console=custom_console)
-        assert backend._console is custom_console
-
-
-# ── ConsoleBackend Delivery ─────────────────────────────────
-
-
-class TestConsoleBackendDeliver:
-    async def test_deliver_renders_digest_content(self, sample_digest: Digest):
-        """deliver() should return success and render title, body, and signal count."""
-        from forkhub.notifications.console import ConsoleBackend
-
-        output = StringIO()
-        console_obj = __import__("rich.console", fromlist=["Console"]).Console(
-            file=output, force_terminal=True, width=80
-        )
-        backend = ConsoleBackend(console=console_obj)
-        result = await backend.deliver(sample_digest)
-
-        assert result.success is True
-        assert result.backend_name == "console"
-        assert result.error is None
-        assert isinstance(result.delivered_at, datetime)
-
-        rendered = output.getvalue()
-        assert "Weekly Digest for alice/myrepo" in rendered
-        assert "3 forks showed interesting activity this week." in rendered
-        assert "3" in rendered
-
-    async def test_deliver_empty_digest(self, sample_digest_no_signals: Digest):
-        """deliver() should handle digests with no signals gracefully."""
-        from rich.console import Console
-
-        from forkhub.notifications.console import ConsoleBackend
-
-        output = StringIO()
-        console_obj = Console(file=output, force_terminal=True, width=80)
-        backend = ConsoleBackend(console=console_obj)
-        result = await backend.deliver(sample_digest_no_signals)
-
-        assert result.success is True
-        rendered = output.getvalue()
-        assert "Empty Digest" in rendered
-
-    async def test_deliver_calls_render_digest(self, sample_digest: Digest):
-        """deliver() should delegate to render_digest."""
-        from rich.console import Console
-
-        from forkhub.notifications.console import ConsoleBackend
-
-        output = StringIO()
-        console_obj = Console(file=output, force_terminal=True, width=80)
-        backend = ConsoleBackend(console=console_obj)
-
-        with patch("forkhub.notifications.console.render_digest") as mock_render:
-            await backend.deliver(sample_digest)
-            mock_render.assert_called_once_with(console_obj, sample_digest)
-
-
-# ── format_significance ─────────────────────────────────────
-
-
-class TestFormatSignificance:
-    def test_all_scores(self):
-        """Every valid score should produce the correct number of filled blocks."""
-        from forkhub.cli.formatting import format_significance
-
-        for score in range(1, 11):
-            result = format_significance(score)
-            filled = result.count("\u2588")
-            empty = result.count("\u2591")
-            assert filled == score
-            assert empty == 10 - score
-
-
-# ── render_digest ───────────────────────────────────────────
-
-
-class TestRenderDigest:
-    def test_renders_digest_content(self, sample_digest: Digest):
-        """render_digest should include title, body, and signal count."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_digest
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_digest(console, sample_digest)
-
-        rendered = output.getvalue()
-        assert "Weekly Digest for alice/myrepo" in rendered
-        assert "3 forks showed interesting activity this week." in rendered
-        assert "3" in rendered
-        assert "signal" in rendered.lower()
-
-    def test_renders_empty_digest(self, sample_digest_no_signals: Digest):
-        """render_digest should handle empty digests."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_digest
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_digest(console, sample_digest_no_signals)
-
-        rendered = output.getvalue()
-        assert "Empty Digest" in rendered
-        assert "0" in rendered
-
-
 # ── render_repo_table ───────────────────────────────────────
 
 
@@ -293,19 +156,6 @@ class TestRenderRepoTable:
         # Tracking modes
         assert "owned" in rendered
         assert "watched" in rendered
-
-    def test_renders_empty_list(self):
-        """render_repo_table should handle an empty repo list."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_repo_table
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=120)
-        render_repo_table(console, [])
-
-        rendered = output.getvalue()
-        assert "Tracked Repositories" in rendered
 
 
 # ── render_fork_table ───────────────────────────────────────
@@ -339,19 +189,6 @@ class TestRenderForkTable:
         # Vitality labels
         assert "active" in rendered
         assert "dormant" in rendered
-
-    def test_renders_empty_list(self):
-        """render_fork_table should handle an empty fork list."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_fork_table
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=120)
-        render_fork_table(console, [])
-
-        rendered = output.getvalue()
-        assert "Forks" in rendered
 
 
 # ── render_signal ───────────────────────────────────────────

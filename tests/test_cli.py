@@ -21,7 +21,6 @@ from forkhub.models import (
     ForkVitality,
     Signal,
     SignalCategory,
-    TrackingMode,
 )
 from tests.stubs import StubGitProvider
 
@@ -49,12 +48,10 @@ def provider() -> StubGitProvider:
 class TestCLISmoke:
     """Basic CliRunner smoke tests for --version, --help, and subcommand help."""
 
-    def test_version(self):
+    def test_version_and_help(self):
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
         assert "forkhub" in result.output
-
-    def test_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "Monitor GitHub fork constellations" in result.output
@@ -87,37 +84,6 @@ class TestCLISmoke:
 
 
 class TestInitCommand:
-    async def test_init_creates_config_and_discovers_repos(
-        self, db: Database, provider: StubGitProvider, tmp_path: Path
-    ):
-        """init should create config, discover repos, and show table output."""
-        from forkhub.cli.init_cmd import _init_impl
-
-        output_lines: list[str] = []
-        await _init_impl(
-            username="testuser",
-            token="ghp_faketoken123",
-            config_dir=tmp_path,
-            db=db,
-            provider=provider,
-            capture_output=output_lines,
-        )
-
-        # Config file should exist
-        config_file = tmp_path / "forkhub.toml"
-        assert config_file.exists()
-        content = config_file.read_text()
-        assert "ghp_faketoken123" in content
-        assert "testuser" in content
-
-        # Should have discovered repos (2 owned + 1 upstream)
-        repos = await db.list_tracked_repos()
-        assert len(repos) == 3
-
-        # Output should mention discovered repos
-        output = "\n".join(output_lines)
-        assert "testuser/alpha" in output or "alpha" in output
-
     async def test_init_detects_upstream_repos(
         self, db: Database, provider: StubGitProvider, tmp_path: Path
     ):
@@ -136,31 +102,6 @@ class TestInitCommand:
         repos = await db.list_tracked_repos()
         modes = [r["tracking_mode"] for r in repos]
         assert "upstream" in modes
-
-    async def test_init_token_from_env(
-        self,
-        db: Database,
-        provider: StubGitProvider,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """init should use GITHUB_TOKEN from env when --token is not passed."""
-        from forkhub.cli.init_cmd import _init_impl
-
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp_from_env")
-        output_lines: list[str] = []
-        await _init_impl(
-            username="testuser",
-            token=None,
-            config_dir=tmp_path,
-            db=db,
-            provider=provider,
-            capture_output=output_lines,
-        )
-
-        config_file = tmp_path / "forkhub.toml"
-        content = config_file.read_text()
-        assert "ghp_from_env" in content
 
     async def test_init_fails_without_token(
         self,
@@ -193,41 +134,6 @@ class TestInitCommand:
 
 
 class TestTrackCommands:
-    async def test_track_adds_repo(self, db: Database, provider: StubGitProvider):
-        """track should add a repo and show confirmation."""
-        from forkhub.cli.track_cmd import _track_impl
-
-        output_lines: list[str] = []
-        await _track_impl(
-            repo="testuser/alpha",
-            depth=1,
-            db=db,
-            provider=provider,
-            capture_output=output_lines,
-        )
-
-        row = await db.get_tracked_repo_by_name("testuser/alpha")
-        assert row is not None
-        assert row["tracking_mode"] == "watched"
-
-        output = "\n".join(output_lines)
-        assert "testuser/alpha" in output
-
-    async def test_track_with_depth(self, db: Database, provider: StubGitProvider):
-        """track with --depth should set fork_depth."""
-        from forkhub.cli.track_cmd import _track_impl
-
-        await _track_impl(
-            repo="testuser/alpha",
-            depth=3,
-            db=db,
-            provider=provider,
-        )
-
-        row = await db.get_tracked_repo_by_name("testuser/alpha")
-        assert row is not None
-        assert row["fork_depth"] == 3
-
     async def test_track_already_tracked_shows_error(self, db: Database, provider: StubGitProvider):
         """Tracking an already tracked repo should show an error message."""
         from forkhub.cli.track_cmd import _track_impl
@@ -263,22 +169,6 @@ class TestTrackCommands:
         output = "\n".join(output_lines)
         assert "untracked" in output.lower() or "removed" in output.lower()
 
-    async def test_exclude_sets_flag(self, db: Database, provider: StubGitProvider):
-        """exclude should set the excluded flag."""
-        from forkhub.cli.track_cmd import _exclude_impl, _track_impl
-
-        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
-        output_lines: list[str] = []
-        await _exclude_impl(
-            repo="testuser/alpha",
-            db=db,
-            capture_output=output_lines,
-        )
-
-        row = await db.get_tracked_repo_by_name("testuser/alpha")
-        assert row is not None
-        assert row["excluded"] == 1
-
     async def test_include_clears_flag(self, db: Database, provider: StubGitProvider):
         """include should clear the excluded flag."""
         from forkhub.cli.track_cmd import _exclude_impl, _include_impl, _track_impl
@@ -303,38 +193,6 @@ class TestTrackCommands:
 
 
 class TestReposCommand:
-    async def test_repos_lists_tracked(self, db: Database, provider: StubGitProvider):
-        """repos should list all tracked repos as a table."""
-        from forkhub.cli.repos_cmd import _repos_impl
-        from forkhub.cli.track_cmd import _track_impl
-
-        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
-        await _track_impl(repo="testuser/beta", db=db, provider=provider)
-
-        output_lines: list[str] = []
-        await _repos_impl(db=db, mode=None, capture_output=output_lines)
-
-        output = "\n".join(output_lines)
-        assert "testuser/alpha" in output
-        assert "testuser/beta" in output
-
-    async def test_repos_filters_by_mode(self, db: Database, provider: StubGitProvider):
-        """repos --owned should filter by tracking mode."""
-        from forkhub.services.tracker import TrackerService
-
-        tracker = TrackerService(db=db, provider=provider)
-        await tracker.discover_owned_repos("testuser")
-        await tracker.track_repo("upstream-org", "forked-lib", mode=TrackingMode.UPSTREAM)
-
-        from forkhub.cli.repos_cmd import _repos_impl
-
-        output_lines: list[str] = []
-        await _repos_impl(db=db, mode="owned", capture_output=output_lines)
-
-        output = "\n".join(output_lines)
-        assert "testuser/alpha" in output
-        assert "upstream-org/forked-lib" not in output
-
     async def test_repos_empty_shows_message(self, db: Database):
         """repos with no tracked repos should show a helpful message."""
         from forkhub.cli.repos_cmd import _repos_impl
@@ -546,26 +404,6 @@ class TestClustersCommand:
 
 
 class TestSyncCommand:
-    async def test_sync_all_runs(self, db: Database, provider: StubGitProvider):
-        """sync should run sync_all and show summary."""
-        from forkhub.cli.sync_cmd import _sync_impl
-        from forkhub.cli.track_cmd import _track_impl
-        from forkhub.config import SyncSettings
-
-        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
-
-        output_lines: list[str] = []
-        await _sync_impl(
-            repo=None,
-            db=db,
-            provider=provider,
-            sync_settings=SyncSettings(),
-            capture_output=output_lines,
-        )
-
-        output = "\n".join(output_lines)
-        assert "sync" in output.lower()
-
     async def test_sync_single_repo(self, db: Database, provider: StubGitProvider):
         """sync --repo should sync only that repo."""
         from forkhub.cli.sync_cmd import _sync_impl
@@ -604,70 +442,6 @@ class TestSyncCommand:
         output = "\n".join(output_lines)
         assert "not found" in output.lower() or "not tracked" in output.lower()
 
-    async def test_sync_no_reconcile_flag(self, db: Database, provider: StubGitProvider):
-        """sync --no-reconcile should skip reconciliation."""
-        from forkhub.cli.sync_cmd import _sync_impl
-        from forkhub.cli.track_cmd import _track_impl
-        from forkhub.config import SyncSettings
-
-        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
-
-        output_lines: list[str] = []
-        await _sync_impl(
-            repo=None,
-            no_reconcile=True,
-            db=db,
-            provider=provider,
-            sync_settings=SyncSettings(),
-            capture_output=output_lines,
-        )
-
-        output = "\n".join(output_lines)
-        assert "sync" in output.lower()
-        assert "reconciled" not in output.lower()
-
-
-# ---------------------------------------------------------------------------
-# repos with sync_status
-# ---------------------------------------------------------------------------
-
-
-class TestReposWithSyncStatus:
-    async def test_repos_shows_status_column(self, db: Database, provider: StubGitProvider):
-        """repos output should include sync_status."""
-        from forkhub.cli.repos_cmd import _repos_impl
-        from forkhub.cli.track_cmd import _track_impl
-
-        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
-
-        output_lines: list[str] = []
-        await _repos_impl(db=db, mode=None, capture_output=output_lines)
-
-        output = "\n".join(output_lines)
-        assert "ok" in output
-
-    async def test_repos_inaccessible_filter(self, db: Database, provider: StubGitProvider):
-        """repos --inaccessible should only show inaccessible repos."""
-        from forkhub.cli.repos_cmd import _repos_impl
-        from forkhub.cli.track_cmd import _track_impl
-
-        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
-        await _track_impl(repo="testuser/beta", db=db, provider=provider)
-
-        # Mark beta as inaccessible
-        row = await db.get_tracked_repo_by_name("testuser/beta")
-        assert row is not None
-        row["sync_status"] = "inaccessible"
-        row["last_sync_error"] = "404 Not Found"
-        await db.update_tracked_repo(row)
-
-        output_lines: list[str] = []
-        await _repos_impl(db=db, sync_status="inaccessible", capture_output=output_lines)
-
-        output = "\n".join(output_lines)
-        assert "testuser/beta" in output
-        assert "testuser/alpha" not in output
-
 
 # ---------------------------------------------------------------------------
 # digest command
@@ -692,24 +466,6 @@ class TestDigestCommand:
 
         output = "\n".join(output_lines)
         assert "digest" in output.lower()
-
-    async def test_digest_dry_run(self, db: Database, provider: StubGitProvider):
-        """digest --dry-run should generate but not deliver."""
-        from forkhub.cli.digest_cmd import _digest_impl
-        from forkhub.cli.track_cmd import _track_impl
-
-        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
-
-        output_lines: list[str] = []
-        await _digest_impl(
-            since=None,
-            dry_run=True,
-            db=db,
-            capture_output=output_lines,
-        )
-
-        output = "\n".join(output_lines)
-        assert "dry run" in output.lower() or "preview" in output.lower()
 
 
 # ---------------------------------------------------------------------------

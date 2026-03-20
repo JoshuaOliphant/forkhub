@@ -51,14 +51,20 @@ class TestGitProviderSignatures:
         assert page_param.kind == inspect.Parameter.KEYWORD_ONLY
         assert page_param.default == 1
 
-    def test_compare_params(self, protocol_methods: dict) -> None:
+    def test_compare_and_get_repo_params(self, protocol_methods: dict) -> None:
+        # compare
         sig = protocol_methods["compare"]
         params = list(sig.parameters.keys())
         assert "self" in params
         assert "owner" in params
-        assert "repo" in params
         assert "base" in params
         assert "head" in params
+        # get_repo
+        sig = protocol_methods["get_repo"]
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "owner" in params
+        assert "repo" in params
 
     def test_get_releases_params(self, protocol_methods: dict) -> None:
         sig = protocol_methods["get_releases"]
@@ -71,13 +77,6 @@ class TestGitProviderSignatures:
         since_param = sig.parameters["since"]
         assert since_param.kind == inspect.Parameter.KEYWORD_ONLY
         assert since_param.default is None
-
-    def test_get_repo_params(self, protocol_methods: dict) -> None:
-        sig = protocol_methods["get_repo"]
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert "owner" in params
-        assert "repo" in params
 
     def test_get_commit_messages_params(self, protocol_methods: dict) -> None:
         sig = protocol_methods["get_commit_messages"]
@@ -109,36 +108,20 @@ class TestGitProviderSignatures:
         assert len(params) == 1
 
 
-class TestNotificationBackendSignatures:
-    """Verify NotificationBackend methods have the expected parameter names."""
+class TestOtherProtocolSignatures:
+    """Verify NotificationBackend and EmbeddingProvider method signatures."""
 
-    def test_deliver_params(self) -> None:
+    def test_notification_backend_params(self) -> None:
         sig = inspect.signature(NotificationBackend.deliver)
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert "digest" in params
-
-    def test_backend_name_params(self) -> None:
+        assert "digest" in sig.parameters
         sig = inspect.signature(NotificationBackend.backend_name)
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert len(params) == 1
+        assert len(sig.parameters) == 1
 
-
-class TestEmbeddingProviderSignatures:
-    """Verify EmbeddingProvider methods have the expected parameter names."""
-
-    def test_embed_params(self) -> None:
+    def test_embedding_provider_params(self) -> None:
         sig = inspect.signature(EmbeddingProvider.embed)
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert "texts" in params
-
-    def test_dimensions_params(self) -> None:
+        assert "texts" in sig.parameters
         sig = inspect.signature(EmbeddingProvider.dimensions)
-        params = list(sig.parameters.keys())
-        assert "self" in params
-        assert len(params) == 1
+        assert len(sig.parameters) == 1
 
 
 # ===========================================================================
@@ -157,26 +140,10 @@ class TestProtocolMethodCount:
             if not name.startswith("_") and callable(getattr(protocol, name, None))
         }
 
-    def test_git_provider_has_8_methods(self) -> None:
-        methods = self._protocol_method_names(GitProvider)
-        expected = {
-            "get_user_repos",
-            "get_forks",
-            "compare",
-            "get_releases",
-            "get_repo",
-            "get_commit_messages",
-            "get_file_diff",
-            "get_rate_limit",
+    def test_all_protocol_method_counts(self) -> None:
+        assert self._protocol_method_names(GitProvider) == {
+            "get_user_repos", "get_forks", "compare", "get_releases",
+            "get_repo", "get_commit_messages", "get_file_diff", "get_rate_limit",
         }
-        assert methods == expected
-
-    def test_notification_backend_has_2_methods(self) -> None:
-        methods = self._protocol_method_names(NotificationBackend)
-        expected = {"deliver", "backend_name"}
-        assert methods == expected
-
-    def test_embedding_provider_has_2_methods(self) -> None:
-        methods = self._protocol_method_names(EmbeddingProvider)
-        expected = {"embed", "dimensions"}
-        assert methods == expected
+        assert self._protocol_method_names(NotificationBackend) == {"deliver", "backend_name"}
+        assert self._protocol_method_names(EmbeddingProvider) == {"embed", "dimensions"}

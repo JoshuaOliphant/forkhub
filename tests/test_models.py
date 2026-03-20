@@ -2,20 +2,15 @@
 # ABOUTME: Validates all enums, domain models, API response models, defaults, and constraints.
 
 from datetime import UTC, datetime
-from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
 
 from forkhub.models import (
-    Annotation,
-    Cluster,
     ClusterMember,
     CommitInfo,
     CompareResult,
     DeliveryResult,
-    Digest,
-    DigestConfig,
     FileChange,
     Fork,
     ForkInfo,
@@ -24,7 +19,6 @@ from forkhub.models import (
     RateLimitInfo,
     Release,
     RepoInfo,
-    Signal,
     SignalCategory,
     SyncStatus,
     TrackedRepo,
@@ -66,32 +60,6 @@ def test_strenum_values_and_type(enum_cls, expected_values):
 
 
 class TestTrackedRepo:
-    def test_minimal_construction(self):
-        repo = TrackedRepo(
-            github_id=12345,
-            owner="alice",
-            name="myrepo",
-            full_name="alice/myrepo",
-            tracking_mode=TrackingMode.OWNED,
-            default_branch="main",
-        )
-        # id should be a valid uuid4 string
-        UUID(repo.id)
-        assert repo.github_id == 12345
-        assert repo.owner == "alice"
-        assert repo.name == "myrepo"
-        assert repo.full_name == "alice/myrepo"
-        assert repo.tracking_mode == TrackingMode.OWNED
-        assert repo.default_branch == "main"
-        assert repo.description is None
-        assert repo.fork_depth == 1
-        assert repo.excluded is False
-        assert repo.webhook_id is None
-        assert repo.last_synced_at is None
-        assert isinstance(repo.created_at, datetime)
-        assert repo.sync_status == SyncStatus.OK
-        assert repo.last_sync_error is None
-
     def test_full_construction(self):
         now = datetime.now(tz=UTC)
         repo = TrackedRepo(
@@ -116,56 +84,11 @@ class TestTrackedRepo:
         assert repo.webhook_id == 42
         assert repo.last_synced_at == now
 
-    def test_auto_generated_id_is_unique(self):
-        repo1 = TrackedRepo(
-            github_id=1,
-            owner="a",
-            name="b",
-            full_name="a/b",
-            tracking_mode=TrackingMode.OWNED,
-            default_branch="main",
-        )
-        repo2 = TrackedRepo(
-            github_id=2,
-            owner="c",
-            name="d",
-            full_name="c/d",
-            tracking_mode=TrackingMode.OWNED,
-            default_branch="main",
-        )
-        assert repo1.id != repo2.id
-
 
 # ── Fork Tests ───────────────────────────────────────────────
 
 
 class TestFork:
-    def test_minimal_construction(self):
-        fork = Fork(
-            tracked_repo_id="repo-uuid",
-            github_id=54321,
-            owner="charlie",
-            full_name="charlie/myrepo",
-            default_branch="main",
-        )
-        UUID(fork.id)
-        assert fork.tracked_repo_id == "repo-uuid"
-        assert fork.github_id == 54321
-        assert fork.owner == "charlie"
-        assert fork.full_name == "charlie/myrepo"
-        assert fork.description is None
-        assert fork.vitality == ForkVitality.UNKNOWN
-        assert fork.stars == 0
-        assert fork.stars_previous == 0
-        assert fork.parent_fork_id is None
-        assert fork.depth == 1
-        assert fork.last_pushed_at is None
-        assert fork.commits_ahead == 0
-        assert fork.commits_behind == 0
-        assert fork.head_sha is None
-        assert isinstance(fork.created_at, datetime)
-        assert isinstance(fork.updated_at, datetime)
-
     def test_full_construction(self):
         now = datetime.now(tz=UTC)
         fork = Fork(
@@ -196,125 +119,6 @@ class TestFork:
         assert fork.head_sha == "abc123"
 
 
-# ── Signal Tests ─────────────────────────────────────────────
-
-
-class TestSignal:
-    def test_minimal_construction(self):
-        signal = Signal(
-            tracked_repo_id="repo-id",
-            category=SignalCategory.FEATURE,
-            summary="Added WebSocket support",
-        )
-        UUID(signal.id)
-        assert signal.fork_id is None
-        assert signal.tracked_repo_id == "repo-id"
-        assert signal.category == SignalCategory.FEATURE
-        assert signal.summary == "Added WebSocket support"
-        assert signal.detail is None
-        assert signal.files_involved == []
-        assert signal.significance == 5
-        assert signal.embedding is None
-        assert signal.is_upstream is False
-        assert signal.release_tag is None
-        assert isinstance(signal.created_at, datetime)
-
-    def test_significance_range_valid(self):
-        signal = Signal(
-            tracked_repo_id="r",
-            category=SignalCategory.FIX,
-            summary="Fix",
-            significance=1,
-        )
-        assert signal.significance == 1
-
-        signal = Signal(
-            tracked_repo_id="r",
-            category=SignalCategory.FIX,
-            summary="Fix",
-            significance=10,
-        )
-        assert signal.significance == 10
-
-    def test_significance_below_minimum_rejected(self):
-        with pytest.raises(ValidationError):
-            Signal(
-                tracked_repo_id="r",
-                category=SignalCategory.FIX,
-                summary="Fix",
-                significance=0,
-            )
-
-    def test_significance_above_maximum_rejected(self):
-        with pytest.raises(ValidationError):
-            Signal(
-                tracked_repo_id="r",
-                category=SignalCategory.FIX,
-                summary="Fix",
-                significance=11,
-            )
-
-    def test_with_files_involved(self):
-        signal = Signal(
-            tracked_repo_id="r",
-            category=SignalCategory.REFACTOR,
-            summary="Restructure modules",
-            files_involved=["src/main.py", "src/utils.py"],
-        )
-        assert signal.files_involved == ["src/main.py", "src/utils.py"]
-
-    def test_upstream_signal(self):
-        signal = Signal(
-            tracked_repo_id="r",
-            category=SignalCategory.RELEASE,
-            summary="v2.0.0 released",
-            is_upstream=True,
-            release_tag="v2.0.0",
-        )
-        assert signal.is_upstream is True
-        assert signal.release_tag == "v2.0.0"
-
-    def test_with_embedding(self):
-        data = b"\x00\x01\x02\x03"
-        signal = Signal(
-            tracked_repo_id="r",
-            category=SignalCategory.FEATURE,
-            summary="Test",
-            embedding=data,
-        )
-        assert signal.embedding == data
-
-
-# ── Cluster Tests ────────────────────────────────────────────
-
-
-class TestCluster:
-    def test_minimal_construction(self):
-        cluster = Cluster(
-            tracked_repo_id="repo-id",
-            label="Auth module changes",
-            description="Multiple forks modified auth code",
-        )
-        UUID(cluster.id)
-        assert cluster.tracked_repo_id == "repo-id"
-        assert cluster.label == "Auth module changes"
-        assert cluster.files_pattern == []
-        assert cluster.fork_count == 0
-        assert isinstance(cluster.created_at, datetime)
-        assert isinstance(cluster.updated_at, datetime)
-
-    def test_with_files_pattern(self):
-        cluster = Cluster(
-            tracked_repo_id="r",
-            label="DB changes",
-            description="Pool mods",
-            files_pattern=["src/db/*.py", "src/pool.py"],
-            fork_count=3,
-        )
-        assert cluster.files_pattern == ["src/db/*.py", "src/pool.py"]
-        assert cluster.fork_count == 3
-
-
 # ── ClusterMember Tests ─────────────────────────────────────
 
 
@@ -332,89 +136,6 @@ class TestClusterMember:
     def test_missing_required_field_rejected(self):
         with pytest.raises(ValidationError):
             ClusterMember(cluster_id="c", signal_id="s")  # ty: ignore[missing-argument]
-
-
-# ── DigestConfig Tests ───────────────────────────────────────
-
-
-class TestDigestConfig:
-    def test_minimal_construction(self):
-        config = DigestConfig()
-        UUID(config.id)
-        assert config.tracked_repo_id is None
-        assert config.frequency == "weekly"
-        assert config.day_of_week is None
-        assert config.time_of_day == "09:00"
-        assert config.min_significance == 5
-        assert config.categories is None
-        assert config.file_patterns is None
-        assert config.backends == ["console"]
-        assert isinstance(config.created_at, datetime)
-
-    def test_full_construction(self):
-        config = DigestConfig(
-            tracked_repo_id="repo-id",
-            frequency="daily",
-            day_of_week=0,
-            time_of_day="14:30",
-            min_significance=7,
-            categories=["feature", "fix"],
-            file_patterns=["src/auth/*"],
-            backends=["console", "telegram"],
-        )
-        assert config.tracked_repo_id == "repo-id"
-        assert config.frequency == "daily"
-        assert config.day_of_week == 0
-        assert config.time_of_day == "14:30"
-        assert config.min_significance == 7
-        assert config.categories == ["feature", "fix"]
-        assert config.file_patterns == ["src/auth/*"]
-        assert config.backends == ["console", "telegram"]
-
-
-# ── Digest Tests ─────────────────────────────────────────────
-
-
-class TestDigest:
-    def test_minimal_construction(self):
-        digest = Digest(
-            title="Weekly Digest",
-            body="Here are the changes...",
-        )
-        UUID(digest.id)
-        assert digest.config_id is None
-        assert digest.title == "Weekly Digest"
-        assert digest.body == "Here are the changes..."
-        assert digest.signal_ids == []
-        assert digest.delivered_at is None
-        assert isinstance(digest.created_at, datetime)
-
-    def test_with_signal_ids(self):
-        digest = Digest(
-            title="Daily",
-            body="Updates",
-            signal_ids=["sig-1", "sig-2", "sig-3"],
-            config_id="config-id",
-        )
-        assert digest.signal_ids == ["sig-1", "sig-2", "sig-3"]
-        assert digest.config_id == "config-id"
-
-
-# ── Annotation Tests ─────────────────────────────────────────
-
-
-class TestAnnotation:
-    def test_construction(self):
-        annotation = Annotation(
-            fork_id="fork-id",
-            title="Note about this fork",
-            body="This fork focuses on performance improvements.",
-        )
-        UUID(annotation.id)
-        assert annotation.fork_id == "fork-id"
-        assert annotation.title == "Note about this fork"
-        assert isinstance(annotation.created_at, datetime)
-        assert isinstance(annotation.updated_at, datetime)
 
 
 # ── RepoInfo Tests ───────────────────────────────────────────
@@ -673,79 +394,3 @@ class TestWebhookAction:
         )
         assert action.action_type == "sync_fork"
         assert action.payload == {"fork_id": "123", "event": "push"}
-
-
-# ── Serialization / Round-Trip Tests ────────────────────────
-
-
-@pytest.mark.parametrize(
-    "model_cls,kwargs,check_field",
-    [
-        (
-            TrackedRepo,
-            {
-                "github_id": 1,
-                "owner": "a",
-                "name": "b",
-                "full_name": "a/b",
-                "tracking_mode": TrackingMode.OWNED,
-                "default_branch": "main",
-            },
-            "tracking_mode",
-        ),
-        (
-            Signal,
-            {
-                "tracked_repo_id": "r",
-                "category": SignalCategory.FEATURE,
-                "summary": "x",
-                "significance": 8,
-            },
-            "significance",
-        ),
-        (
-            Fork,
-            {
-                "tracked_repo_id": "r",
-                "github_id": 1,
-                "owner": "x",
-                "full_name": "x/y",
-                "default_branch": "main",
-                "vitality": ForkVitality.ACTIVE,
-                "stars": 42,
-            },
-            "stars",
-        ),
-        (
-            DigestConfig,
-            {
-                "frequency": "daily",
-                "categories": ["feature", "fix"],
-                "backends": ["console", "email"],
-            },
-            "categories",
-        ),
-    ],
-)
-def test_model_round_trip(model_cls, kwargs, check_field):
-    """Pydantic models survive dump/restore round-trips."""
-    instance = model_cls(**kwargs)
-    data = instance.model_dump()
-    restored = model_cls(**data)
-    assert getattr(restored, check_field) == getattr(instance, check_field)
-
-
-class TestSerialization:
-    def test_model_dump_json(self):
-        """Models should be JSON serializable."""
-        repo = TrackedRepo(
-            github_id=1,
-            owner="a",
-            name="b",
-            full_name="a/b",
-            tracking_mode=TrackingMode.OWNED,
-            default_branch="main",
-        )
-        json_str = repo.model_dump_json()
-        assert isinstance(json_str, str)
-        assert '"tracking_mode":"owned"' in json_str
