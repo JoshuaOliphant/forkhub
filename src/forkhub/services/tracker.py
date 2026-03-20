@@ -117,13 +117,16 @@ class TrackerService:
         self,
         mode: TrackingMode | None = None,
         include_excluded: bool = False,
+        sync_status: str | None = None,
     ) -> list[TrackedRepo]:
-        """Return tracked repos, optionally filtered by mode.
+        """Return tracked repos, optionally filtered by mode and/or sync_status.
 
         Excluded repos are hidden by default.
         """
         mode_str = str(mode) if mode is not None else None
-        rows = await self._db.list_tracked_repos(mode=mode_str, include_excluded=include_excluded)
+        rows = await self._db.list_tracked_repos(
+            mode=mode_str, include_excluded=include_excluded, sync_status=sync_status,
+        )
         return [TrackedRepo(**row) for row in rows]
 
     async def detect_upstream_repos(self, username: str) -> list[TrackedRepo]:

@@ -193,12 +193,12 @@ class TestTrackCommands:
 
 
 class TestReposCommand:
-    async def test_repos_empty_shows_message(self, db: Database):
+    async def test_repos_empty_shows_message(self, db: Database, provider: StubGitProvider):
         """repos with no tracked repos should show a helpful message."""
         from forkhub.cli.repos_cmd import _repos_impl
 
         output_lines: list[str] = []
-        await _repos_impl(db=db, mode=None, capture_output=output_lines)
+        await _repos_impl(db=db, provider=provider, mode=None, capture_output=output_lines)
 
         output = "\n".join(output_lines)
         assert "no" in output.lower() or "empty" in output.lower()
