@@ -240,6 +240,13 @@ Append a one-line entry here for every **kept** experiment. This log is committe
 - efbdf1f: combined 4 untracked-repo validation tests into 1 in test_forkhub_api.py → unique_coverage_lines 851 (test_count 78)
 - 70981a9: combined 3 fork-not-found tests into 1 in test_agent_tools.py → unique_coverage_lines 851 (test_count 76)
 - e0dd333: combined near-duplicate tests in test_config.py and test_digest.py → unique_coverage_lines 851 (test_count 73)
+- 7991c81: combined file diff patch+empty tests in test_github_provider.py → unique_coverage_lines 854 (test_count 71)
+- 94b9e8f: absorbed test_fork_not_found into cross-tools test → unique_coverage_lines 854 (test_count 70)
+- 079bffb: combined untrack+exclude+include noop tests → unique_coverage_lines 854 (test_count 69)
+- 3e48833: combined provider error handling tests → unique_coverage_lines 854 (test_count 68)
+- 693d095: combined config show+path tests in test_cli.py → unique_coverage_lines 856 (test_count 67)
+- 2d92c89: combined significance+category filtering tests → unique_coverage_lines 851 (test_count 72)
+- 46af605: combined clusters+digest+reconcile tests → unique_coverage_lines 856 (test_count 65)
 
 ## NEVER STOP
 
