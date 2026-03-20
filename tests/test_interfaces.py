@@ -142,8 +142,14 @@ class TestProtocolMethodCount:
 
     def test_all_protocol_method_counts(self) -> None:
         assert self._protocol_method_names(GitProvider) == {
-            "get_user_repos", "get_forks", "compare", "get_releases",
-            "get_repo", "get_commit_messages", "get_file_diff", "get_rate_limit",
+            "get_user_repos",
+            "get_forks",
+            "compare",
+            "get_releases",
+            "get_repo",
+            "get_commit_messages",
+            "get_file_diff",
+            "get_rate_limit",
         }
         assert self._protocol_method_names(NotificationBackend) == {"deliver", "backend_name"}
         assert self._protocol_method_names(EmbeddingProvider) == {"embed", "dimensions"}
