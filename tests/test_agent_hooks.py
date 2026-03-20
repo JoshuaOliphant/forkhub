@@ -3,94 +3,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 
-from forkhub.database import Database
-from forkhub.models import (
-    CommitInfo,
-    CompareResult,
-    ForkPage,
-    RateLimitInfo,
-    Release,
-    RepoInfo,
-)
+from tests.stubs import StubGitProvider
 
-# ---------------------------------------------------------------------------
-# Stub GitProvider with configurable rate limit
-# ---------------------------------------------------------------------------
-
-
-class StubGitProvider:
-    """Stub GitProvider with a configurable rate limit response.
-
-    All methods satisfy the GitProvider protocol but only get_rate_limit
-    is exercised in hook tests.
-    """
-
-    def __init__(self, remaining: int = 5000, limit: int = 5000) -> None:
-        self._rate_limit = RateLimitInfo(
-            limit=limit,
-            remaining=remaining,
-            reset_at=datetime.now(tz=UTC),
-        )
-        self._raise_on_rate_limit = False
-
-    def set_rate_limit(self, remaining: int) -> None:
-        """Update the remaining rate limit for subsequent calls."""
-        self._rate_limit = RateLimitInfo(
-            limit=self._rate_limit.limit,
-            remaining=remaining,
-            reset_at=datetime.now(tz=UTC),
-        )
-
-    def set_rate_limit_error(self) -> None:
-        """Configure get_rate_limit to raise an exception."""
-        self._raise_on_rate_limit = True
-
-    async def get_rate_limit(self) -> RateLimitInfo:
-        if self._raise_on_rate_limit:
-            raise ConnectionError("Rate limit check failed")
-        return self._rate_limit
-
-    async def get_user_repos(self, username: str) -> list[RepoInfo]:
-        return []
-
-    async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
-        return ForkPage(forks=[], total_count=0, page=page, has_next=False)
-
-    async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
-        return CompareResult(ahead_by=0, behind_by=0, files=[], commits=[])
-
-    async def get_releases(
-        self, owner: str, repo: str, *, since: datetime | None = None
-    ) -> list[Release]:
-        return []
-
-    async def get_repo(self, owner: str, repo: str) -> RepoInfo:
-        return RepoInfo(
-            github_id=1,
-            owner=owner,
-            name=repo,
-            full_name=f"{owner}/{repo}",
-            default_branch="main",
-            description=None,
-            is_fork=False,
-            parent_full_name=None,
-            stars=0,
-            forks_count=0,
-            last_pushed_at=None,
-        )
-
-    async def get_commit_messages(
-        self, owner: str, repo: str, *, since: str | None = None
-    ) -> list[CommitInfo]:
-        return []
-
-    async def get_file_diff(self, owner: str, repo: str, base: str, head: str, path: str) -> str:
-        return ""
-
+if TYPE_CHECKING:
+    from forkhub.database import Database
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -98,18 +18,9 @@ class StubGitProvider:
 
 
 @pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
 def provider() -> StubGitProvider:
     """Provide a StubGitProvider with generous rate limits."""
-    return StubGitProvider(remaining=5000, limit=5000)
+    return StubGitProvider(rate_limit_remaining=5000)
 
 
 # ---------------------------------------------------------------------------

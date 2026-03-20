@@ -11,130 +11,23 @@ import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from forkhub.database import Database
 from typer.testing import CliRunner
 
 from forkhub.cli.app import app
-from forkhub.database import Database
 from forkhub.models import (
-    CommitInfo,
-    CompareResult,
     Fork,
-    ForkPage,
     ForkVitality,
-    RateLimitInfo,
-    Release,
-    RepoInfo,
     Signal,
     SignalCategory,
     TrackingMode,
 )
+from tests.stubs import StubGitProvider
 
 runner = CliRunner()
 
 _NOW = datetime(2025, 6, 1, tzinfo=UTC)
-
-
-# ---------------------------------------------------------------------------
-# StubGitProvider for CLI tests
-# ---------------------------------------------------------------------------
-
-
-class StubGitProvider:
-    """Stub GitProvider for CLI tests with canned data."""
-
-    def __init__(self) -> None:
-        self.user_repos: dict[str, list[RepoInfo]] = {
-            "testuser": [
-                RepoInfo(
-                    github_id=1001,
-                    owner="testuser",
-                    name="alpha",
-                    full_name="testuser/alpha",
-                    default_branch="main",
-                    description="Alpha project",
-                    is_fork=False,
-                    parent_full_name=None,
-                    stars=10,
-                    forks_count=3,
-                    last_pushed_at=_NOW,
-                ),
-                RepoInfo(
-                    github_id=1002,
-                    owner="testuser",
-                    name="beta",
-                    full_name="testuser/beta",
-                    default_branch="main",
-                    description="Beta project",
-                    is_fork=False,
-                    parent_full_name=None,
-                    stars=5,
-                    forks_count=1,
-                    last_pushed_at=_NOW,
-                ),
-                RepoInfo(
-                    github_id=1003,
-                    owner="testuser",
-                    name="forked-lib",
-                    full_name="testuser/forked-lib",
-                    default_branch="main",
-                    description="A forked library",
-                    is_fork=True,
-                    parent_full_name="upstream-org/forked-lib",
-                    stars=0,
-                    forks_count=0,
-                    last_pushed_at=_NOW,
-                ),
-            ],
-        }
-        self.repos: dict[str, RepoInfo] = {
-            "testuser/alpha": self.user_repos["testuser"][0],
-            "testuser/beta": self.user_repos["testuser"][1],
-            "testuser/forked-lib": self.user_repos["testuser"][2],
-            "upstream-org/forked-lib": RepoInfo(
-                github_id=2001,
-                owner="upstream-org",
-                name="forked-lib",
-                full_name="upstream-org/forked-lib",
-                default_branch="main",
-                description="The original library",
-                is_fork=False,
-                parent_full_name=None,
-                stars=500,
-                forks_count=50,
-                last_pushed_at=_NOW,
-            ),
-        }
-
-    async def get_user_repos(self, username: str) -> list[RepoInfo]:
-        return self.user_repos.get(username, [])
-
-    async def get_repo(self, owner: str, repo: str) -> RepoInfo:
-        full_name = f"{owner}/{repo}"
-        if full_name not in self.repos:
-            raise ValueError(f"Repo not found: {full_name}")
-        return self.repos[full_name]
-
-    async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
-        return ForkPage(forks=[], total_count=0, page=1, has_next=False)
-
-    async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
-        return CompareResult(ahead_by=0, behind_by=0, files=[], commits=[])
-
-    async def get_releases(
-        self, owner: str, repo: str, *, since: datetime | None = None
-    ) -> list[Release]:
-        return []
-
-    async def get_commit_messages(
-        self, owner: str, repo: str, *, since: str | None = None
-    ) -> list[CommitInfo]:
-        return []
-
-    async def get_file_diff(self, owner: str, repo: str, base: str, head: str, path: str) -> str:
-        return ""
-
-    async def get_rate_limit(self) -> RateLimitInfo:
-        return RateLimitInfo(limit=5000, remaining=4999, reset_at=_NOW)
 
 
 # ---------------------------------------------------------------------------
@@ -143,17 +36,9 @@ class StubGitProvider:
 
 
 @pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
 def provider() -> StubGitProvider:
-    return StubGitProvider()
+    """CLI tests need the testuser data pre-loaded."""
+    return StubGitProvider.with_testuser_data()
 
 
 # ---------------------------------------------------------------------------
@@ -174,53 +59,25 @@ class TestCLISmoke:
         assert result.exit_code == 0
         assert "Monitor GitHub fork constellations" in result.output
 
-    def test_init_help(self):
-        result = runner.invoke(app, ["init", "--help"])
-        assert result.exit_code == 0
-        assert "init" in result.output.lower() or "user" in result.output.lower()
-
-    def test_track_help(self):
-        result = runner.invoke(app, ["track", "--help"])
-        assert result.exit_code == 0
-
-    def test_untrack_help(self):
-        result = runner.invoke(app, ["untrack", "--help"])
-        assert result.exit_code == 0
-
-    def test_exclude_help(self):
-        result = runner.invoke(app, ["exclude", "--help"])
-        assert result.exit_code == 0
-
-    def test_include_help(self):
-        result = runner.invoke(app, ["include", "--help"])
-        assert result.exit_code == 0
-
-    def test_repos_help(self):
-        result = runner.invoke(app, ["repos", "--help"])
-        assert result.exit_code == 0
-
-    def test_forks_help(self):
-        result = runner.invoke(app, ["forks", "--help"])
-        assert result.exit_code == 0
-
-    def test_inspect_help(self):
-        result = runner.invoke(app, ["inspect", "--help"])
-        assert result.exit_code == 0
-
-    def test_clusters_help(self):
-        result = runner.invoke(app, ["clusters", "--help"])
-        assert result.exit_code == 0
-
-    def test_sync_help(self):
-        result = runner.invoke(app, ["sync", "--help"])
-        assert result.exit_code == 0
-
-    def test_digest_help(self):
-        result = runner.invoke(app, ["digest", "--help"])
-        assert result.exit_code == 0
-
-    def test_config_help(self):
-        result = runner.invoke(app, ["config", "--help"])
+    @pytest.mark.parametrize(
+        "subcommand",
+        [
+            "init",
+            "track",
+            "untrack",
+            "exclude",
+            "include",
+            "forks",
+            "inspect",
+            "clusters",
+            "sync",
+            "digest",
+            "config",
+            "repos",
+        ],
+    )
+    def test_subcommand_help(self, subcommand):
+        result = runner.invoke(app, [subcommand, "--help"])
         assert result.exit_code == 0
 
 

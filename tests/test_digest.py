@@ -4,100 +4,35 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 
-from forkhub.database import Database
-from forkhub.models import DeliveryResult, Digest, DigestConfig
+from forkhub.models import Digest, DigestConfig
 from forkhub.services.digest import DigestService
+from tests.stubs import (
+    StubNotificationBackend,
+    make_fork,
+    make_signal,
+    make_tracked_repo,
+    now_iso,
+)
+
+if TYPE_CHECKING:
+    from forkhub.database import Database
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _uuid() -> str:
-    return str(uuid4())
+def _make_pydantic_digest_config(**overrides: object) -> DigestConfig:
+    """Create a DigestConfig Pydantic model with sensible defaults.
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _days_ago_iso(days: int) -> str:
-    return (datetime.now(UTC) - timedelta(days=days)).isoformat()
-
-
-def _make_tracked_repo(**overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "github_id": 123456,
-        "owner": "torvalds",
-        "name": "linux",
-        "full_name": "torvalds/linux",
-        "tracking_mode": "active",
-        "default_branch": "main",
-        "description": "Linux kernel source tree",
-        "fork_depth": 1,
-        "excluded": False,
-        "webhook_id": None,
-        "sync_status": "ok",
-        "last_sync_error": None,
-        "last_synced_at": None,
-        "created_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_fork(tracked_repo_id: str, **overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "tracked_repo_id": tracked_repo_id,
-        "github_id": 789012,
-        "owner": "gregkh",
-        "full_name": "gregkh/linux",
-        "default_branch": "main",
-        "description": "Greg KH's linux fork",
-        "vitality": "active",
-        "stars": 42,
-        "stars_previous": 40,
-        "parent_fork_id": None,
-        "depth": 1,
-        "last_pushed_at": _now_iso(),
-        "commits_ahead": 10,
-        "commits_behind": 5,
-        "head_sha": "abc123def456",
-        "created_at": _now_iso(),
-        "updated_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_signal(fork_id: str, tracked_repo_id: str, **overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "fork_id": fork_id,
-        "tracked_repo_id": tracked_repo_id,
-        "category": "feature",
-        "summary": "Added GPU support",
-        "detail": "Implements CUDA acceleration for training loop",
-        "files_involved": json.dumps(["src/gpu.py", "src/train.py"]),
-        "significance": 7,
-        "embedding": None,
-        "is_upstream": False,
-        "release_tag": None,
-        "created_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_digest_config(**overrides: object) -> DigestConfig:
-    """Create a DigestConfig Pydantic model with sensible defaults."""
+    The shared make_digest_config returns a dict for DB insertion.
+    This helper returns a DigestConfig model for service-layer tests.
+    """
     kwargs: dict[str, object] = {
         "tracked_repo_id": None,
         "frequency": "weekly",
@@ -113,65 +48,20 @@ def _make_digest_config(**overrides: object) -> DigestConfig:
 
 
 # ---------------------------------------------------------------------------
-# Stub NotificationBackend
-# ---------------------------------------------------------------------------
-
-
-class StubNotificationBackend:
-    """Deterministic notification backend for testing.
-
-    Records all delivered digests and can be configured to succeed or fail.
-    """
-
-    def __init__(self, name: str = "stub", should_fail: bool = False) -> None:
-        self._name = name
-        self._should_fail = should_fail
-        self.delivered: list[Digest] = []
-
-    async def deliver(self, digest: Digest) -> DeliveryResult:
-        self.delivered.append(digest)
-        if self._should_fail:
-            return DeliveryResult(
-                backend_name=self._name,
-                success=False,
-                error="Simulated delivery failure",
-                delivered_at=datetime.now(UTC),
-            )
-        return DeliveryResult(
-            backend_name=self._name,
-            success=True,
-            error=None,
-            delivered_at=datetime.now(UTC),
-        )
-
-    def backend_name(self) -> str:
-        return self._name
-
-
-# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
 async def repo_in_db(db: Database) -> dict:
-    repo = _make_tracked_repo()
+    repo = make_tracked_repo()
     await db.insert_tracked_repo(repo)
     return repo
 
 
 @pytest.fixture
 async def fork_in_db(db: Database, repo_in_db: dict) -> dict:
-    fork = _make_fork(repo_in_db["id"], github_id=5001, owner="alice", full_name="alice/linux")
+    fork = make_fork(repo_in_db["id"], github_id=5001, owner="alice", full_name="alice/linux")
     await db.insert_fork(fork)
     return fork
 
@@ -240,10 +130,10 @@ class TestDigestGeneration:
         fork_in_db: dict,
     ):
         """Digest should include signal summaries in the body."""
-        signal = _make_signal(fork_in_db["id"], repo_in_db["id"], significance=7)
+        signal = make_signal(fork_in_db["id"], repo_in_db["id"], significance=7)
         await db.insert_signal(signal)
 
-        config = _make_digest_config(tracked_repo_id=repo_in_db["id"])
+        config = _make_pydantic_digest_config(tracked_repo_id=repo_in_db["id"])
         svc = DigestService(db, [stub_backend])
         digest = await svc.generate_digest(config)
 
@@ -260,13 +150,13 @@ class TestDigestGeneration:
         fork_in_db: dict,
     ):
         """Signals below min_significance should be excluded."""
-        sig_low = _make_signal(
+        sig_low = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             significance=2,
             summary="Minor tweak",
         )
-        sig_high = _make_signal(
+        sig_high = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             significance=8,
@@ -275,7 +165,7 @@ class TestDigestGeneration:
         await db.insert_signal(sig_low)
         await db.insert_signal(sig_high)
 
-        config = _make_digest_config(tracked_repo_id=repo_in_db["id"], min_significance=5)
+        config = _make_pydantic_digest_config(tracked_repo_id=repo_in_db["id"], min_significance=5)
         svc = DigestService(db, [stub_backend])
         digest = await svc.generate_digest(config)
 
@@ -290,13 +180,13 @@ class TestDigestGeneration:
         fork_in_db: dict,
     ):
         """Only signals matching configured categories should be included."""
-        sig_feature = _make_signal(
+        sig_feature = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             category="feature",
             summary="Feature change",
         )
-        sig_fix = _make_signal(
+        sig_fix = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             category="fix",
@@ -305,7 +195,7 @@ class TestDigestGeneration:
         await db.insert_signal(sig_feature)
         await db.insert_signal(sig_fix)
 
-        config = _make_digest_config(
+        config = _make_pydantic_digest_config(
             tracked_repo_id=repo_in_db["id"],
             categories=["fix"],
             min_significance=1,
@@ -324,13 +214,13 @@ class TestDigestGeneration:
         fork_in_db: dict,
     ):
         """Only signals with files matching configured patterns should be included."""
-        sig_src = _make_signal(
+        sig_src = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             summary="Source change",
             files_involved=json.dumps(["src/gpu.py"]),
         )
-        sig_docs = _make_signal(
+        sig_docs = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             summary="Docs change",
@@ -339,7 +229,7 @@ class TestDigestGeneration:
         await db.insert_signal(sig_src)
         await db.insert_signal(sig_docs)
 
-        config = _make_digest_config(
+        config = _make_pydantic_digest_config(
             tracked_repo_id=repo_in_db["id"],
             file_patterns=["src/*.py"],
             min_significance=1,
@@ -357,7 +247,7 @@ class TestDigestGeneration:
         repo_in_db: dict,
     ):
         """Digest with no matching signals should have empty body and signal_ids."""
-        config = _make_digest_config(tracked_repo_id=repo_in_db["id"])
+        config = _make_pydantic_digest_config(tracked_repo_id=repo_in_db["id"])
         svc = DigestService(db, [stub_backend])
         digest = await svc.generate_digest(config)
 
@@ -372,22 +262,22 @@ class TestDigestGeneration:
         fork_in_db: dict,
     ):
         """The since parameter should filter signals by creation time."""
-        old_signal = _make_signal(
+        old_signal = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             summary="Old change",
             created_at="2020-01-01T00:00:00+00:00",
         )
-        recent_signal = _make_signal(
+        recent_signal = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             summary="Recent change",
-            created_at=_now_iso(),
+            created_at=now_iso(),
         )
         await db.insert_signal(old_signal)
         await db.insert_signal(recent_signal)
 
-        config = _make_digest_config(
+        config = _make_pydantic_digest_config(
             tracked_repo_id=repo_in_db["id"],
             min_significance=1,
         )
@@ -406,10 +296,10 @@ class TestDigestGeneration:
         fork_in_db: dict,
     ):
         """Generated digest should be persisted in the database."""
-        signal = _make_signal(fork_in_db["id"], repo_in_db["id"], significance=7)
+        signal = make_signal(fork_in_db["id"], repo_in_db["id"], significance=7)
         await db.insert_signal(signal)
 
-        config = _make_digest_config(tracked_repo_id=repo_in_db["id"])
+        config = _make_pydantic_digest_config(tracked_repo_id=repo_in_db["id"])
         svc = DigestService(db, [stub_backend])
         digest = await svc.generate_digest(config)
 
@@ -426,7 +316,7 @@ class TestDigestGeneration:
         repo_in_db: dict,
     ):
         """Digest title should contain the current date."""
-        config = _make_digest_config(tracked_repo_id=repo_in_db["id"])
+        config = _make_pydantic_digest_config(tracked_repo_id=repo_in_db["id"])
         svc = DigestService(db, [stub_backend])
         digest = await svc.generate_digest(config)
 
@@ -441,22 +331,22 @@ class TestDigestGeneration:
     ):
         """A config with no tracked_repo_id should query signals from all repos."""
         # Create two repos with signals
-        repo1 = _make_tracked_repo(github_id=1001, owner="a", name="r1", full_name="a/r1")
-        repo2 = _make_tracked_repo(github_id=1002, owner="b", name="r2", full_name="b/r2")
+        repo1 = make_tracked_repo(github_id=1001, owner="a", name="r1", full_name="a/r1")
+        repo2 = make_tracked_repo(github_id=1002, owner="b", name="r2", full_name="b/r2")
         await db.insert_tracked_repo(repo1)
         await db.insert_tracked_repo(repo2)
 
-        fork1 = _make_fork(repo1["id"], github_id=2001, owner="f1", full_name="f1/r1")
-        fork2 = _make_fork(repo2["id"], github_id=2002, owner="f2", full_name="f2/r2")
+        fork1 = make_fork(repo1["id"], github_id=2001, owner="f1", full_name="f1/r1")
+        fork2 = make_fork(repo2["id"], github_id=2002, owner="f2", full_name="f2/r2")
         await db.insert_fork(fork1)
         await db.insert_fork(fork2)
 
-        sig1 = _make_signal(fork1["id"], repo1["id"], summary="Change in repo 1")
-        sig2 = _make_signal(fork2["id"], repo2["id"], summary="Change in repo 2")
+        sig1 = make_signal(fork1["id"], repo1["id"], summary="Change in repo 1")
+        sig2 = make_signal(fork2["id"], repo2["id"], summary="Change in repo 2")
         await db.insert_signal(sig1)
         await db.insert_signal(sig2)
 
-        config = _make_digest_config(tracked_repo_id=None, min_significance=1)
+        config = _make_pydantic_digest_config(tracked_repo_id=None, min_significance=1)
         svc = DigestService(db, [stub_backend])
         digest = await svc.generate_digest(config)
 
@@ -571,10 +461,10 @@ class TestGenerateAndDeliver:
         fork_in_db: dict,
     ):
         """generate_and_deliver should produce a digest and deliver it."""
-        signal = _make_signal(fork_in_db["id"], repo_in_db["id"], significance=8)
+        signal = make_signal(fork_in_db["id"], repo_in_db["id"], significance=8)
         await db.insert_signal(signal)
 
-        config = _make_digest_config(tracked_repo_id=repo_in_db["id"])
+        config = _make_pydantic_digest_config(tracked_repo_id=repo_in_db["id"])
         svc = DigestService(db, [stub_backend])
         digest, results = await svc.generate_and_deliver(config)
 
@@ -591,7 +481,7 @@ class TestGenerateAndDeliver:
         fork_in_db: dict,
     ):
         """When config is None, a sensible default should be used."""
-        signal = _make_signal(fork_in_db["id"], repo_in_db["id"], significance=8)
+        signal = make_signal(fork_in_db["id"], repo_in_db["id"], significance=8)
         await db.insert_signal(signal)
 
         svc = DigestService(db, [stub_backend])
@@ -608,24 +498,24 @@ class TestGenerateAndDeliver:
         fork_in_db: dict,
     ):
         """generate_and_deliver should respect the since parameter."""
-        old_signal = _make_signal(
+        old_signal = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             summary="Old signal",
             significance=8,
             created_at="2020-01-01T00:00:00+00:00",
         )
-        recent_signal = _make_signal(
+        recent_signal = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             summary="Recent signal",
             significance=8,
-            created_at=_now_iso(),
+            created_at=now_iso(),
         )
         await db.insert_signal(old_signal)
         await db.insert_signal(recent_signal)
 
-        config = _make_digest_config(tracked_repo_id=repo_in_db["id"], min_significance=1)
+        config = _make_pydantic_digest_config(tracked_repo_id=repo_in_db["id"], min_significance=1)
         svc = DigestService(db, [stub_backend])
         since = datetime(2024, 1, 1, tzinfo=UTC)
         digest, results = await svc.generate_and_deliver(config, since=since)

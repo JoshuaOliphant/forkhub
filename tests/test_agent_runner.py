@@ -8,77 +8,12 @@ from datetime import UTC, datetime
 import pytest
 
 from forkhub.config import ForkHubSettings
-from forkhub.database import Database
 from forkhub.models import (
-    CommitInfo,
-    CompareResult,
     Fork,
-    ForkPage,
-    RateLimitInfo,
     Release,
-    RepoInfo,
     TrackedRepo,
     TrackingMode,
 )
-
-# ---------------------------------------------------------------------------
-# Stub providers
-# ---------------------------------------------------------------------------
-
-
-class StubGitProvider:
-    """Stub GitProvider that satisfies the protocol without making real API calls."""
-
-    async def get_user_repos(self, username: str) -> list[RepoInfo]:
-        return []
-
-    async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
-        return ForkPage(forks=[], total_count=0, page=page, has_next=False)
-
-    async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
-        return CompareResult(ahead_by=0, behind_by=0, files=[], commits=[])
-
-    async def get_releases(
-        self, owner: str, repo: str, *, since: datetime | None = None
-    ) -> list[Release]:
-        return []
-
-    async def get_repo(self, owner: str, repo: str) -> RepoInfo:
-        return RepoInfo(
-            github_id=1,
-            owner=owner,
-            name=repo,
-            full_name=f"{owner}/{repo}",
-            default_branch="main",
-            description=None,
-            is_fork=False,
-            parent_full_name=None,
-            stars=0,
-            forks_count=0,
-            last_pushed_at=None,
-        )
-
-    async def get_commit_messages(
-        self, owner: str, repo: str, *, since: str | None = None
-    ) -> list[CommitInfo]:
-        return []
-
-    async def get_file_diff(self, owner: str, repo: str, base: str, head: str, path: str) -> str:
-        return ""
-
-    async def get_rate_limit(self) -> RateLimitInfo:
-        return RateLimitInfo(limit=5000, remaining=5000, reset_at=datetime.now(tz=UTC))
-
-
-class StubEmbeddingProvider:
-    """Stub EmbeddingProvider that satisfies the protocol without loading models."""
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[0.0] * 384 for _ in texts]
-
-    def dimensions(self) -> int:
-        return 384
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -132,25 +67,6 @@ def _make_release(**overrides) -> Release:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
-def provider() -> StubGitProvider:
-    return StubGitProvider()
-
-
-@pytest.fixture
-def embedding_provider() -> StubEmbeddingProvider:
-    return StubEmbeddingProvider()
 
 
 @pytest.fixture

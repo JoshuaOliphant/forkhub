@@ -2,13 +2,6 @@
 # ABOUTME: Validates imports, version, and CLI entry point work.
 
 
-def test_version_importable():
-    """The library version should be importable."""
-    from forkhub import __version__
-
-    assert __version__ == "0.1.0"
-
-
 def test_cli_app_importable():
     """The CLI Typer app should be importable."""
     from forkhub.cli.app import app

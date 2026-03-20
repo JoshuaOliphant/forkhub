@@ -3,203 +3,17 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 import pytest
 
 from forkhub.config import ForkHubSettings
 from forkhub.database import Database
 from forkhub.models import (
-    CommitInfo,
-    CompareResult,
-    DeliveryResult,
     Digest,
-    ForkInfo,
-    ForkPage,
-    RateLimitInfo,
-    Release,
-    RepoInfo,
     TrackedRepo,
     TrackingMode,
 )
 from forkhub.services.sync import SyncResult
-
-# ---------------------------------------------------------------------------
-# Time constants
-# ---------------------------------------------------------------------------
-
-_NOW = datetime(2025, 6, 1, tzinfo=UTC)
-_ACTIVE_DATE = _NOW - timedelta(days=30)
-
-
-# ---------------------------------------------------------------------------
-# Stub providers — real classes satisfying Protocol interfaces
-# ---------------------------------------------------------------------------
-
-
-class StubGitProvider:
-    """Stub implementation of GitProvider with canned data for ForkHub API tests."""
-
-    def __init__(self) -> None:
-        self.user_repos: dict[str, list[RepoInfo]] = {
-            "testuser": [
-                RepoInfo(
-                    github_id=1001,
-                    owner="testuser",
-                    name="alpha",
-                    full_name="testuser/alpha",
-                    default_branch="main",
-                    description="Alpha project",
-                    is_fork=False,
-                    parent_full_name=None,
-                    stars=10,
-                    forks_count=3,
-                    last_pushed_at=_NOW,
-                ),
-                RepoInfo(
-                    github_id=1002,
-                    owner="testuser",
-                    name="beta",
-                    full_name="testuser/beta",
-                    default_branch="main",
-                    description="Beta project",
-                    is_fork=False,
-                    parent_full_name=None,
-                    stars=5,
-                    forks_count=1,
-                    last_pushed_at=_NOW,
-                ),
-                RepoInfo(
-                    github_id=1003,
-                    owner="testuser",
-                    name="forked-lib",
-                    full_name="testuser/forked-lib",
-                    default_branch="main",
-                    description="A forked library",
-                    is_fork=True,
-                    parent_full_name="upstream-org/forked-lib",
-                    stars=0,
-                    forks_count=0,
-                    last_pushed_at=_NOW,
-                ),
-            ],
-        }
-        self.repos: dict[str, RepoInfo] = {
-            "testuser/alpha": self.user_repos["testuser"][0],
-            "testuser/beta": self.user_repos["testuser"][1],
-            "testuser/forked-lib": self.user_repos["testuser"][2],
-            "upstream-org/forked-lib": RepoInfo(
-                github_id=2001,
-                owner="upstream-org",
-                name="forked-lib",
-                full_name="upstream-org/forked-lib",
-                default_branch="main",
-                description="The original library",
-                is_fork=False,
-                parent_full_name=None,
-                stars=500,
-                forks_count=50,
-                last_pushed_at=_NOW,
-            ),
-        }
-        self._forks: dict[str, list[ForkInfo]] = {
-            "testuser/alpha": [
-                ForkInfo(
-                    github_id=5001,
-                    owner="forker1",
-                    full_name="forker1/alpha",
-                    default_branch="main",
-                    description="Forker 1's copy",
-                    stars=15,
-                    last_pushed_at=_ACTIVE_DATE,
-                    has_diverged=True,
-                    created_at=_NOW - timedelta(days=60),
-                ),
-            ],
-        }
-        self._head_shas: dict[str, str] = {
-            "forker1/alpha": "sha-forker1",
-        }
-
-    async def get_user_repos(self, username: str) -> list[RepoInfo]:
-        return self.user_repos.get(username, [])
-
-    async def get_repo(self, owner: str, repo: str) -> RepoInfo:
-        full_name = f"{owner}/{repo}"
-        if full_name not in self.repos:
-            raise ValueError(f"Repo not found: {full_name}")
-        return self.repos[full_name]
-
-    async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
-        full_name = f"{owner}/{repo}"
-        forks = self._forks.get(full_name, [])
-        return ForkPage(forks=forks, total_count=len(forks), page=1, has_next=False)
-
-    async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
-        return CompareResult(ahead_by=3, behind_by=1, files=[], commits=[])
-
-    async def get_releases(
-        self, owner: str, repo: str, *, since: datetime | None = None
-    ) -> list[Release]:
-        return []
-
-    async def get_commit_messages(
-        self, owner: str, repo: str, *, since: str | None = None
-    ) -> list[CommitInfo]:
-        return []
-
-    async def get_file_diff(self, owner: str, repo: str, base: str, head: str, path: str) -> str:
-        return ""
-
-    async def get_rate_limit(self) -> RateLimitInfo:
-        return RateLimitInfo(limit=5000, remaining=4999, reset_at=_NOW)
-
-    def get_head_sha(self, fork_full_name: str) -> str | None:
-        return self._head_shas.get(fork_full_name)
-
-
-class StubNotificationBackend:
-    """Deterministic notification backend for testing."""
-
-    def __init__(self, name: str = "stub") -> None:
-        self._name = name
-        self.delivered: list[Digest] = []
-
-    async def deliver(self, digest: Digest) -> DeliveryResult:
-        self.delivered.append(digest)
-        return DeliveryResult(
-            backend_name=self._name,
-            success=True,
-            error=None,
-            delivered_at=datetime.now(UTC),
-        )
-
-    def backend_name(self) -> str:
-        return self._name
-
-
-class StubEmbeddingProvider:
-    """Deterministic embedding provider for testing."""
-
-    def __init__(self, dims: int = 8) -> None:
-        self._dims = dims
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        results = []
-        for text in texts:
-            vec = [0.0] * self._dims
-            for ch in text:
-                idx = ord(ch) % self._dims
-                vec[idx] += 1.0
-            mag = sum(v * v for v in vec) ** 0.5
-            if mag > 0:
-                vec = [v / mag for v in vec]
-            results.append(vec)
-        return results
-
-    def dimensions(self) -> int:
-        return self._dims
-
+from tests.stubs import StubEmbeddingProvider, StubGitProvider, StubNotificationBackend
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -207,27 +21,8 @@ class StubEmbeddingProvider:
 
 
 @pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
 def provider() -> StubGitProvider:
-    return StubGitProvider()
-
-
-@pytest.fixture
-def backend() -> StubNotificationBackend:
-    return StubNotificationBackend()
-
-
-@pytest.fixture
-def embedding_provider() -> StubEmbeddingProvider:
-    return StubEmbeddingProvider()
+    return StubGitProvider.with_testuser_data()
 
 
 @pytest.fixture

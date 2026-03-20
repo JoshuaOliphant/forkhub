@@ -5,17 +5,16 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 
-from forkhub.database import Database
 from forkhub.models import (
     CommitInfo,
     CompareResult,
     FileChange,
     Fork,
     ForkInfo,
-    ForkPage,
     ForkVitality,
     RateLimitInfo,
     Release,
@@ -23,6 +22,10 @@ from forkhub.models import (
     TrackedRepo,
     TrackingMode,
 )
+from tests.stubs import StubEmbeddingProvider, StubGitProvider
+
+if TYPE_CHECKING:
+    from forkhub.database import Database
 
 # ---------------------------------------------------------------------------
 # Time constants
@@ -34,40 +37,48 @@ _OLD = _NOW - timedelta(days=200)
 
 
 # ---------------------------------------------------------------------------
-# StubGitProvider — canned fork/compare/release data
+# AgentToolsGitProvider — extends shared StubGitProvider with canned data
 # ---------------------------------------------------------------------------
 
 
-class StubGitProvider:
-    """Stub GitProvider for agent tool testing."""
+class AgentToolsGitProvider(StubGitProvider):
+    """StubGitProvider subclass with canned fork/compare/release/diff data.
+
+    The shared StubGitProvider returns empty defaults. This subclass adds
+    the rich test data needed by agent tool tests: compare results keyed
+    by fork name, file diffs keyed by fork+path, releases with since
+    filtering, and commit messages.
+    """
 
     def __init__(self) -> None:
-        self._forks: dict[str, list[ForkInfo]] = {
-            "owner/repo": [
-                ForkInfo(
-                    github_id=5001,
-                    owner="alice",
-                    full_name="alice/repo",
-                    default_branch="main",
-                    description="Alice's fork",
-                    stars=20,
-                    last_pushed_at=_RECENT,
-                    has_diverged=True,
-                    created_at=_NOW - timedelta(days=60),
-                ),
-                ForkInfo(
-                    github_id=5002,
-                    owner="bob",
-                    full_name="bob/repo",
-                    default_branch="main",
-                    description="Bob's dormant fork",
-                    stars=2,
-                    last_pushed_at=_OLD,
-                    has_diverged=False,
-                    created_at=_NOW - timedelta(days=300),
-                ),
-            ],
-        }
+        super().__init__(
+            forks={
+                "owner/repo": [
+                    ForkInfo(
+                        github_id=5001,
+                        owner="alice",
+                        full_name="alice/repo",
+                        default_branch="main",
+                        description="Alice's fork",
+                        stars=20,
+                        last_pushed_at=_RECENT,
+                        has_diverged=True,
+                        created_at=_NOW - timedelta(days=60),
+                    ),
+                    ForkInfo(
+                        github_id=5002,
+                        owner="bob",
+                        full_name="bob/repo",
+                        default_branch="main",
+                        description="Bob's dormant fork",
+                        stars=2,
+                        last_pushed_at=_OLD,
+                        has_diverged=False,
+                        created_at=_NOW - timedelta(days=300),
+                    ),
+                ],
+            },
+        )
         self._compare_results: dict[str, CompareResult] = {
             "alice/repo": CompareResult(
                 ahead_by=8,
@@ -143,9 +154,6 @@ class StubGitProvider:
         }
         self._error_on_compare: set[str] = set()
 
-    async def get_user_repos(self, username: str) -> list[RepoInfo]:
-        return []
-
     async def get_repo(self, owner: str, repo: str) -> RepoInfo:
         full_name = f"{owner}/{repo}"
         return RepoInfo(
@@ -160,16 +168,6 @@ class StubGitProvider:
             stars=0,
             forks_count=0,
             last_pushed_at=_NOW,
-        )
-
-    async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
-        full_name = f"{owner}/{repo}"
-        forks = self._forks.get(full_name, [])
-        return ForkPage(
-            forks=forks,
-            total_count=len(forks),
-            page=page,
-            has_next=False,
         )
 
     async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
@@ -208,55 +206,22 @@ class StubGitProvider:
 
 
 # ---------------------------------------------------------------------------
-# StubEmbeddingProvider — returns deterministic embeddings
-# ---------------------------------------------------------------------------
-
-
-class StubEmbeddingProvider:
-    """Stub EmbeddingProvider that returns fixed-dimension vectors."""
-
-    def __init__(self, dims: int = 4) -> None:
-        self._dims = dims
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        # Return a simple hash-based embedding for each text
-        result = []
-        for text in texts:
-            h = hash(text) % 1000
-            vec = [(h + i) / 1000.0 for i in range(self._dims)]
-            result.append(vec)
-        return result
-
-    def dimensions(self) -> int:
-        return self._dims
-
-
-# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
-def provider() -> StubGitProvider:
-    return StubGitProvider()
+def provider() -> AgentToolsGitProvider:
+    return AgentToolsGitProvider()
 
 
 @pytest.fixture
 def embedding_provider() -> StubEmbeddingProvider:
-    return StubEmbeddingProvider()
+    return StubEmbeddingProvider(dims=4)
 
 
 @pytest.fixture
-def tools(db: Database, provider: StubGitProvider, embedding_provider: StubEmbeddingProvider):
+def tools(db: Database, provider: AgentToolsGitProvider, embedding_provider: StubEmbeddingProvider):
     """Create the tools list via the factory function."""
     from forkhub.agent.tools import create_tools
 

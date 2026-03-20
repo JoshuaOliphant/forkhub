@@ -166,8 +166,8 @@ class TestConsoleBackendProtocol:
 
 
 class TestConsoleBackendDeliver:
-    async def test_deliver_returns_success(self, sample_digest: Digest):
-        """deliver() should return a successful DeliveryResult."""
+    async def test_deliver_renders_digest_content(self, sample_digest: Digest):
+        """deliver() should return success and render title, body, and signal count."""
         from forkhub.notifications.console import ConsoleBackend
 
         output = StringIO()
@@ -182,46 +182,9 @@ class TestConsoleBackendDeliver:
         assert result.error is None
         assert isinstance(result.delivered_at, datetime)
 
-    async def test_deliver_renders_digest_title(self, sample_digest: Digest):
-        """deliver() should output the digest title."""
-        from rich.console import Console
-
-        from forkhub.notifications.console import ConsoleBackend
-
-        output = StringIO()
-        console_obj = Console(file=output, force_terminal=True, width=80)
-        backend = ConsoleBackend(console=console_obj)
-        await backend.deliver(sample_digest)
-
         rendered = output.getvalue()
         assert "Weekly Digest for alice/myrepo" in rendered
-
-    async def test_deliver_renders_digest_body(self, sample_digest: Digest):
-        """deliver() should output the digest body."""
-        from rich.console import Console
-
-        from forkhub.notifications.console import ConsoleBackend
-
-        output = StringIO()
-        console_obj = Console(file=output, force_terminal=True, width=80)
-        backend = ConsoleBackend(console=console_obj)
-        await backend.deliver(sample_digest)
-
-        rendered = output.getvalue()
         assert "3 forks showed interesting activity this week." in rendered
-
-    async def test_deliver_shows_signal_count(self, sample_digest: Digest):
-        """deliver() should show the number of signals in the digest."""
-        from rich.console import Console
-
-        from forkhub.notifications.console import ConsoleBackend
-
-        output = StringIO()
-        console_obj = Console(file=output, force_terminal=True, width=80)
-        backend = ConsoleBackend(console=console_obj)
-        await backend.deliver(sample_digest)
-
-        rendered = output.getvalue()
         assert "3" in rendered
 
     async def test_deliver_empty_digest(self, sample_digest_no_signals: Digest):
@@ -258,34 +221,6 @@ class TestConsoleBackendDeliver:
 
 
 class TestFormatSignificance:
-    def test_minimum_score(self):
-        """Score of 1 should produce 1 filled block and 9 empty."""
-        from forkhub.cli.formatting import format_significance
-
-        result = format_significance(1)
-        assert result == "\u2588" + "\u2591" * 9
-
-    def test_maximum_score(self):
-        """Score of 10 should produce 10 filled blocks."""
-        from forkhub.cli.formatting import format_significance
-
-        result = format_significance(10)
-        assert result == "\u2588" * 10
-
-    def test_middle_score(self):
-        """Score of 5 should produce 5 filled and 5 empty."""
-        from forkhub.cli.formatting import format_significance
-
-        result = format_significance(5)
-        assert result == "\u2588" * 5 + "\u2591" * 5
-
-    def test_score_length_always_ten(self):
-        """The bar should always be exactly 10 characters."""
-        from forkhub.cli.formatting import format_significance
-
-        for score in range(1, 11):
-            assert len(format_significance(score)) == 10
-
     def test_all_scores(self):
         """Every valid score should produce the correct number of filled blocks."""
         from forkhub.cli.formatting import format_significance
@@ -302,8 +237,8 @@ class TestFormatSignificance:
 
 
 class TestRenderDigest:
-    def test_renders_title(self, sample_digest: Digest):
-        """render_digest should include the digest title."""
+    def test_renders_digest_content(self, sample_digest: Digest):
+        """render_digest should include title, body, and signal count."""
         from rich.console import Console
 
         from forkhub.cli.formatting import render_digest
@@ -314,32 +249,7 @@ class TestRenderDigest:
 
         rendered = output.getvalue()
         assert "Weekly Digest for alice/myrepo" in rendered
-
-    def test_renders_body(self, sample_digest: Digest):
-        """render_digest should include the digest body."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_digest
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_digest(console, sample_digest)
-
-        rendered = output.getvalue()
         assert "3 forks showed interesting activity this week." in rendered
-
-    def test_renders_signal_count(self, sample_digest: Digest):
-        """render_digest should display the signal count."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_digest
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_digest(console, sample_digest)
-
-        rendered = output.getvalue()
-        # Should contain "3 signals" or similar
         assert "3" in rendered
         assert "signal" in rendered.lower()
 
@@ -362,8 +272,8 @@ class TestRenderDigest:
 
 
 class TestRenderRepoTable:
-    def test_renders_table_with_columns(self, sample_repos: list[TrackedRepo]):
-        """render_repo_table should produce a table with the expected columns."""
+    def test_renders_table_with_repos(self, sample_repos: list[TrackedRepo]):
+        """render_repo_table should produce a table with columns, repo names, and tracking modes."""
         from rich.console import Console
 
         from forkhub.cli.formatting import render_repo_table
@@ -373,35 +283,14 @@ class TestRenderRepoTable:
         render_repo_table(console, sample_repos)
 
         rendered = output.getvalue()
+        # Columns
         assert "Repository" in rendered
         assert "Mode" in rendered
         assert "Last Synced" in rendered
-
-    def test_renders_repo_names(self, sample_repos: list[TrackedRepo]):
-        """render_repo_table should display each repo's full name."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_repo_table
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=120)
-        render_repo_table(console, sample_repos)
-
-        rendered = output.getvalue()
+        # Repo names
         assert "alice/myrepo" in rendered
         assert "bob/toolkit" in rendered
-
-    def test_renders_tracking_mode(self, sample_repos: list[TrackedRepo]):
-        """render_repo_table should display the tracking mode."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_repo_table
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=120)
-        render_repo_table(console, sample_repos)
-
-        rendered = output.getvalue()
+        # Tracking modes
         assert "owned" in rendered
         assert "watched" in rendered
 
@@ -423,8 +312,8 @@ class TestRenderRepoTable:
 
 
 class TestRenderForkTable:
-    def test_renders_table_with_columns(self, sample_forks: list[Fork]):
-        """render_fork_table should produce a table with the expected columns."""
+    def test_renders_table_with_forks(self, sample_forks: list[Fork]):
+        """render_fork_table should produce a table with all fork data."""
         from rich.console import Console
 
         from forkhub.cli.formatting import render_fork_table
@@ -434,52 +323,20 @@ class TestRenderForkTable:
         render_fork_table(console, sample_forks)
 
         rendered = output.getvalue()
+        # Columns
         assert "Fork" in rendered
         assert "Stars" in rendered
         assert "Ahead" in rendered
         assert "Behind" in rendered
         assert "Vitality" in rendered
-
-    def test_renders_fork_names(self, sample_forks: list[Fork]):
-        """render_fork_table should display each fork's full name."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_fork_table
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=120)
-        render_fork_table(console, sample_forks)
-
-        rendered = output.getvalue()
+        # Fork names
         assert "charlie/myrepo" in rendered
         assert "diana/myrepo" in rendered
         assert "eve/myrepo" in rendered
-
-    def test_renders_fork_stats(self, sample_forks: list[Fork]):
-        """render_fork_table should display stars, ahead, and behind counts."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_fork_table
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=120)
-        render_fork_table(console, sample_forks)
-
-        rendered = output.getvalue()
+        # Stats
         assert "42" in rendered
         assert "15" in rendered
-
-    def test_renders_vitality(self, sample_forks: list[Fork]):
-        """render_fork_table should display vitality status."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_fork_table
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=120)
-        render_fork_table(console, sample_forks)
-
-        rendered = output.getvalue()
+        # Vitality labels
         assert "active" in rendered
         assert "dormant" in rendered
 
@@ -501,8 +358,8 @@ class TestRenderForkTable:
 
 
 class TestRenderSignal:
-    def test_renders_category(self, sample_signal: Signal):
-        """render_signal should display the signal category."""
+    def test_renders_signal_content(self, sample_signal: Signal):
+        """render_signal should display category, significance bar, summary, and files."""
         from rich.console import Console
 
         from forkhub.cli.formatting import render_signal
@@ -513,45 +370,8 @@ class TestRenderSignal:
 
         rendered = output.getvalue()
         assert "feature" in rendered.lower()
-
-    def test_renders_summary(self, sample_signal: Signal):
-        """render_signal should display the signal summary."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_signal
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_signal(console, sample_signal)
-
-        rendered = output.getvalue()
         assert "Added WebSocket support" in rendered
-
-    def test_renders_significance_bar(self, sample_signal: Signal):
-        """render_signal should display the significance bar."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_signal
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_signal(console, sample_signal)
-
-        rendered = output.getvalue()
-        # Should contain the filled block character (significance 8)
         assert "\u2588" in rendered
-
-    def test_renders_files_involved(self, sample_signal: Signal):
-        """render_signal should display the files involved."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_signal
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_signal(console, sample_signal)
-
-        rendered = output.getvalue()
         assert "src/ws.py" in rendered
         assert "src/handler.py" in rendered
 
@@ -560,8 +380,8 @@ class TestRenderSignal:
 
 
 class TestRenderCluster:
-    def test_renders_label(self, sample_cluster: Cluster):
-        """render_cluster should display the cluster label."""
+    def test_renders_cluster_content(self, sample_cluster: Cluster):
+        """render_cluster should display label, description, fork count, and file patterns."""
         from rich.console import Console
 
         from forkhub.cli.formatting import render_cluster
@@ -572,42 +392,6 @@ class TestRenderCluster:
 
         rendered = output.getvalue()
         assert "Auth module changes" in rendered
-
-    def test_renders_description(self, sample_cluster: Cluster):
-        """render_cluster should display the cluster description."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_cluster
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_cluster(console, sample_cluster)
-
-        rendered = output.getvalue()
         assert "Multiple forks independently modified" in rendered
-
-    def test_renders_fork_count(self, sample_cluster: Cluster):
-        """render_cluster should display the fork count."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_cluster
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_cluster(console, sample_cluster)
-
-        rendered = output.getvalue()
         assert "4" in rendered
-
-    def test_renders_file_patterns(self, sample_cluster: Cluster):
-        """render_cluster should display the file patterns."""
-        from rich.console import Console
-
-        from forkhub.cli.formatting import render_cluster
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=True, width=80)
-        render_cluster(console, sample_cluster)
-
-        rendered = output.getvalue()
         assert "src/auth/*.py" in rendered

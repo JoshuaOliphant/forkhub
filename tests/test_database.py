@@ -5,175 +5,22 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from uuid import uuid4
 
 import aiosqlite
 import pytest
 
 from forkhub.database import Database
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _uuid() -> str:
-    return str(uuid4())
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _make_tracked_repo(**overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "github_id": 123456,
-        "owner": "torvalds",
-        "name": "linux",
-        "full_name": "torvalds/linux",
-        "tracking_mode": "active",
-        "default_branch": "main",
-        "description": "Linux kernel source tree",
-        "fork_depth": 1,
-        "excluded": False,
-        "webhook_id": None,
-        "sync_status": "ok",
-        "last_sync_error": None,
-        "last_synced_at": None,
-        "created_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_fork(tracked_repo_id: str, **overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "tracked_repo_id": tracked_repo_id,
-        "github_id": 789012,
-        "owner": "gregkh",
-        "full_name": "gregkh/linux",
-        "default_branch": "main",
-        "description": "Greg KH's linux fork",
-        "vitality": "active",
-        "stars": 42,
-        "stars_previous": 40,
-        "parent_fork_id": None,
-        "depth": 1,
-        "last_pushed_at": _now_iso(),
-        "commits_ahead": 10,
-        "commits_behind": 5,
-        "head_sha": "abc123def456",
-        "created_at": _now_iso(),
-        "updated_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_signal(fork_id: str, tracked_repo_id: str, **overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "fork_id": fork_id,
-        "tracked_repo_id": tracked_repo_id,
-        "category": "feature",
-        "summary": "Added GPU support",
-        "detail": "Implements CUDA acceleration for training loop",
-        "files_involved": json.dumps(["src/gpu.py", "src/train.py"]),
-        "significance": 7,
-        "embedding": None,
-        "is_upstream": False,
-        "release_tag": None,
-        "created_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_cluster(tracked_repo_id: str, **overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "tracked_repo_id": tracked_repo_id,
-        "label": "GPU acceleration",
-        "description": "Multiple forks adding GPU support",
-        "files_pattern": json.dumps(["src/gpu*.py"]),
-        "fork_count": 3,
-        "created_at": _now_iso(),
-        "updated_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_cluster_member(cluster_id: str, signal_id: str, fork_id: str) -> dict:
-    return {
-        "cluster_id": cluster_id,
-        "signal_id": signal_id,
-        "fork_id": fork_id,
-    }
-
-
-def _make_digest_config(tracked_repo_id: str | None = None, **overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "tracked_repo_id": tracked_repo_id,
-        "frequency": "weekly",
-        "day_of_week": 1,
-        "time_of_day": "09:00",
-        "min_significance": 5,
-        "categories": None,
-        "file_patterns": None,
-        "backends": json.dumps(["console"]),
-        "created_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_digest(config_id: str, **overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "config_id": config_id,
-        "title": "Weekly Fork Digest",
-        "body": "Here are this week's interesting forks...",
-        "signal_ids": json.dumps([_uuid(), _uuid()]),
-        "delivered_at": None,
-        "created_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
-async def repo_in_db(db: Database) -> dict:
-    """Insert and return a tracked repo for use as a foreign key parent."""
-    repo = _make_tracked_repo()
-    await db.insert_tracked_repo(repo)
-    return repo
-
-
-@pytest.fixture
-async def fork_in_db(db: Database, repo_in_db: dict) -> dict:
-    """Insert and return a fork linked to repo_in_db."""
-    fork = _make_fork(repo_in_db["id"])
-    await db.insert_fork(fork)
-    return fork
-
+from tests.stubs import (
+    make_cluster,
+    make_cluster_member,
+    make_digest,
+    make_digest_config,
+    make_fork,
+    make_id,
+    make_signal,
+    make_tracked_repo,
+    now_iso,
+)
 
 # ---------------------------------------------------------------------------
 # Schema / connect / close
@@ -242,7 +89,7 @@ class TestConnection:
 
 class TestTrackedRepoCRUD:
     async def test_insert_and_get(self, db: Database):
-        repo = _make_tracked_repo()
+        repo = make_tracked_repo()
         await db.insert_tracked_repo(repo)
         result = await db.get_tracked_repo(repo["id"])
         assert result is not None
@@ -251,11 +98,11 @@ class TestTrackedRepoCRUD:
         assert result["tracking_mode"] == "active"
 
     async def test_get_nonexistent_returns_none(self, db: Database):
-        result = await db.get_tracked_repo(_uuid())
+        result = await db.get_tracked_repo(make_id())
         assert result is None
 
     async def test_get_by_name(self, db: Database):
-        repo = _make_tracked_repo()
+        repo = make_tracked_repo()
         await db.insert_tracked_repo(repo)
         result = await db.get_tracked_repo_by_name("torvalds/linux")
         assert result is not None
@@ -266,18 +113,18 @@ class TestTrackedRepoCRUD:
         assert result is None
 
     async def test_list_all(self, db: Database):
-        repo1 = _make_tracked_repo(github_id=1, owner="a", name="r1", full_name="a/r1")
-        repo2 = _make_tracked_repo(github_id=2, owner="b", name="r2", full_name="b/r2")
+        repo1 = make_tracked_repo(github_id=1, owner="a", name="r1", full_name="a/r1")
+        repo2 = make_tracked_repo(github_id=2, owner="b", name="r2", full_name="b/r2")
         await db.insert_tracked_repo(repo1)
         await db.insert_tracked_repo(repo2)
         results = await db.list_tracked_repos()
         assert len(results) == 2
 
     async def test_list_filtered_by_mode(self, db: Database):
-        repo_active = _make_tracked_repo(
+        repo_active = make_tracked_repo(
             github_id=1, owner="a", name="r1", full_name="a/r1", tracking_mode="active"
         )
-        repo_passive = _make_tracked_repo(
+        repo_passive = make_tracked_repo(
             github_id=2, owner="b", name="r2", full_name="b/r2", tracking_mode="passive"
         )
         await db.insert_tracked_repo(repo_active)
@@ -287,10 +134,10 @@ class TestTrackedRepoCRUD:
         assert results[0]["tracking_mode"] == "active"
 
     async def test_list_excludes_excluded_by_default(self, db: Database):
-        repo_ok = _make_tracked_repo(
+        repo_ok = make_tracked_repo(
             github_id=1, owner="a", name="r1", full_name="a/r1", excluded=False
         )
-        repo_excl = _make_tracked_repo(
+        repo_excl = make_tracked_repo(
             github_id=2, owner="b", name="r2", full_name="b/r2", excluded=True
         )
         await db.insert_tracked_repo(repo_ok)
@@ -299,10 +146,10 @@ class TestTrackedRepoCRUD:
         assert len(results) == 1
 
     async def test_list_includes_excluded_when_asked(self, db: Database):
-        repo_ok = _make_tracked_repo(
+        repo_ok = make_tracked_repo(
             github_id=1, owner="a", name="r1", full_name="a/r1", excluded=False
         )
-        repo_excl = _make_tracked_repo(
+        repo_excl = make_tracked_repo(
             github_id=2, owner="b", name="r2", full_name="b/r2", excluded=True
         )
         await db.insert_tracked_repo(repo_ok)
@@ -311,10 +158,10 @@ class TestTrackedRepoCRUD:
         assert len(results) == 2
 
     async def test_update(self, db: Database):
-        repo = _make_tracked_repo()
+        repo = make_tracked_repo()
         await db.insert_tracked_repo(repo)
         repo["description"] = "Updated description"
-        repo["last_synced_at"] = _now_iso()
+        repo["last_synced_at"] = now_iso()
         await db.update_tracked_repo(repo)
         result = await db.get_tracked_repo(repo["id"])
         assert result is not None
@@ -322,31 +169,31 @@ class TestTrackedRepoCRUD:
         assert result["last_synced_at"] is not None
 
     async def test_delete(self, db: Database):
-        repo = _make_tracked_repo()
+        repo = make_tracked_repo()
         await db.insert_tracked_repo(repo)
         await db.delete_tracked_repo(repo["id"])
         result = await db.get_tracked_repo(repo["id"])
         assert result is None
 
     async def test_delete_cascades_to_forks(self, db: Database):
-        repo = _make_tracked_repo()
+        repo = make_tracked_repo()
         await db.insert_tracked_repo(repo)
-        fork = _make_fork(repo["id"])
+        fork = make_fork(repo["id"])
         await db.insert_fork(fork)
         await db.delete_tracked_repo(repo["id"])
         result = await db.get_fork(fork["id"])
         assert result is None
 
     async def test_insert_duplicate_github_id_raises(self, db: Database):
-        repo1 = _make_tracked_repo(github_id=999)
-        repo2 = _make_tracked_repo(github_id=999, owner="other", name="x", full_name="other/x")
+        repo1 = make_tracked_repo(github_id=999)
+        repo2 = make_tracked_repo(github_id=999, owner="other", name="x", full_name="other/x")
         await db.insert_tracked_repo(repo1)
         with pytest.raises(aiosqlite.IntegrityError):
             await db.insert_tracked_repo(repo2)
 
     async def test_insert_with_default_sync_status(self, db: Database):
         """Repos inserted without sync_status get default 'ok'."""
-        repo = _make_tracked_repo()
+        repo = make_tracked_repo()
         await db.insert_tracked_repo(repo)
         result = await db.get_tracked_repo(repo["id"])
         assert result is not None
@@ -355,7 +202,7 @@ class TestTrackedRepoCRUD:
 
     async def test_insert_with_inaccessible_status(self, db: Database):
         """Repos can be inserted with inaccessible sync_status and error message."""
-        repo = _make_tracked_repo(
+        repo = make_tracked_repo(
             sync_status="inaccessible",
             last_sync_error="404 Not Found",
         )
@@ -367,7 +214,7 @@ class TestTrackedRepoCRUD:
 
     async def test_update_sync_status(self, db: Database):
         """sync_status can be updated from ok to inaccessible."""
-        repo = _make_tracked_repo()
+        repo = make_tracked_repo()
         await db.insert_tracked_repo(repo)
         repo["sync_status"] = "inaccessible"
         repo["last_sync_error"] = "403 Forbidden"
@@ -379,10 +226,10 @@ class TestTrackedRepoCRUD:
 
     async def test_list_filtered_by_sync_status(self, db: Database):
         """list_tracked_repos(sync_status=...) filters correctly."""
-        repo_ok = _make_tracked_repo(
+        repo_ok = make_tracked_repo(
             github_id=1, owner="a", name="r1", full_name="a/r1", sync_status="ok"
         )
-        repo_bad = _make_tracked_repo(
+        repo_bad = make_tracked_repo(
             github_id=2,
             owner="b",
             name="r2",
@@ -406,7 +253,7 @@ class TestTrackedRepoCRUD:
         await db.close()
         db2 = Database(":memory:")
         await db2.connect()
-        repo = _make_tracked_repo()
+        repo = make_tracked_repo()
         await db2.insert_tracked_repo(repo)
         result = await db2.get_tracked_repo(repo["id"])
         assert result is not None
@@ -421,7 +268,7 @@ class TestTrackedRepoCRUD:
 
 class TestForkCRUD:
     async def test_insert_and_get(self, db: Database, repo_in_db: dict):
-        fork = _make_fork(repo_in_db["id"])
+        fork = make_fork(repo_in_db["id"])
         await db.insert_fork(fork)
         result = await db.get_fork(fork["id"])
         assert result is not None
@@ -429,33 +276,33 @@ class TestForkCRUD:
         assert result["stars"] == 42
 
     async def test_get_nonexistent_returns_none(self, db: Database):
-        result = await db.get_fork(_uuid())
+        result = await db.get_fork(make_id())
         assert result is None
 
     async def test_get_by_name(self, db: Database, repo_in_db: dict):
-        fork = _make_fork(repo_in_db["id"])
+        fork = make_fork(repo_in_db["id"])
         await db.insert_fork(fork)
         result = await db.get_fork_by_name(fork["full_name"])
         assert result is not None
         assert result["id"] == fork["id"]
 
     async def test_list_by_repo(self, db: Database, repo_in_db: dict):
-        fork1 = _make_fork(repo_in_db["id"], github_id=100, owner="u1", full_name="u1/linux")
-        fork2 = _make_fork(repo_in_db["id"], github_id=101, owner="u2", full_name="u2/linux")
+        fork1 = make_fork(repo_in_db["id"], github_id=100, owner="u1", full_name="u1/linux")
+        fork2 = make_fork(repo_in_db["id"], github_id=101, owner="u2", full_name="u2/linux")
         await db.insert_fork(fork1)
         await db.insert_fork(fork2)
         results = await db.list_forks(repo_in_db["id"])
         assert len(results) == 2
 
     async def test_list_filtered_by_vitality(self, db: Database, repo_in_db: dict):
-        fork_active = _make_fork(
+        fork_active = make_fork(
             repo_in_db["id"],
             github_id=200,
             owner="a",
             full_name="a/linux",
             vitality="active",
         )
-        fork_stale = _make_fork(
+        fork_stale = make_fork(
             repo_in_db["id"],
             github_id=201,
             owner="b",
@@ -469,7 +316,7 @@ class TestForkCRUD:
         assert results[0]["vitality"] == "active"
 
     async def test_update(self, db: Database, repo_in_db: dict):
-        fork = _make_fork(repo_in_db["id"])
+        fork = make_fork(repo_in_db["id"])
         await db.insert_fork(fork)
         fork["stars"] = 100
         fork["head_sha"] = "newsha999"
@@ -480,7 +327,7 @@ class TestForkCRUD:
         assert result["head_sha"] == "newsha999"
 
     async def test_insert_with_foreign_key_violation_raises(self, db: Database):
-        fork = _make_fork("nonexistent-repo-id")
+        fork = make_fork("nonexistent-repo-id")
         with pytest.raises(aiosqlite.IntegrityError):
             await db.insert_fork(fork)
 
@@ -492,7 +339,7 @@ class TestForkCRUD:
 
 class TestSignalCRUD:
     async def test_insert_and_list(self, db: Database, repo_in_db: dict, fork_in_db: dict):
-        signal = _make_signal(fork_in_db["id"], repo_in_db["id"])
+        signal = make_signal(fork_in_db["id"], repo_in_db["id"])
         await db.insert_signal(signal)
         results = await db.list_signals(repo_in_db["id"])
         assert len(results) == 1
@@ -502,8 +349,8 @@ class TestSignalCRUD:
     async def test_list_filtered_by_category(
         self, db: Database, repo_in_db: dict, fork_in_db: dict
     ):
-        sig_feature = _make_signal(fork_in_db["id"], repo_in_db["id"], category="feature")
-        sig_fix = _make_signal(
+        sig_feature = make_signal(fork_in_db["id"], repo_in_db["id"], category="feature")
+        sig_fix = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             category="fix",
@@ -517,9 +364,9 @@ class TestSignalCRUD:
 
     async def test_list_filtered_by_since(self, db: Database, repo_in_db: dict, fork_in_db: dict):
         old_time = "2020-01-01T00:00:00+00:00"
-        recent_time = _now_iso()
-        sig_old = _make_signal(fork_in_db["id"], repo_in_db["id"], created_at=old_time)
-        sig_new = _make_signal(
+        recent_time = now_iso()
+        sig_old = make_signal(fork_in_db["id"], repo_in_db["id"], created_at=old_time)
+        sig_new = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             created_at=recent_time,
@@ -536,7 +383,7 @@ class TestSignalCRUD:
         self, db: Database, repo_in_db: dict, fork_in_db: dict
     ):
         files = ["a.py", "b.py"]
-        signal = _make_signal(
+        signal = make_signal(
             fork_in_db["id"],
             repo_in_db["id"],
             files_involved=json.dumps(files),
@@ -554,18 +401,18 @@ class TestSignalCRUD:
 
 class TestClusterCRUD:
     async def test_insert_and_list(self, db: Database, repo_in_db: dict):
-        cluster = _make_cluster(repo_in_db["id"])
+        cluster = make_cluster(repo_in_db["id"])
         await db.insert_cluster(cluster)
         results = await db.list_clusters(repo_in_db["id"])
         assert len(results) == 1
         assert results[0]["label"] == "GPU acceleration"
 
     async def test_add_cluster_member(self, db: Database, repo_in_db: dict, fork_in_db: dict):
-        cluster = _make_cluster(repo_in_db["id"])
+        cluster = make_cluster(repo_in_db["id"])
         await db.insert_cluster(cluster)
-        signal = _make_signal(fork_in_db["id"], repo_in_db["id"])
+        signal = make_signal(fork_in_db["id"], repo_in_db["id"])
         await db.insert_signal(signal)
-        member = _make_cluster_member(cluster["id"], signal["id"], fork_in_db["id"])
+        member = make_cluster_member(cluster["id"], signal["id"], fork_in_db["id"])
         await db.add_cluster_member(member)
         # Verify via raw query that the member exists
         results = await db.list_clusters(repo_in_db["id"])
@@ -575,11 +422,11 @@ class TestClusterCRUD:
         self, db: Database, repo_in_db: dict, fork_in_db: dict
     ):
         """Deleting a cluster should cascade to cluster_members."""
-        cluster = _make_cluster(repo_in_db["id"])
+        cluster = make_cluster(repo_in_db["id"])
         await db.insert_cluster(cluster)
-        signal = _make_signal(fork_in_db["id"], repo_in_db["id"])
+        signal = make_signal(fork_in_db["id"], repo_in_db["id"])
         await db.insert_signal(signal)
-        member = _make_cluster_member(cluster["id"], signal["id"], fork_in_db["id"])
+        member = make_cluster_member(cluster["id"], signal["id"], fork_in_db["id"])
         await db.add_cluster_member(member)
         # Delete the parent repo (cascades to cluster via tracked_repo_id FK)
         await db.delete_tracked_repo(repo_in_db["id"])
@@ -594,7 +441,7 @@ class TestClusterCRUD:
 
 class TestDigestCRUD:
     async def test_insert_and_get_config(self, db: Database, repo_in_db: dict):
-        config = _make_digest_config(repo_in_db["id"])
+        config = make_digest_config(repo_in_db["id"])
         await db.insert_digest_config(config)
         result = await db.get_digest_config(config["id"])
         assert result is not None
@@ -602,13 +449,13 @@ class TestDigestCRUD:
         assert result["min_significance"] == 5
 
     async def test_get_nonexistent_config_returns_none(self, db: Database):
-        result = await db.get_digest_config(_uuid())
+        result = await db.get_digest_config(make_id())
         assert result is None
 
     async def test_insert_and_retrieve_digest(self, db: Database, repo_in_db: dict):
-        config = _make_digest_config(repo_in_db["id"])
+        config = make_digest_config(repo_in_db["id"])
         await db.insert_digest_config(config)
-        digest = _make_digest(config["id"])
+        digest = make_digest(config["id"])
         await db.insert_digest(digest)
         # We don't have a get_digest method specified, so verify via config
         # Just ensuring no errors on insert is the key check
@@ -617,7 +464,7 @@ class TestDigestCRUD:
 
     async def test_digest_config_with_null_repo(self, db: Database):
         """Digest config can have a null tracked_repo_id (global config)."""
-        config = _make_digest_config(tracked_repo_id=None)
+        config = make_digest_config(tracked_repo_id=None)
         await db.insert_digest_config(config)
         result = await db.get_digest_config(config["id"])
         assert result is not None
@@ -666,7 +513,7 @@ class TestVectorSearch:
         """If sqlite-vec is not available, search_similar_signals returns empty."""
         if not db.vec_enabled:
             embedding = [0.1] * 384
-            results = await db.search_similar_signals(embedding, _uuid())
+            results = await db.search_similar_signals(embedding, make_id())
             assert results == []
 
 
@@ -678,12 +525,12 @@ class TestVectorSearch:
 class TestAnnotationsCRUD:
     async def test_insert_and_get(self, db: Database, fork_in_db: dict):
         annotation = {
-            "id": _uuid(),
+            "id": make_id(),
             "fork_id": fork_in_db["id"],
             "title": "Interesting fork",
             "body": "This fork has unique GPU optimizations",
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
         }
         await db.insert_annotation(annotation)
         result = await db.get_annotation_by_fork(fork_in_db["id"])
@@ -691,26 +538,26 @@ class TestAnnotationsCRUD:
         assert result["title"] == "Interesting fork"
 
     async def test_get_nonexistent_returns_none(self, db: Database):
-        result = await db.get_annotation_by_fork(_uuid())
+        result = await db.get_annotation_by_fork(make_id())
         assert result is None
 
     async def test_unique_fork_constraint(self, db: Database, fork_in_db: dict):
         """Only one annotation per fork is allowed."""
         ann1 = {
-            "id": _uuid(),
+            "id": make_id(),
             "fork_id": fork_in_db["id"],
             "title": "First",
             "body": "First annotation",
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
         }
         ann2 = {
-            "id": _uuid(),
+            "id": make_id(),
             "fork_id": fork_in_db["id"],
             "title": "Second",
             "body": "Should fail",
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
         }
         await db.insert_annotation(ann1)
         with pytest.raises(aiosqlite.IntegrityError):

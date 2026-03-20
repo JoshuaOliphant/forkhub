@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 
 from forkhub.config import ForkHubSettings
-from forkhub.database import Database
 from forkhub.models import (
     CommitInfo,
     CompareResult,
@@ -22,6 +22,9 @@ from forkhub.models import (
     TrackingMode,
 )
 from forkhub.services.sync import SyncResult
+
+if TYPE_CHECKING:
+    from forkhub.database import Database
 
 # ---------------------------------------------------------------------------
 # Time constants
@@ -231,15 +234,6 @@ class IntegrationStubEmbeddingProvider:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
 
 
 @pytest.fixture

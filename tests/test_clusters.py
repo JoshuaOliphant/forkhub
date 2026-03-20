@@ -4,138 +4,21 @@
 from __future__ import annotations
 
 import json
-import math
-from datetime import UTC, datetime
-from uuid import uuid4
+from typing import TYPE_CHECKING
 
 import pytest
 
-from forkhub.database import Database
 from forkhub.services.cluster import ClusterService
+from tests.stubs import (
+    StubEmbeddingProvider,
+    make_fork,
+    make_id,
+    make_signal,
+    now_iso,
+)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _uuid() -> str:
-    return str(uuid4())
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _make_tracked_repo(**overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "github_id": 123456,
-        "owner": "torvalds",
-        "name": "linux",
-        "full_name": "torvalds/linux",
-        "tracking_mode": "active",
-        "default_branch": "main",
-        "description": "Linux kernel source tree",
-        "fork_depth": 1,
-        "excluded": False,
-        "webhook_id": None,
-        "sync_status": "ok",
-        "last_sync_error": None,
-        "last_synced_at": None,
-        "created_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_fork(tracked_repo_id: str, **overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "tracked_repo_id": tracked_repo_id,
-        "github_id": 789012,
-        "owner": "gregkh",
-        "full_name": "gregkh/linux",
-        "default_branch": "main",
-        "description": "Greg KH's linux fork",
-        "vitality": "active",
-        "stars": 42,
-        "stars_previous": 40,
-        "parent_fork_id": None,
-        "depth": 1,
-        "last_pushed_at": _now_iso(),
-        "commits_ahead": 10,
-        "commits_behind": 5,
-        "head_sha": "abc123def456",
-        "created_at": _now_iso(),
-        "updated_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def _make_signal(fork_id: str, tracked_repo_id: str, **overrides) -> dict:
-    defaults = {
-        "id": _uuid(),
-        "fork_id": fork_id,
-        "tracked_repo_id": tracked_repo_id,
-        "category": "feature",
-        "summary": "Added GPU support",
-        "detail": "Implements CUDA acceleration for training loop",
-        "files_involved": json.dumps(["src/gpu.py", "src/train.py"]),
-        "significance": 7,
-        "embedding": None,
-        "is_upstream": False,
-        "release_tag": None,
-        "created_at": _now_iso(),
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-# ---------------------------------------------------------------------------
-# Stub EmbeddingProvider
-# ---------------------------------------------------------------------------
-
-
-class StubEmbeddingProvider:
-    """Deterministic embedding provider for testing.
-
-    Generates embeddings based on text content using a simple hash-based
-    approach. Similar texts produce similar embeddings. The first 4 dimensions
-    encode a hash of the text, the rest are zeros.
-    """
-
-    def __init__(self, dims: int = 8) -> None:
-        self._dims = dims
-        self._call_count = 0
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        self._call_count += 1
-        results = []
-        for text in texts:
-            embedding = self._text_to_embedding(text)
-            results.append(embedding)
-        return results
-
-    def dimensions(self) -> int:
-        return self._dims
-
-    def _text_to_embedding(self, text: str) -> list[float]:
-        """Convert text to a deterministic embedding vector.
-
-        Similar texts get similar vectors by using character frequency
-        distribution. This gives us predictable cosine similarity behavior.
-        """
-        vec = [0.0] * self._dims
-        for _i, ch in enumerate(text):
-            idx = ord(ch) % self._dims
-            vec[idx] += 1.0
-        # Normalize to unit vector
-        magnitude = math.sqrt(sum(v * v for v in vec))
-        if magnitude > 0:
-            vec = [v / magnitude for v in vec]
-        return vec
-
+if TYPE_CHECKING:
+    from forkhub.database import Database
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -143,36 +26,15 @@ class StubEmbeddingProvider:
 
 
 @pytest.fixture
-async def db():
-    """Provide an in-memory Database connected and schema-created."""
-    database = Database(":memory:")
-    await database.connect()
-    yield database
-    await database.close()
-
-
-@pytest.fixture
-def embedding_provider() -> StubEmbeddingProvider:
-    return StubEmbeddingProvider()
-
-
-@pytest.fixture
-async def repo_in_db(db: Database) -> dict:
-    repo = _make_tracked_repo()
-    await db.insert_tracked_repo(repo)
-    return repo
-
-
-@pytest.fixture
 async def two_forks_in_db(db: Database, repo_in_db: dict) -> tuple[dict, dict]:
     """Create two forks under the same repo from different owners."""
-    fork_a = _make_fork(
+    fork_a = make_fork(
         repo_in_db["id"],
         github_id=1001,
         owner="alice",
         full_name="alice/linux",
     )
-    fork_b = _make_fork(
+    fork_b = make_fork(
         repo_in_db["id"],
         github_id=1002,
         owner="bob",
@@ -319,7 +181,7 @@ class TestEmbeddingGeneration:
     ):
         """Signals without embeddings should get embeddings after update_clusters."""
         fork_a, _ = two_forks_in_db
-        signal = _make_signal(fork_a["id"], repo_in_db["id"], summary="GPU acceleration")
+        signal = make_signal(fork_a["id"], repo_in_db["id"], summary="GPU acceleration")
         await db.insert_signal(signal)
 
         svc = ClusterService(db, embedding_provider)
@@ -342,7 +204,7 @@ class TestEmbeddingGeneration:
         fork_a, _ = two_forks_in_db
         # Insert a signal that already has an embedding
         existing_embedding = json.dumps([0.5] * 8).encode("utf-8")
-        signal = _make_signal(
+        signal = make_signal(
             fork_a["id"],
             repo_in_db["id"],
             embedding=existing_embedding,
@@ -353,7 +215,7 @@ class TestEmbeddingGeneration:
         await svc.update_clusters(repo_in_db["id"])
 
         # Embed should not have been called since all signals are already embedded
-        assert embedding_provider._call_count == 0
+        assert embedding_provider.call_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -372,13 +234,13 @@ class TestClusterFormation:
         """Two signals with similar summaries from different forks should cluster."""
         fork_a, fork_b = two_forks_in_db
         # Use identical summaries and overlapping files to guarantee clustering
-        sig_a = _make_signal(
+        sig_a = make_signal(
             fork_a["id"],
             repo_in_db["id"],
             summary="Added GPU acceleration for training",
             files_involved=json.dumps(["src/gpu.py", "src/train.py"]),
         )
-        sig_b = _make_signal(
+        sig_b = make_signal(
             fork_b["id"],
             repo_in_db["id"],
             summary="Added GPU acceleration for training",
@@ -403,13 +265,13 @@ class TestClusterFormation:
     ):
         """Two signals from the same fork should NOT form a cluster."""
         fork_a, _ = two_forks_in_db
-        sig_a = _make_signal(
+        sig_a = make_signal(
             fork_a["id"],
             repo_in_db["id"],
             summary="Added GPU acceleration for training",
             files_involved=json.dumps(["src/gpu.py"]),
         )
-        sig_b = _make_signal(
+        sig_b = make_signal(
             fork_a["id"],
             repo_in_db["id"],
             summary="Added GPU acceleration for training",
@@ -432,14 +294,14 @@ class TestClusterFormation:
     ):
         """Signals with very different summaries should not cluster."""
         fork_a, fork_b = two_forks_in_db
-        sig_a = _make_signal(
+        sig_a = make_signal(
             fork_a["id"],
             repo_in_db["id"],
             summary="x" * 50,  # Repetitive text A
             category="feature",
             files_involved=json.dumps(["src/aaa.py"]),
         )
-        sig_b = _make_signal(
+        sig_b = make_signal(
             fork_b["id"],
             repo_in_db["id"],
             summary="y" * 50,  # Repetitive text B (totally different character distribution)
@@ -462,9 +324,9 @@ class TestClusterFormation:
     ):
         """A new signal similar to an existing cluster's signals should join it."""
         # Create three forks
-        fork_a = _make_fork(repo_in_db["id"], github_id=2001, owner="alice", full_name="alice/proj")
-        fork_b = _make_fork(repo_in_db["id"], github_id=2002, owner="bob", full_name="bob/proj")
-        fork_c = _make_fork(repo_in_db["id"], github_id=2003, owner="carol", full_name="carol/proj")
+        fork_a = make_fork(repo_in_db["id"], github_id=2001, owner="alice", full_name="alice/proj")
+        fork_b = make_fork(repo_in_db["id"], github_id=2002, owner="bob", full_name="bob/proj")
+        fork_c = make_fork(repo_in_db["id"], github_id=2003, owner="carol", full_name="carol/proj")
         await db.insert_fork(fork_a)
         await db.insert_fork(fork_b)
         await db.insert_fork(fork_c)
@@ -472,8 +334,8 @@ class TestClusterFormation:
         # First two signals create a cluster
         summary = "Added GPU acceleration for training"
         files = json.dumps(["src/gpu.py", "src/train.py"])
-        sig_a = _make_signal(fork_a["id"], repo_in_db["id"], summary=summary, files_involved=files)
-        sig_b = _make_signal(fork_b["id"], repo_in_db["id"], summary=summary, files_involved=files)
+        sig_a = make_signal(fork_a["id"], repo_in_db["id"], summary=summary, files_involved=files)
+        sig_b = make_signal(fork_b["id"], repo_in_db["id"], summary=summary, files_involved=files)
         await db.insert_signal(sig_a)
         await db.insert_signal(sig_b)
 
@@ -483,7 +345,7 @@ class TestClusterFormation:
         initial_count = clusters[0].fork_count
 
         # Third signal should join the existing cluster
-        sig_c = _make_signal(fork_c["id"], repo_in_db["id"], summary=summary, files_involved=files)
+        sig_c = make_signal(fork_c["id"], repo_in_db["id"], summary=summary, files_involved=files)
         await db.insert_signal(sig_c)
         clusters = await svc.update_clusters(repo_in_db["id"])
 
@@ -509,14 +371,14 @@ class TestGetClusters:
         """get_clusters with default min_size=2 should return clusters with 2+ forks."""
         # Manually insert a cluster with fork_count=3
         cluster_dict = {
-            "id": _uuid(),
+            "id": make_id(),
             "tracked_repo_id": repo_in_db["id"],
             "label": "GPU acceleration",
             "description": "Multiple forks adding GPU support",
             "files_pattern": json.dumps(["src/gpu.py"]),
             "fork_count": 3,
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
         }
         await db.insert_cluster(cluster_dict)
 
@@ -532,24 +394,24 @@ class TestGetClusters:
     ):
         """Clusters below min_size should be filtered out."""
         small_cluster = {
-            "id": _uuid(),
+            "id": make_id(),
             "tracked_repo_id": repo_in_db["id"],
             "label": "Small cluster",
             "description": "Only one fork",
             "files_pattern": json.dumps([]),
             "fork_count": 1,
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
         }
         big_cluster = {
-            "id": _uuid(),
+            "id": make_id(),
             "tracked_repo_id": repo_in_db["id"],
             "label": "Big cluster",
             "description": "Many forks",
             "files_pattern": json.dumps([]),
             "fork_count": 5,
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
         }
         await db.insert_cluster(small_cluster)
         await db.insert_cluster(big_cluster)
