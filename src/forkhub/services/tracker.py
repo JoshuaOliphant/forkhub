@@ -125,7 +125,9 @@ class TrackerService:
         """
         mode_str = str(mode) if mode is not None else None
         rows = await self._db.list_tracked_repos(
-            mode=mode_str, include_excluded=include_excluded, sync_status=sync_status,
+            mode=mode_str,
+            include_excluded=include_excluded,
+            sync_status=sync_status,
         )
         return [TrackedRepo(**row) for row in rows]
 

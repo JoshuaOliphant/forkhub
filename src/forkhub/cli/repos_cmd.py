@@ -46,7 +46,8 @@ async def _repos_impl(
         tracker = TrackerService(db=db, provider=provider)
         mode_enum = TrackingMode(mode) if mode else None
         repos = await tracker.list_tracked_repos(
-            mode=mode_enum, sync_status=sync_status,
+            mode=mode_enum,
+            sync_status=sync_status,
         )
 
         if not repos:
