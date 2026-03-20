@@ -525,34 +525,30 @@ class TestSearchSimilarSignals:
 
 
 class TestToolErrorHandling:
-    async def test_list_forks_handles_provider_error(self, db, embedding_provider):
-        """list_forks should return error dict when provider raises."""
+    async def test_provider_errors_return_error_dicts(self, db, embedding_provider):
+        """Tools should return error dicts when provider raises."""
         from forkhub.agent.tools import create_tools
 
         class BrokenProvider(StubGitProvider):
             async def get_forks(self, owner, repo, *, page=1):
                 raise RuntimeError("Connection failed")
 
-        broken = BrokenProvider()
-        broken_tools = create_tools(db=db, provider=broken, embedding_provider=embedding_provider)
-        t = _find_tool(broken_tools, "list_forks")
-        result = await t.handler({"owner": "x", "repo": "y", "page": 1, "only_active": False})
-        assert result.get("is_error") is True
-        assert "error" in result["content"][0]["text"].lower()
-
-    async def test_get_file_diff_handles_provider_error(self, db, embedding_provider):
-        """get_file_diff should return error dict when provider raises."""
-        from forkhub.agent.tools import create_tools
-
-        class BrokenDiffProvider(StubGitProvider):
             async def get_file_diff(self, owner, repo, base, head, path):
                 raise RuntimeError("Diff failed")
 
         repo = await _insert_tracked_repo(db)
         await _insert_fork(db, repo.id)
 
-        broken = BrokenDiffProvider()
+        broken = BrokenProvider()
         broken_tools = create_tools(db=db, provider=broken, embedding_provider=embedding_provider)
+
+        # list_forks error
+        t = _find_tool(broken_tools, "list_forks")
+        result = await t.handler({"owner": "x", "repo": "y", "page": 1, "only_active": False})
+        assert result.get("is_error") is True
+        assert "error" in result["content"][0]["text"].lower()
+
+        # get_file_diff error
         t = _find_tool(broken_tools, "get_file_diff")
         result = await t.handler({"fork_full_name": "alice/repo", "file_path": "src/feature.py"})
         assert result.get("is_error") is True
