@@ -474,27 +474,19 @@ class TestDigestCommand:
 
 
 class TestConfigCommands:
-    async def test_config_show(self, tmp_path: Path):
-        """config show should display current settings."""
-        from forkhub.cli.config_cmd import _config_show_impl
+    async def test_config_show_and_path(self, tmp_path: Path):
+        """config show and config path should display settings and directory."""
+        from forkhub.cli.config_cmd import _config_path_impl, _config_show_impl
 
+        # config show
         output_lines: list[str] = []
-        await _config_show_impl(
-            config_path=None,
-            capture_output=output_lines,
-        )
-
+        await _config_show_impl(config_path=None, capture_output=output_lines)
         output = "\n".join(output_lines)
-        # Should show some config keys
         assert "github" in output.lower() or "database" in output.lower()
 
-    async def test_config_path(self):
-        """config path should show the config directory."""
-        from forkhub.cli.config_cmd import _config_path_impl
-
-        output_lines: list[str] = []
+        # config path
+        output_lines = []
         await _config_path_impl(capture_output=output_lines)
-
         output = "\n".join(output_lines)
         assert "forkhub" in output.lower()
         assert ".config" in output or "config" in output.lower()
