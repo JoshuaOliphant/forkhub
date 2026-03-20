@@ -43,9 +43,9 @@ class ForkVitality(StrEnum):
 class SyncStatus(StrEnum):
     """Health status of a tracked repo during sync."""
 
-    OK = "ok"
-    INACCESSIBLE = "inaccessible"
-    ERROR = "error"
+    OK = "ok"  # Repo is accessible and syncs normally
+    INACCESSIBLE = "inaccessible"  # HTTP 403/404 — repo deleted, private, or token revoked
+    ERROR = "error"  # Transient failure (500, network timeout) — will retry next sync
 
 
 # ── Helper ───────────────────────────────────────────────────

@@ -145,6 +145,7 @@ class ForkHub:
         return await self._sync.sync_all(
             username=self._settings.github.username or None,
             reconcile=True,
+            tracker_service=self._tracker,
         )
 
     async def reconcile(self) -> ReconcileResult:

@@ -193,16 +193,23 @@ class Database:
         await self._migrate_schema()
 
     async def _migrate_schema(self) -> None:
-        """Add columns that may be missing from older databases."""
-        import contextlib
+        """Add columns that may be missing from older databases.
 
+        Only suppresses 'duplicate column' errors from ALTER TABLE.
+        Other errors (disk full, locked DB, syntax) are re-raised.
+        """
         migrations = [
             "ALTER TABLE tracked_repos ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'ok'",
             "ALTER TABLE tracked_repos ADD COLUMN last_sync_error TEXT",
         ]
         for sql in migrations:
-            with contextlib.suppress(Exception):
+            try:
                 await self._db.execute(sql)
+            except Exception as exc:
+                if "duplicate column" in str(exc).lower():
+                    pass
+                else:
+                    raise
 
     async def _load_sqlite_vec(self) -> None:
         """Try to load the sqlite-vec extension for vector similarity."""

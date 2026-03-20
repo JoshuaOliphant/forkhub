@@ -28,6 +28,7 @@ def _output(line: str, capture: list[str] | None = None) -> None:
 async def _sync_impl(
     repo: str | None = None,
     no_reconcile: bool = False,
+    username: str | None = None,
     db: Database | None = None,
     provider: GitProvider | None = None,
     sync_settings: SyncSettings | None = None,
@@ -82,8 +83,7 @@ async def _sync_impl(
             _output("Syncing all tracked repositories...", capture_output)
 
             # Determine username for reconciliation
-            username = None
-            if not no_reconcile and settings is not None:
+            if username is None and not no_reconcile and settings is not None:
                 username = settings.github.username or None
 
             result = await sync_service.sync_all(

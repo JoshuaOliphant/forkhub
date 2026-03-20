@@ -537,6 +537,21 @@ class TestRetryRepo:
         assert row["sync_status"] == "ok"
         assert row["last_sync_error"] is None
 
+    async def test_retry_repo_resets_error_status(self, hub, db: Database):
+        """retry_repo() should also work on repos with 'error' status."""
+        await hub.track("testuser", "alpha")
+        row = await db.get_tracked_repo_by_name("testuser/alpha")
+        assert row is not None
+        row["sync_status"] = "error"
+        row["last_sync_error"] = "500 Server Error"
+        await db.update_tracked_repo(row)
+
+        await hub.retry_repo("testuser", "alpha")
+        row = await db.get_tracked_repo_by_name("testuser/alpha")
+        assert row is not None
+        assert row["sync_status"] == "ok"
+        assert row["last_sync_error"] is None
+
     async def test_retry_repo_raises_on_untracked(self, hub):
         """retry_repo() should raise ValueError for untracked repo."""
         with pytest.raises(ValueError, match="not tracked"):
