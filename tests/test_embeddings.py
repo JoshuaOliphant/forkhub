@@ -150,10 +150,12 @@ class TestLocalEmbeddingProviderIntegration:
     async def test_similar_texts_have_high_similarity(self) -> None:
         """Similar texts should produce similar embeddings (cosine > 0.8)."""
         provider = LocalEmbeddingProvider()
-        result = await provider.embed([
-            "The cat sat on the mat",
-            "A cat was sitting on a mat",
-        ])
+        result = await provider.embed(
+            [
+                "The cat sat on the mat",
+                "A cat was sitting on a mat",
+            ]
+        )
 
         similarity = _cosine_similarity(result[0], result[1])
         assert similarity > 0.8, f"Expected similarity > 0.8, got {similarity}"
@@ -161,11 +163,13 @@ class TestLocalEmbeddingProviderIntegration:
     async def test_different_texts_have_lower_similarity(self) -> None:
         """Unrelated texts should have lower similarity than similar texts."""
         provider = LocalEmbeddingProvider()
-        result = await provider.embed([
-            "The cat sat on the mat",
-            "A cat was sitting on a mat",
-            "Quantum mechanics describes subatomic particles",
-        ])
+        result = await provider.embed(
+            [
+                "The cat sat on the mat",
+                "A cat was sitting on a mat",
+                "Quantum mechanics describes subatomic particles",
+            ]
+        )
 
         similar_score = _cosine_similarity(result[0], result[1])
         different_score = _cosine_similarity(result[0], result[2])

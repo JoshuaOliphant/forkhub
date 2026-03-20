@@ -37,4 +37,3 @@ def _clean_forkhub_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip ForkHub-related env vars so tests are isolated from .env files."""
     for var in _FORKHUB_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
-

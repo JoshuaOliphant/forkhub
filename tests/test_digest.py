@@ -221,9 +221,7 @@ class TestFilePatternMatching:
 
     def test_multiple_files_any_match(self):
         svc = DigestService.__new__(DigestService)
-        assert (
-            svc._matches_file_patterns(["config.toml", "src/gpu.py"], ["src/*.py"]) is True
-        )
+        assert svc._matches_file_patterns(["config.toml", "src/gpu.py"], ["src/*.py"]) is True
 
 
 # ---------------------------------------------------------------------------

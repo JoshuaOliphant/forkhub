@@ -173,9 +173,7 @@ class SyncStubGitProvider:
             has_next=False,
         )
 
-    async def compare(
-        self, owner: str, repo: str, base: str, head: str
-    ) -> CompareResult:
+    async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
         # The head parameter encodes the fork owner: "forker1:main"
         fork_owner = head.split(":")[0]
         fork_full = f"{fork_owner}/{repo}"
@@ -201,9 +199,7 @@ class SyncStubGitProvider:
     ) -> list[CommitInfo]:
         return []
 
-    async def get_file_diff(
-        self, owner: str, repo: str, base: str, head: str, path: str
-    ) -> str:
+    async def get_file_diff(self, owner: str, repo: str, base: str, head: str, path: str) -> str:
         return ""
 
     async def get_rate_limit(self) -> RateLimitInfo:
@@ -419,9 +415,7 @@ class TestVitalityClassification:
 
 
 class TestStarUpdates:
-    async def test_star_count_updated_on_sync(
-        self, sync_service: SyncService, db: Database
-    ):
+    async def test_star_count_updated_on_sync(self, sync_service: SyncService, db: Database):
         """Fork star counts should be updated from provider data during sync."""
         repo = await _insert_tracked_repo(db)
         # Pre-insert with old star count
@@ -449,9 +443,7 @@ class TestStarUpdates:
 
 
 class TestReleaseDetection:
-    async def test_new_releases_detected(
-        self, sync_service: SyncService, db: Database
-    ):
+    async def test_new_releases_detected(self, sync_service: SyncService, db: Database):
         """Releases published since last sync should be counted."""
         # Repo was last synced 30 days ago
         last_synced = _NOW - timedelta(days=30)
@@ -461,9 +453,7 @@ class TestReleaseDetection:
         # v1.5.0 was 60 days ago (before last sync)
         assert result.new_releases == 1
 
-    async def test_no_releases_when_never_synced(
-        self, sync_service: SyncService, db: Database
-    ):
+    async def test_no_releases_when_never_synced(self, sync_service: SyncService, db: Database):
         """First sync (never synced before) should report all releases."""
         repo = await _insert_tracked_repo(db, last_synced_at=None)
         result = await sync_service.sync_repo(repo.id)
@@ -519,9 +509,7 @@ class TestSyncAll:
         # repo-a has 3 forks, repo-b has 1
         assert result.total_changed_forks == 0  # all new, none "changed"
 
-    async def test_skips_excluded_repos(
-        self, sync_service: SyncService, db: Database
-    ):
+    async def test_skips_excluded_repos(self, sync_service: SyncService, db: Database):
         """sync_all should not sync excluded repos."""
         repo = await _insert_tracked_repo(db)
         # Exclude the repo
@@ -538,9 +526,7 @@ class TestSyncAll:
 
 
 class TestLastSyncedAt:
-    async def test_last_synced_at_updated_after_sync(
-        self, sync_service: SyncService, db: Database
-    ):
+    async def test_last_synced_at_updated_after_sync(self, sync_service: SyncService, db: Database):
         """sync_repo should update the repo's last_synced_at timestamp."""
         repo = await _insert_tracked_repo(db)
         row_before = await db.get_tracked_repo(repo.id)
@@ -556,9 +542,7 @@ class TestLastSyncedAt:
 
 
 class TestVitalityDuringSync:
-    async def test_vitality_updated_on_sync(
-        self, sync_service: SyncService, db: Database
-    ):
+    async def test_vitality_updated_on_sync(self, sync_service: SyncService, db: Database):
         """Fork vitality should be updated based on last_pushed_at during sync."""
         repo = await _insert_tracked_repo(db)
         await sync_service.sync_repo(repo.id)

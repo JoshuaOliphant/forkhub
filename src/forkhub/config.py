@@ -161,7 +161,7 @@ def _load_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(f)
 
 
-def _env_prefix_for(settings_cls: type[BaseSettings]) -> str:
+def _env_prefix_for[T: BaseSettings](settings_cls: type[T]) -> str:
     """Extract the env_prefix from a settings class's model_config."""
     return settings_cls.model_config.get("env_prefix", "")
 
@@ -172,8 +172,8 @@ _CUSTOM_ENV_VARS: dict[type[BaseSettings], dict[str, str]] = {
 }
 
 
-def _merge_env_over_toml(
-    settings_cls: type[BaseSettings], toml_section: dict[str, Any]
+def _merge_env_over_toml[T: BaseSettings](
+    settings_cls: type[T], toml_section: dict[str, Any]
 ) -> dict[str, Any]:
     """Merge environment variable values on top of TOML data for a settings class.
 
@@ -198,9 +198,7 @@ def _merge_env_over_toml(
     return merged
 
 
-def _build_subsettings(
-    settings_cls: type[BaseSettings], toml_section: dict[str, Any]
-) -> BaseSettings:
+def _build_subsettings[T: BaseSettings](settings_cls: type[T], toml_section: dict[str, Any]) -> T:
     """Construct a subsettings instance with TOML data and env var overrides."""
     merged = _merge_env_over_toml(settings_cls, toml_section)
     return settings_cls(**merged)

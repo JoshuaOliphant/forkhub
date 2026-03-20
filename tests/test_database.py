@@ -315,6 +315,7 @@ class TestTrackedRepoCRUD:
         repo["last_synced_at"] = _now_iso()
         await db.update_tracked_repo(repo)
         result = await db.get_tracked_repo(repo["id"])
+        assert result is not None
         assert result["description"] == "Updated description"
         assert result["last_synced_at"] is not None
 
@@ -403,6 +404,7 @@ class TestForkCRUD:
         fork["head_sha"] = "newsha999"
         await db.update_fork(fork)
         result = await db.get_fork(fork["id"])
+        assert result is not None
         assert result["stars"] == 100
         assert result["head_sha"] == "newsha999"
 

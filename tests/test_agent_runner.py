@@ -18,6 +18,7 @@ from forkhub.models import (
     Release,
     RepoInfo,
     TrackedRepo,
+    TrackingMode,
 )
 
 # ---------------------------------------------------------------------------
@@ -84,24 +85,24 @@ class StubEmbeddingProvider:
 # ---------------------------------------------------------------------------
 
 
-def _make_tracked_repo(**overrides) -> TrackedRepo:
+def _make_tracked_repo(**overrides: object) -> TrackedRepo:
     """Create a TrackedRepo model for testing."""
-    defaults = {
+    defaults: dict[str, object] = {
         "github_id": 12345,
         "owner": "torvalds",
         "name": "linux",
         "full_name": "torvalds/linux",
-        "tracking_mode": "owned",
+        "tracking_mode": TrackingMode.OWNED,
         "default_branch": "main",
         "description": "Linux kernel source tree",
     }
     defaults.update(overrides)
-    return TrackedRepo(**defaults)
+    return TrackedRepo(**defaults)  # type: ignore[arg-type]
 
 
-def _make_fork(tracked_repo_id: str, owner: str = "gregkh", **overrides) -> Fork:
+def _make_fork(tracked_repo_id: str, owner: str = "gregkh", **overrides: object) -> Fork:
     """Create a Fork model for testing."""
-    defaults = {
+    defaults: dict[str, object] = {
         "tracked_repo_id": tracked_repo_id,
         "github_id": 67890,
         "owner": owner,
@@ -112,7 +113,7 @@ def _make_fork(tracked_repo_id: str, owner: str = "gregkh", **overrides) -> Fork
         "head_sha": "abc123",
     }
     defaults.update(overrides)
-    return Fork(**defaults)
+    return Fork(**defaults)  # type: ignore[arg-type]
 
 
 def _make_release(**overrides) -> Release:
@@ -387,4 +388,4 @@ class TestAnalyzeRepoIntegration:
         explicitly enabled with -m integration.
         """
         # This would actually call the Agent SDK, so we skip in unit tests
-        pytest.skip("Requires ANTHROPIC_API_KEY and live API access")
+        pytest.skip("Requires ANTHROPIC_API_KEY and live API access")  # ty: ignore[invalid-argument-type, too-many-positional-arguments]

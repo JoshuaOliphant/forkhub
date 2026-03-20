@@ -324,9 +324,7 @@ class TestEmbeddingGeneration:
         await svc.update_clusters(repo_in_db["id"])
 
         # Verify the embedding was stored
-        cursor = await db._db.execute(
-            "SELECT embedding FROM signals WHERE id = ?", (signal["id"],)
-        )
+        cursor = await db._db.execute("SELECT embedding FROM signals WHERE id = ?", (signal["id"],))
         row = await cursor.fetchone()
         assert row is not None
         assert row["embedding"] is not None
@@ -462,15 +460,9 @@ class TestClusterFormation:
     ):
         """A new signal similar to an existing cluster's signals should join it."""
         # Create three forks
-        fork_a = _make_fork(
-            repo_in_db["id"], github_id=2001, owner="alice", full_name="alice/proj"
-        )
-        fork_b = _make_fork(
-            repo_in_db["id"], github_id=2002, owner="bob", full_name="bob/proj"
-        )
-        fork_c = _make_fork(
-            repo_in_db["id"], github_id=2003, owner="carol", full_name="carol/proj"
-        )
+        fork_a = _make_fork(repo_in_db["id"], github_id=2001, owner="alice", full_name="alice/proj")
+        fork_b = _make_fork(repo_in_db["id"], github_id=2002, owner="bob", full_name="bob/proj")
+        fork_c = _make_fork(repo_in_db["id"], github_id=2003, owner="carol", full_name="carol/proj")
         await db.insert_fork(fork_a)
         await db.insert_fork(fork_b)
         await db.insert_fork(fork_c)
@@ -478,12 +470,8 @@ class TestClusterFormation:
         # First two signals create a cluster
         summary = "Added GPU acceleration for training"
         files = json.dumps(["src/gpu.py", "src/train.py"])
-        sig_a = _make_signal(
-            fork_a["id"], repo_in_db["id"], summary=summary, files_involved=files
-        )
-        sig_b = _make_signal(
-            fork_b["id"], repo_in_db["id"], summary=summary, files_involved=files
-        )
+        sig_a = _make_signal(fork_a["id"], repo_in_db["id"], summary=summary, files_involved=files)
+        sig_b = _make_signal(fork_b["id"], repo_in_db["id"], summary=summary, files_involved=files)
         await db.insert_signal(sig_a)
         await db.insert_signal(sig_b)
 
@@ -493,9 +481,7 @@ class TestClusterFormation:
         initial_count = clusters[0].fork_count
 
         # Third signal should join the existing cluster
-        sig_c = _make_signal(
-            fork_c["id"], repo_in_db["id"], summary=summary, files_involved=files
-        )
+        sig_c = _make_signal(fork_c["id"], repo_in_db["id"], summary=summary, files_involved=files)
         await db.insert_signal(sig_c)
         clusters = await svc.update_clusters(repo_in_db["id"])
 

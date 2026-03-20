@@ -113,11 +113,13 @@ class ClusterService:
                         and sig_i["id"] not in cluster_members[cid]
                     )
                     if should_add:
-                        await self._db.add_cluster_member({
-                            "cluster_id": cid,
-                            "signal_id": sig_i["id"],
-                            "fork_id": sig_i["fork_id"],
-                        })
+                        await self._db.add_cluster_member(
+                            {
+                                "cluster_id": cid,
+                                "signal_id": sig_i["id"],
+                                "fork_id": sig_i["fork_id"],
+                            }
+                        )
                         cluster_members[cid].add(sig_i["id"])
                         cluster_fork_ids[cid].add(sig_i["fork_id"])
                         assigned_signals.add(sig_i["id"])
@@ -172,11 +174,13 @@ class ClusterService:
                     await self._db.insert_cluster(cluster_dict)
 
                     for sig in signals_in_cluster:
-                        await self._db.add_cluster_member({
-                            "cluster_id": cluster_id,
-                            "signal_id": sig["id"],
-                            "fork_id": sig["fork_id"],
-                        })
+                        await self._db.add_cluster_member(
+                            {
+                                "cluster_id": cluster_id,
+                                "signal_id": sig["id"],
+                                "fork_id": sig["fork_id"],
+                            }
+                        )
                         assigned_signals.add(sig["id"])
 
                     cluster_members[cluster_id] = {s["id"] for s in signals_in_cluster}

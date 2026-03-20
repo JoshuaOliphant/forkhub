@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from forkhub.config import SyncSettings
     from forkhub.database import Database
     from forkhub.interfaces import GitProvider
+    from forkhub.models import ForkInfo
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +104,7 @@ class SyncService:
         all_forks_info = []
         page = 1
         while True:
-            fork_page = await self._provider.get_forks(
-                repo.owner, repo.name, page=page
-            )
+            fork_page = await self._provider.get_forks(repo.owner, repo.name, page=page)
             all_forks_info.extend(fork_page.forks)
             if not fork_page.has_next or len(all_forks_info) >= self._settings.max_forks_per_repo:
                 break
@@ -141,13 +140,9 @@ class SyncService:
                 existing_row["stars_previous"] = old_stars
                 existing_row["stars"] = fork_info.stars
                 existing_row["last_pushed_at"] = (
-                    fork_info.last_pushed_at.isoformat()
-                    if fork_info.last_pushed_at
-                    else None
+                    fork_info.last_pushed_at.isoformat() if fork_info.last_pushed_at else None
                 )
-                existing_row["vitality"] = self._classify_vitality(
-                    fork_info.last_pushed_at
-                )
+                existing_row["vitality"] = self._classify_vitality(fork_info.last_pushed_at)
                 existing_row["updated_at"] = self._now().isoformat()
 
                 if old_sha != new_sha:
@@ -164,9 +159,7 @@ class SyncService:
                         existing_row["head_sha"] = new_sha
                         result.changed_forks.append(fork_info.full_name)
                     except Exception as exc:
-                        error_msg = (
-                            f"Error comparing {fork_info.full_name}: {exc}"
-                        )
+                        error_msg = f"Error comparing {fork_info.full_name}: {exc}"
                         result.errors.append(error_msg)
                         logger.warning(error_msg)
 
@@ -209,7 +202,7 @@ class SyncService:
         else:
             return ForkVitality.DEAD
 
-    def _provider_head_sha(self, fork_info) -> str | None:
+    def _provider_head_sha(self, fork_info: ForkInfo) -> str | None:
         """Extract or derive the HEAD SHA for a fork from provider data.
 
         The StubGitProvider stores SHAs in a _head_shas dict. For the real
@@ -217,8 +210,9 @@ class SyncService:
         We use a deterministic fallback based on the fork's metadata to detect changes.
         """
         # If the provider has a get_head_sha method (stub), use it
-        if hasattr(self._provider, "get_head_sha"):
-            sha = self._provider.get_head_sha(fork_info.full_name)
+        get_head_sha = getattr(self._provider, "get_head_sha", None)
+        if callable(get_head_sha):
+            sha: str | None = get_head_sha(fork_info.full_name)
             if sha is not None:
                 return sha
         # Fallback: use a hash of fork metadata to detect changes

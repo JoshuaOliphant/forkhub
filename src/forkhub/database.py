@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import aiosqlite
 
@@ -201,18 +201,26 @@ class Database:
         except Exception:
             self.vec_enabled = False
 
+    async def _fetchone(self, cursor: aiosqlite.Cursor) -> dict[str, Any] | None:
+        """Fetch one row as a dict. The row_factory ensures dict output at runtime."""
+        return cast("dict[str, Any] | None", await cursor.fetchone())
+
+    async def _fetchall(self, cursor: aiosqlite.Cursor) -> list[dict[str, Any]]:
+        """Fetch all rows as dicts. The row_factory ensures dict output at runtime."""
+        return cast("list[dict[str, Any]]", await cursor.fetchall())
+
     async def _table_names(self) -> list[str]:
         """Return all table names in the database (for testing)."""
         cursor = await self._db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         )
-        rows = await cursor.fetchall()
+        rows = await self._fetchall(cursor)
         return [row["name"] for row in rows]
 
     async def _get_pragma(self, name: str) -> Any:
         """Query a PRAGMA value (for testing)."""
         cursor = await self._db.execute(f"PRAGMA {name}")
-        row = await cursor.fetchone()
+        row = await self._fetchone(cursor)
         if row is None:
             return None
         # PRAGMA results come back as dicts with the pragma name as key
@@ -240,13 +248,13 @@ class Database:
 
     async def get_tracked_repo(self, repo_id: str) -> dict[str, Any] | None:
         cursor = await self._db.execute("SELECT * FROM tracked_repos WHERE id = ?", (repo_id,))
-        return await cursor.fetchone()
+        return await self._fetchone(cursor)
 
     async def get_tracked_repo_by_name(self, full_name: str) -> dict[str, Any] | None:
         cursor = await self._db.execute(
             "SELECT * FROM tracked_repos WHERE full_name = ?", (full_name,)
         )
-        return await cursor.fetchone()
+        return await self._fetchone(cursor)
 
     async def list_tracked_repos(
         self,
@@ -270,7 +278,7 @@ class Database:
         cursor = await self._db.execute(
             f"SELECT * FROM tracked_repos {where} ORDER BY created_at", params
         )
-        return await cursor.fetchall()
+        return await self._fetchall(cursor)
 
     async def update_tracked_repo(self, repo: dict[str, Any]) -> None:
         await self._db.execute(
@@ -315,11 +323,11 @@ class Database:
 
     async def get_fork(self, fork_id: str) -> dict[str, Any] | None:
         cursor = await self._db.execute("SELECT * FROM forks WHERE id = ?", (fork_id,))
-        return await cursor.fetchone()
+        return await self._fetchone(cursor)
 
     async def get_fork_by_name(self, full_name: str) -> dict[str, Any] | None:
         cursor = await self._db.execute("SELECT * FROM forks WHERE full_name = ?", (full_name,))
-        return await cursor.fetchone()
+        return await self._fetchone(cursor)
 
     async def list_forks(self, repo_id: str, vitality: str | None = None) -> list[dict[str, Any]]:
         clauses = ["tracked_repo_id = ?"]
@@ -331,7 +339,7 @@ class Database:
 
         where = "WHERE " + " AND ".join(clauses)
         cursor = await self._db.execute(f"SELECT * FROM forks {where} ORDER BY stars DESC", params)
-        return await cursor.fetchall()
+        return await self._fetchall(cursor)
 
     async def update_fork(self, fork: dict[str, Any]) -> None:
         await self._db.execute(
@@ -392,7 +400,7 @@ class Database:
         cursor = await self._db.execute(
             f"SELECT * FROM signals {where} ORDER BY created_at DESC", params
         )
-        return await cursor.fetchall()
+        return await self._fetchall(cursor)
 
     # ------------------------------------------------------------------
     # Cluster CRUD
@@ -427,7 +435,7 @@ class Database:
             "SELECT * FROM clusters WHERE tracked_repo_id = ? ORDER BY created_at DESC",
             (repo_id,),
         )
-        return await cursor.fetchall()
+        return await self._fetchall(cursor)
 
     # ------------------------------------------------------------------
     # DigestConfig & Digest CRUD
@@ -449,7 +457,7 @@ class Database:
 
     async def get_digest_config(self, config_id: str) -> dict[str, Any] | None:
         cursor = await self._db.execute("SELECT * FROM digest_configs WHERE id = ?", (config_id,))
-        return await cursor.fetchone()
+        return await self._fetchone(cursor)
 
     async def insert_digest(self, digest: dict[str, Any]) -> None:
         await self._db.execute(
@@ -481,7 +489,7 @@ class Database:
 
     async def get_annotation_by_fork(self, fork_id: str) -> dict[str, Any] | None:
         cursor = await self._db.execute("SELECT * FROM annotations WHERE fork_id = ?", (fork_id,))
-        return await cursor.fetchone()
+        return await self._fetchone(cursor)
 
     # ------------------------------------------------------------------
     # Sync State

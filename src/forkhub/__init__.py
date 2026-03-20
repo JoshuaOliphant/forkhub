@@ -52,7 +52,9 @@ class ForkHub:
         self._settings = settings or load_settings()
         self._db = db or _Database(get_db_path(self._settings))
         self._provider = git_provider or self._build_default_provider()
-        self._backends = notification_backends or [ConsoleBackend()]
+        self._backends: list[NotificationBackend] = (
+            notification_backends if notification_backends is not None else [ConsoleBackend()]
+        )
         self._embedding_provider = embedding_provider or self._build_default_embedding_provider()
 
         self._tracker = TrackerService(self._db, self._provider)

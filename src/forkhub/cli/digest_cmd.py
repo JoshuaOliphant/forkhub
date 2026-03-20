@@ -14,6 +14,7 @@ from forkhub.models import DigestConfig
 
 if TYPE_CHECKING:
     from forkhub.database import Database
+    from forkhub.interfaces import NotificationBackend
 
 console = Console()
 
@@ -60,7 +61,7 @@ async def _digest_impl(
             min_significance=5,
         )
 
-        backends = [ConsoleBackend(console)]
+        backends: list[NotificationBackend] = [ConsoleBackend(console)]
         digest_service = DigestService(db=db, backends=backends)
 
         # Generate the digest

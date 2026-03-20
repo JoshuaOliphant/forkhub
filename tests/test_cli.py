@@ -504,6 +504,7 @@ class TestForksCommand:
 
         # Insert a fork for this repo
         repo_row = await db.get_tracked_repo_by_name("testuser/alpha")
+        assert repo_row is not None
         fork = Fork(
             tracked_repo_id=repo_row["id"],
             github_id=9001,
@@ -565,6 +566,7 @@ class TestInspectCommand:
 
         await _track_impl(repo="testuser/alpha", db=db, provider=provider)
         repo_row = await db.get_tracked_repo_by_name("testuser/alpha")
+        assert repo_row is not None
 
         # Insert a fork
         fork = Fork(
@@ -636,6 +638,7 @@ class TestClustersCommand:
 
         await _track_impl(repo="testuser/alpha", db=db, provider=provider)
         repo_row = await db.get_tracked_repo_by_name("testuser/alpha")
+        assert repo_row is not None
 
         # Insert a cluster
         cluster_dict = {
