@@ -85,3 +85,6 @@ module = [
     "sentence_transformers",
 ]
 ignore_missing_imports = true
+
+[tool.ty.environment]
+python-version = "3.12"

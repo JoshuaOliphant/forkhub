@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 import respx
@@ -56,9 +57,9 @@ def _repo_json(
     stargazers_count: int = 42,
     forks_count: int = 5,
     pushed_at: str = "2025-06-01T12:00:00Z",
-) -> dict:
+) -> dict[str, Any]:
     """Build a minimal GitHub repo JSON object."""
-    result = {
+    result: dict[str, Any] = {
         "id": repo_id,
         "owner": {"login": owner},
         "name": name,

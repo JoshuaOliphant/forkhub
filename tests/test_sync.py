@@ -514,6 +514,7 @@ class TestSyncAll:
         repo = await _insert_tracked_repo(db)
         # Exclude the repo
         row = await db.get_tracked_repo(repo.id)
+        assert row is not None
         row["excluded"] = True
         await db.update_tracked_repo(row)
         result = await sync_service.sync_all()
@@ -530,9 +531,11 @@ class TestLastSyncedAt:
         """sync_repo should update the repo's last_synced_at timestamp."""
         repo = await _insert_tracked_repo(db)
         row_before = await db.get_tracked_repo(repo.id)
+        assert row_before is not None
         assert row_before["last_synced_at"] is None
         await sync_service.sync_repo(repo.id)
         row_after = await db.get_tracked_repo(repo.id)
+        assert row_after is not None
         assert row_after["last_synced_at"] is not None
 
 
@@ -548,10 +551,13 @@ class TestVitalityDuringSync:
         await sync_service.sync_repo(repo.id)
         # forker1 pushed 30 days ago = active
         fork1 = await db.get_fork_by_name("forker1/repo-a")
+        assert fork1 is not None
         assert fork1["vitality"] == "active"
         # forker2 pushed 200 days ago = dormant
         fork2 = await db.get_fork_by_name("forker2/repo-a")
+        assert fork2 is not None
         assert fork2["vitality"] == "dormant"
         # forker3 pushed 400 days ago = dead
         fork3 = await db.get_fork_by_name("forker3/repo-a")
+        assert fork3 is not None
         assert fork3["vitality"] == "dead"

@@ -94,9 +94,9 @@ def _make_signal(fork_id: str, tracked_repo_id: str, **overrides) -> dict:
     return defaults
 
 
-def _make_digest_config(**overrides) -> DigestConfig:
+def _make_digest_config(**overrides: object) -> DigestConfig:
     """Create a DigestConfig Pydantic model with sensible defaults."""
-    kwargs = {
+    kwargs: dict[str, object] = {
         "tracked_repo_id": None,
         "frequency": "weekly",
         "day_of_week": 1,
@@ -107,7 +107,7 @@ def _make_digest_config(**overrides) -> DigestConfig:
         "backends": ["console"],
     }
     kwargs.update(overrides)
-    return DigestConfig(**kwargs)
+    return DigestConfig(**kwargs)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

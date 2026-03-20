@@ -146,7 +146,7 @@ class TestTrackedRepo:
             owner="x",
             name="y",
             full_name="x/y",
-            tracking_mode="upstream",
+            tracking_mode=TrackingMode.UPSTREAM,
             default_branch="main",
         )
         assert repo.tracking_mode == TrackingMode.UPSTREAM
@@ -237,7 +237,7 @@ class TestFork:
             owner="x",
             full_name="x/y",
             default_branch="main",
-            vitality="active",
+            vitality=ForkVitality.ACTIVE,
         )
         assert fork.vitality == ForkVitality.ACTIVE
 
@@ -312,7 +312,7 @@ class TestSignal:
     def test_category_accepts_string(self):
         signal = Signal(
             tracked_repo_id="r",
-            category="dependency",
+            category=SignalCategory.DEPENDENCY,
             summary="Bump version",
         )
         assert signal.category == SignalCategory.DEPENDENCY
@@ -385,7 +385,7 @@ class TestClusterMember:
 
     def test_missing_required_field_rejected(self):
         with pytest.raises(ValidationError):
-            ClusterMember(cluster_id="c", signal_id="s")
+            ClusterMember(cluster_id="c", signal_id="s")  # ty: ignore[missing-argument]
 
 
 # ── DigestConfig Tests ───────────────────────────────────────
