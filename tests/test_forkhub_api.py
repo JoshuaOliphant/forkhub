@@ -85,41 +85,25 @@ class TestUntrackedRepoValidation:
 
 
 # ---------------------------------------------------------------------------
-# get_clusters()
+# Public API method smoke tests
 # ---------------------------------------------------------------------------
 
 
-class TestGetClusters:
-    async def test_get_clusters_returns_list(self, hub):
-        """get_clusters() should return a (possibly empty) list of clusters."""
-        await hub.track("testuser", "alpha")
-        clusters = await hub.get_clusters("testuser", "alpha")
-        assert isinstance(clusters, list)
-
-
-# ---------------------------------------------------------------------------
-# generate_digest()
-# ---------------------------------------------------------------------------
-
-
-class TestGenerateDigest:
-    async def test_generate_digest_for_specific_repo(self, hub, db: Database):
-        """generate_digest(repo=...) should scope to a specific repo."""
-        await hub.track("testuser", "alpha")
-        digest = await hub.generate_digest(repo="testuser/alpha")
-        assert isinstance(digest, Digest)
-
-
-# ---------------------------------------------------------------------------
-# reconcile()
-# ---------------------------------------------------------------------------
-
-
-class TestReconcile:
-    async def test_reconcile_standalone(self, hub, db: Database):
-        """reconcile() as standalone method should work."""
+class TestPublicAPIMethods:
+    async def test_clusters_digest_and_reconcile(self, hub, db: Database):
+        """get_clusters, generate_digest, and reconcile should work on tracked repos."""
         from forkhub.services.sync import ReconcileResult
 
         await hub.track("testuser", "alpha")
+
+        # get_clusters
+        clusters = await hub.get_clusters("testuser", "alpha")
+        assert isinstance(clusters, list)
+
+        # generate_digest
+        digest = await hub.generate_digest(repo="testuser/alpha")
+        assert isinstance(digest, Digest)
+
+        # reconcile
         result = await hub.reconcile()
         assert isinstance(result, ReconcileResult)
