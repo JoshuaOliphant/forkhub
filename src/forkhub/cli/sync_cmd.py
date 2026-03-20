@@ -38,6 +38,7 @@ async def _sync_impl(
     from forkhub.cli.helpers import get_services
     from forkhub.config import SyncSettings as SyncSettingsImpl
     from forkhub.services.sync import SyncService
+    from forkhub.services.tracker import TrackerService
 
     owns_db = False
     settings = None
@@ -52,6 +53,7 @@ async def _sync_impl(
 
     try:
         sync_service = SyncService(db=db, provider=provider, settings=sync_settings)
+        tracker_service = TrackerService(db=db, provider=provider)
 
         if repo is not None:
             # Sync a specific repo
@@ -89,6 +91,7 @@ async def _sync_impl(
             result = await sync_service.sync_all(
                 username=username,
                 reconcile=not no_reconcile,
+                tracker_service=tracker_service,
             )
 
             # Show reconciliation results if present
