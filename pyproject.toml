@@ -1,12 +1,24 @@
 [project]
 name = "forkhub"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Monitor GitHub fork constellations with AI-powered analysis"
 readme = "README.md"
 authors = [
     { name = "Joshua Oliphant", email = "joshua.oliphant@hey.com" }
 ]
+license = "MIT"
 requires-python = ">=3.12"
+keywords = ["github", "forks", "ai", "monitoring", "claude", "agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Typing :: Typed",
+]
 dependencies = [
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.7,<3",
@@ -16,7 +28,6 @@ dependencies = [
     "claude-agent-sdk>=0.1",
     "sentence-transformers>=3.3,<4",
     "sqlite-vec>=0.1.6,<1",
-    "tomli>=2.2,<3;python_version<'3.12'",
     "aiosqlite>=0.22.1",
     "python-dotenv>=1.2.2",
 ]
@@ -24,9 +35,17 @@ dependencies = [
 [project.scripts]
 forkhub = "forkhub.cli.app:app"
 
+[project.urls]
+Homepage = "https://github.com/JoshuaOliphant/forkhub"
+Repository = "https://github.com/JoshuaOliphant/forkhub"
+Issues = "https://github.com/JoshuaOliphant/forkhub/issues"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/forkhub/__init__.py"
 
 [dependency-groups]
 dev = [
@@ -36,6 +55,7 @@ dev = [
     "respx>=0.22,<1",
     "ruff>=0.9,<1",
     "mypy>=1.14,<2",
+    "ty>=0.0.24",
 ]
 
 [tool.pytest.ini_options]
