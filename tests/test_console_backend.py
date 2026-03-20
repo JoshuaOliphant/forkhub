@@ -8,7 +8,6 @@ import pytest
 
 from forkhub.models import (
     Cluster,
-    Digest,
     Fork,
     ForkVitality,
     Signal,
@@ -18,26 +17,6 @@ from forkhub.models import (
 )
 
 # ── Fixtures ────────────────────────────────────────────────
-
-
-@pytest.fixture
-def sample_digest() -> Digest:
-    """A minimal digest for testing."""
-    return Digest(
-        title="Weekly Digest for alice/myrepo",
-        body="3 forks showed interesting activity this week.",
-        signal_ids=["sig-1", "sig-2", "sig-3"],
-    )
-
-
-@pytest.fixture
-def sample_digest_no_signals() -> Digest:
-    """A digest with no signals."""
-    return Digest(
-        title="Empty Digest",
-        body="No notable activity this period.",
-        signal_ids=[],
-    )
 
 
 @pytest.fixture
