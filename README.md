@@ -1,5 +1,7 @@
 # ForkHub
 
+[![PyPI version](https://img.shields.io/pypi/v/forkhub)](https://pypi.org/project/forkhub/)
+
 Monitor GitHub fork constellations with AI-powered analysis.
 
 ForkHub watches the forks around your GitHub repositories, uses a Claude AI agent to classify what changed and why, and surfaces interesting divergences through digest notifications. Think of it as a satellite view of all the gardens growing from your code — whether the gardeners sent a letter or not.
