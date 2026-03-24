@@ -501,6 +501,7 @@ class TestBackfillDatabase:
         await db.update_backfill_attempt(d)
 
         retrieved = await db.get_backfill_attempt(attempt.id)
+        assert retrieved is not None
         assert retrieved["status"] == "accepted"
         assert retrieved["score"] == 1.0
 
