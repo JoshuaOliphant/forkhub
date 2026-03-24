@@ -352,6 +352,10 @@ class Database:
     # Fork CRUD
     # ------------------------------------------------------------------
 
+    async def delete_fork(self, fork_id: str) -> None:
+        await self._db.execute("DELETE FROM forks WHERE id = ?", (fork_id,))
+        await self._db.commit()
+
     async def insert_fork(self, fork: dict[str, Any]) -> None:
         await self._db.execute(
             """
@@ -577,7 +581,7 @@ class Database:
         cursor = await self._db.execute(
             "SELECT * FROM backfill_attempts WHERE id = ?", (attempt_id,)
         )
-        return await cursor.fetchone()
+        return await self._fetchone(cursor)
 
     async def list_backfill_attempts(
         self,
@@ -608,7 +612,7 @@ class Database:
             f"SELECT * FROM backfill_attempts {where} ORDER BY created_at DESC",
             params,
         )
-        return await cursor.fetchall()
+        return await self._fetchall(cursor)
 
     async def has_backfill_for_signal(self, signal_id: str) -> bool:
         """Check if any backfill attempt exists for a given signal."""

@@ -259,6 +259,8 @@ class StubGitProvider:
         self.repos: dict[str, RepoInfo] = repos or {}
         self._forks: dict[str, list[ForkInfo]] = forks or {}
         self._head_shas: dict[str, str] = head_shas or {}
+        self._file_diffs: dict[str, str] = {}
+        self._error_files: set[str] = set()
         self._rate_limit = RateLimitInfo(
             limit=5000,
             remaining=rate_limit_remaining,
@@ -337,6 +339,11 @@ class StubGitProvider:
     ) -> list[CommitInfo]:
         return []
 
+    def set_file_diff(self, fork_owner: str, filepath: str, diff: str) -> None:
+        """Register a canned diff response for a fork/file combination."""
+        key = f"{fork_owner}:{filepath}"
+        self._file_diffs[key] = diff
+
     async def get_file_diff(
         self,
         owner: str,
@@ -345,7 +352,12 @@ class StubGitProvider:
         head: str,
         path: str,
     ) -> str:
-        return ""
+        # Extract fork owner from head param (format: "fork_owner:branch")
+        fork_owner = head.split(":")[0]
+        key = f"{fork_owner}:{path}"
+        if path in self._error_files:
+            raise RuntimeError(f"Simulated error fetching {path}")
+        return self._file_diffs.get(key, "")
 
     async def get_rate_limit(self) -> RateLimitInfo:
         if self._raise_on_rate_limit:

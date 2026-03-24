@@ -34,7 +34,7 @@ async def _backfill_impl(
     dry_run: bool = False,
     min_significance: int = 5,
     max_attempts: int = 10,
-    auto_fix_tests: bool = True,
+    auto_fix_tests: bool = False,  # Enable when agentic test fixer is implemented
     repo_path: str | None = None,
     test_command: str | None = None,
     db: Database | None = None,
@@ -43,7 +43,6 @@ async def _backfill_impl(
 ) -> BackfillResult | None:
     """Core backfill logic."""
     from forkhub.cli.helpers import get_services
-    from forkhub.models import BackfillResult as _BackfillResult
     from forkhub.services.backfill import BackfillService
 
     owns_db = False
@@ -53,6 +52,7 @@ async def _backfill_impl(
 
     try:
         # Resolve the target repo
+        repo_id = None
         if repo is not None:
             repo_row = await db.get_tracked_repo_by_name(repo)
             if repo_row is None:
@@ -61,13 +61,12 @@ async def _backfill_impl(
                     capture_output,
                 )
                 return None
-            repo_ids = [repo_row["id"]]
+            repo_id = repo_row["id"]
         else:
             repos = await db.list_tracked_repos()
             if not repos:
                 _output("[yellow]No tracked repositories found.[/yellow]", capture_output)
                 return None
-            repo_ids = [r["id"] for r in repos]
 
         since = datetime.now(UTC) - timedelta(days=since_days)
 
@@ -84,26 +83,18 @@ async def _backfill_impl(
             auto_fix_tests=auto_fix_tests,
         )
 
-        combined = _BackfillResult()
-
-        for repo_id in repo_ids:
-            repo_row = await db.get_tracked_repo(repo_id)
-            name = repo_row["full_name"] if repo_row else repo_id
-
+        def _on_repo_start(name: str) -> None:
             if dry_run:
                 _output(f"[dim]Evaluating candidates for {name} (dry run)...[/dim]", capture_output)
             else:
                 _output(f"Backfilling {name}...", capture_output)
 
-            result = await backfill.run_backfill(repo_id, since=since, dry_run=dry_run)
-
-            combined.total_evaluated += result.total_evaluated
-            combined.attempted += result.attempted
-            combined.accepted += result.accepted
-            combined.patch_failed += result.patch_failed
-            combined.tests_failed += result.tests_failed
-            combined.conflicts += result.conflicts
-            combined.branches_created.extend(result.branches_created)
+        combined = await backfill.run_backfill_all(
+            since=since,
+            dry_run=dry_run,
+            repo_id=repo_id,
+            on_repo_start=_on_repo_start,
+        )
 
         # Print summary
         _output("", capture_output)
@@ -218,7 +209,7 @@ async def backfill_command(
         10, "--max-attempts", help="Maximum number of backfill attempts per run"
     ),
     auto_fix_tests: bool = typer.Option(
-        True,
+        False,
         "--auto-fix-tests/--no-auto-fix-tests",
         help="Attempt to fix failing tests after patch application",
     ),

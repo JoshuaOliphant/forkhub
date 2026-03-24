@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shlex
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,8 @@ from forkhub.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from forkhub.database import Database
     from forkhub.interfaces import GitProvider
 
@@ -45,7 +48,7 @@ class BackfillService:
         test_command: str = "uv run pytest -x --tb=short -q",
         min_significance: int = 5,
         max_attempts: int = 10,
-        auto_fix_tests: bool = True,
+        auto_fix_tests: bool = False,  # Enable when agentic test fixer is implemented
     ) -> None:
         self._db = db
         self._provider = provider
@@ -99,6 +102,45 @@ class BackfillService:
 
         return result
 
+    async def run_backfill_all(
+        self,
+        *,
+        since: datetime | None = None,
+        dry_run: bool = False,
+        repo_id: str | None = None,
+        on_repo_start: Callable[[str], None] | None = None,
+    ) -> BackfillResult:
+        """Run backfill across one or all tracked repositories.
+
+        If repo_id is provided, runs only for that repo. Otherwise runs for
+        all tracked repos. Aggregates results into a single BackfillResult.
+        The optional on_repo_start callback is called with the repo full_name
+        before processing each repo, enabling progress reporting.
+        """
+        if repo_id is not None:
+            repo_ids = [repo_id]
+        else:
+            repos = await self._db.list_tracked_repos()
+            repo_ids = [r["id"] for r in repos]
+
+        combined = BackfillResult()
+        for rid in repo_ids:
+            if on_repo_start is not None:
+                repo_row = await self._db.get_tracked_repo(rid)
+                name = repo_row["full_name"] if repo_row else rid
+                on_repo_start(name)
+
+            result = await self.run_backfill(rid, since=since, dry_run=dry_run)
+            combined.total_evaluated += result.total_evaluated
+            combined.attempted += result.attempted
+            combined.accepted += result.accepted
+            combined.patch_failed += result.patch_failed
+            combined.tests_failed += result.tests_failed
+            combined.conflicts += result.conflicts
+            combined.branches_created.extend(result.branches_created)
+
+        return combined
+
     async def _gather_candidates(
         self,
         repo_id: str,
@@ -118,6 +160,9 @@ class BackfillService:
                 continue
             # Skip upstream signals — we only backfill fork changes
             if row["is_upstream"]:
+                continue
+            # Skip signals with no associated fork — cannot be backfilled
+            if not row["fork_id"]:
                 continue
 
             files = json.loads(row["files_involved"]) if row["files_involved"] else []
@@ -151,34 +196,25 @@ class BackfillService:
         Steps:
         1. Fetch the diff from the fork via provider.
         2. Create a candidate branch.
-        3. Apply the patch with `git apply`.
+        3. Apply the patch with git apply.
         4. Run the test suite.
         5. If tests fail and auto_fix_tests is enabled, attempt to fix tests.
         6. Record the attempt.
         """
-        # Signals without a fork can't be backfilled — skip without recording
-        if not signal.fork_id:
-            attempt = BackfillAttempt(
-                signal_id=signal.id,
-                fork_id=signal.fork_id or "",
-                tracked_repo_id=signal.tracked_repo_id,
-                status=BackfillStatus.PATCH_FAILED,
-                error="Signal has no associated fork",
-            )
-            return attempt
-
         attempt = BackfillAttempt(
             signal_id=signal.id,
-            fork_id=signal.fork_id,
+            fork_id=signal.fork_id or "",
             tracked_repo_id=signal.tracked_repo_id,
             patch_summary=signal.summary,
         )
 
-        fork_row = await self._db.get_fork(signal.fork_id)
+        fork_row = await self._db.get_fork(signal.fork_id)  # type: ignore[arg-type]
         if fork_row is None:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = f"Fork not found: {signal.fork_id}"
-            # Don't record — FK would fail since fork is deleted
+            logger.warning(
+                "Skipping backfill for signal %s: fork %s not found", signal.id, signal.fork_id
+            )
             return attempt
 
         tracked = await self._db.get_tracked_repo(signal.tracked_repo_id)
@@ -200,7 +236,7 @@ class BackfillService:
                 )
                 if diff:
                     patches.append(diff)
-            except Exception as exc:
+            except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
                 logger.warning("Failed to fetch diff for %s: %s", filepath, exc)
 
         if not patches:
@@ -229,10 +265,34 @@ class BackfillService:
             attempt.error = str(exc)
             logger.exception("Backfill attempt failed for signal %s", signal.id)
         finally:
-            # Always return to the original branch
-            await self._run_git("checkout", "-")
+            # Always return to original branch and clean up candidate branch on failure
+            try:
+                current = (
+                    await self._run_safe_cmd(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=self._repo_path,
+                    )
+                ).stdout.strip()
+                if current == branch_name:
+                    await self._run_git("checkout", "-")
+                if attempt.status != BackfillStatus.ACCEPTED:
+                    check = await self._run_safe_cmd(
+                        ["git", "rev-parse", "--verify", branch_name],
+                        cwd=self._repo_path,
+                    )
+                    if check.returncode == 0:
+                        await self._run_git("branch", "-D", branch_name)
+            except Exception as cleanup_exc:
+                logger.error(
+                    "Failed to clean up after backfill attempt for signal %s: %s",
+                    signal.id,
+                    cleanup_exc,
+                )
 
-        await self._record_attempt(attempt)
+        try:
+            await self._record_attempt(attempt)
+        except Exception as db_exc:
+            logger.error("Failed to record backfill attempt for signal %s: %s", signal.id, db_exc)
         return attempt
 
     async def _apply_and_test(
@@ -245,44 +305,39 @@ class BackfillService:
 
         Modifies the attempt in-place with results.
         """
-        # Save current branch to return to later
-        current_branch = await self._run_git("rev-parse", "--abbrev-ref", "HEAD")
-        current_branch = current_branch.strip()
-
         # Create the candidate branch
         await self._run_git("checkout", "-b", branch_name)
 
-        # Apply each patch
+        # Apply each patch via stdin to avoid shell injection
         combined_patch = "\n".join(patches)
-        apply_result = await self._run_shell(
-            f"echo {_shell_quote(combined_patch)} | git apply --check -",
+        patch_bytes = combined_patch.encode()
+
+        apply_check = await self._run_safe_cmd(
+            ["git", "apply", "--check", "-"],
             cwd=self._repo_path,
+            stdin_data=patch_bytes,
         )
 
-        if apply_result.returncode != 0:
-            # Patch doesn't apply cleanly
+        if apply_check.returncode != 0:
+            # Patch doesn't apply cleanly — outer finally handles branch cleanup
             attempt.status = BackfillStatus.CONFLICT
-            attempt.error = f"Patch conflict: {apply_result.stderr}"
-            # Clean up the branch
-            await self._run_git("checkout", current_branch)
-            await self._run_git("branch", "-D", branch_name)
+            attempt.error = f"Patch conflict: {apply_check.stderr}"
             return
 
         # Actually apply the patch
-        apply_result = await self._run_shell(
-            f"echo {_shell_quote(combined_patch)} | git apply -",
+        apply_result = await self._run_safe_cmd(
+            ["git", "apply", "-"],
             cwd=self._repo_path,
+            stdin_data=patch_bytes,
         )
 
         if apply_result.returncode != 0:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = f"Patch apply failed: {apply_result.stderr}"
-            await self._run_git("checkout", current_branch)
-            await self._run_git("branch", "-D", branch_name)
             return
 
-        # Stage and commit the changes
-        await self._run_git("add", "-A")
+        # Stage only the files touched by this patch (not all working-tree changes)
+        await self._run_git("add", "--", *attempt.files_patched)
         commit_msg = (
             f"backfill: {attempt.patch_summary}\n\n"
             f"Signal: {attempt.signal_id}\nFork: {attempt.fork_id}"
@@ -342,47 +397,74 @@ class BackfillService:
 
     async def _run_tests(self) -> subprocess.CompletedProcess:
         """Run the project test suite and return the result."""
-        return await self._run_shell(
-            self._test_command,
-            cwd=self._repo_path,
-            timeout=300,
-        )
+        args = shlex.split(self._test_command)
+        return await self._run_safe_cmd(args, cwd=self._repo_path, timeout=300)
 
     async def _run_git(self, *args: str) -> str:
-        """Run a git command in the repo directory and return stdout."""
-        result = await self._run_shell(
-            f"git {' '.join(args)}",
+        """Run a git command in the repo directory and return stdout.
+
+        Raises subprocess.CalledProcessError if the command exits non-zero.
+        """
+        result = await self._run_safe_cmd(
+            ["git", *args],
             cwd=self._repo_path,
         )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                ["git", *args],
+                output=result.stdout,
+                stderr=result.stderr,
+            )
         return result.stdout or ""
 
-    async def _run_shell(
+    async def _run_exec(
         self,
-        command: str,
+        args: list[str],
+        *,
         cwd: Path | None = None,
+        stdin_data: bytes | None = None,
         timeout: int = 120,
     ) -> subprocess.CompletedProcess:
-        """Run a shell command asynchronously."""
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=str(cwd or self._repo_path),
+        """Run a command as an argument list (no shell interpolation).
+
+        Public alias kept for testability; delegates to _run_safe_cmd.
+        """
+        return await self._run_safe_cmd(args, cwd=cwd, stdin_data=stdin_data, timeout=timeout)
+
+    async def _run_safe_cmd(
+        self,
+        args: list[str],
+        *,
+        cwd: Path | None = None,
+        stdin_data: bytes | None = None,
+        timeout: int = 120,
+    ) -> subprocess.CompletedProcess:
+        """Run a command as an argument list using subprocess_exec (no shell interpolation)."""
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE if stdin_data else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=str(cwd or self._repo_path),
         )
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(input=stdin_data), timeout=timeout
+            )
         except TimeoutError:
             proc.kill()
+            await proc.wait()
+            logger.error("Command timed out after %ds: %s", timeout, " ".join(str(a) for a in args))
             return subprocess.CompletedProcess(
-                args=command,
+                args=args,
                 returncode=-1,
                 stdout="",
-                stderr="Command timed out",
+                stderr=f"Command timed out after {timeout}s",
             )
-
         return subprocess.CompletedProcess(
-            args=command,
-            returncode=proc.returncode or 0,
+            args=args,
+            returncode=proc.returncode if proc.returncode is not None else -1,
             stdout=stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else "",
             stderr=stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else "",
         )
@@ -420,8 +502,3 @@ class BackfillService:
                 )
             )
         return attempts
-
-
-def _shell_quote(s: str) -> str:
-    """Quote a string for safe shell embedding."""
-    return "'" + s.replace("'", "'\\''") + "'"
