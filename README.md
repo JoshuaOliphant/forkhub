@@ -96,6 +96,8 @@ uv run forkhub digest
 | `forkhub clusters <owner> <repo>` | Show signal clusters (similar changes across forks) |
 | `forkhub sync` | Sync fork data from GitHub |
 | `forkhub digest` | Generate and deliver a change digest |
+| `forkhub backfill` | Cherry-pick valuable fork changes into your repo |
+| `forkhub backfill-list` | List previous backfill attempts and outcomes |
 | `forkhub config show` | Show current configuration |
 
 ## Library Usage
@@ -121,6 +123,10 @@ async def main():
         # Generate and deliver a digest
         digest = await hub.generate_digest()
         await hub.deliver_digest(digest)
+
+        # Backfill valuable fork changes into your local repo
+        result = await hub.backfill("owner/repo", dry_run=True)
+        print(f"Evaluated {result.total_evaluated}, accepted {result.accepted}")
 
 asyncio.run(main())
 ```
@@ -179,6 +185,11 @@ forkhub sync   ->  Discover forks (GitHub API)
 forkhub digest ->  Query recent signals
                ->  AI agent composes readable summary
                ->  Deliver via notification backends
+
+forkhub backfill -> Rank high-significance signals
+                 -> Fetch diffs, apply patches to candidate branches
+                 -> Run test suite to score results
+                 -> Accept or reject based on test outcome
 ```
 
 ## Configuration
@@ -224,7 +235,7 @@ ForkHub is a **library first** — the CLI is a thin consumer. The core library 
 # Install with dev dependencies
 uv sync
 
-# Run tests (450 tests)
+# Run tests (155 tests)
 uv run pytest
 
 # Lint and format
@@ -232,7 +243,7 @@ uv run ruff check src/ tests/
 uv run ruff format src/ tests/
 
 # Type check
-uv run mypy src/forkhub/
+uv run ty check
 ```
 
 ## License
