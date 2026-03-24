@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     )
     from forkhub.services.sync import ReconcileResult, SyncResult
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 
 class ForkHub:
