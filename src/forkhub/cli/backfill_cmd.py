@@ -164,9 +164,7 @@ async def _backfill_list_impl(
 
         if capture_output is not None:
             for a in attempts:
-                capture_output.append(
-                    f"{a.id[:8]} {a.status:15s} {a.patch_summary or 'N/A'}"
-                )
+                capture_output.append(f"{a.id[:8]} {a.status:15s} {a.patch_summary or 'N/A'}")
             return
 
         table = Table(title="Backfill Attempts")
@@ -220,8 +218,9 @@ async def backfill_command(
         10, "--max-attempts", help="Maximum number of backfill attempts per run"
     ),
     auto_fix_tests: bool = typer.Option(
-        True, "--auto-fix-tests/--no-auto-fix-tests",
-        help="Attempt to fix failing tests after patch application"
+        True,
+        "--auto-fix-tests/--no-auto-fix-tests",
+        help="Attempt to fix failing tests after patch application",
     ),
     repo_path: str | None = typer.Option(
         None, "--repo-path", help="Path to the local repository to patch"
@@ -245,9 +244,7 @@ async def backfill_command(
 
 @async_command
 async def backfill_list_command(
-    repo: str | None = typer.Option(
-        None, "--repo", "-r", help="Filter by repository (owner/repo)"
-    ),
+    repo: str | None = typer.Option(None, "--repo", "-r", help="Filter by repository (owner/repo)"),
     status: str | None = typer.Option(
         None, "--status", help="Filter by status (accepted, tests_failed, patch_failed, etc.)"
     ),

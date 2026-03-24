@@ -370,9 +370,7 @@ class BackfillService:
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
             proc.kill()
             return subprocess.CompletedProcess(
@@ -402,9 +400,7 @@ class BackfillService:
         status: str | None = None,
     ) -> list[BackfillAttempt]:
         """List backfill attempts, optionally filtered."""
-        rows = await self._db.list_backfill_attempts(
-            repo_id=repo_id, status=status
-        )
+        rows = await self._db.list_backfill_attempts(repo_id=repo_id, status=status)
         attempts = []
         for row in rows:
             files = json.loads(row["files_patched"]) if row["files_patched"] else []

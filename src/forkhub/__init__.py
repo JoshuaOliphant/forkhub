@@ -232,9 +232,7 @@ class ForkHub:
             repo_row = await self._db.get_tracked_repo_by_name(f"{owner}/{name}")
             if repo_row is None:
                 raise ValueError(f"Repository {repo} is not tracked")
-            return await backfill_service.run_backfill(
-                repo_row["id"], since=since, dry_run=dry_run
-            )
+            return await backfill_service.run_backfill(repo_row["id"], since=since, dry_run=dry_run)
 
         # Backfill all tracked repos
         from forkhub.models import BackfillResult as _BackfillResult
