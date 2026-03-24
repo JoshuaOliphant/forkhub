@@ -711,3 +711,86 @@ class TestTargetedGitAdd:
             "_apply_and_test must use 'git add -- <files>' not 'git add -A'"
         )
         assert '"add", "-A"' not in source, "_apply_and_test must not use 'git add -A'"
+
+
+# ---------------------------------------------------------------------------
+# run_backfill_all
+# ---------------------------------------------------------------------------
+
+
+class TestRunBackfillAll:
+    async def test_single_repo_mode(self, db: Database, provider: StubGitProvider):
+        """run_backfill_all with repo_id should only process that repo."""
+        repo1 = await _insert_tracked_repo(db, owner="owner1", name="proj1", github_id=1001)
+        repo2 = await _insert_tracked_repo(db, owner="owner2", name="proj2", github_id=1002)
+        fork1 = await _insert_fork(db, repo1["id"], owner="forkerA", github_id=5001)
+        fork2 = await _insert_fork(db, repo2["id"], owner="forkerB", github_id=5002)
+        await _insert_signal(db, repo1["id"], fork1["id"], significance=8, summary="S1")
+        await _insert_signal(db, repo2["id"], fork2["id"], significance=8, summary="S2")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5, max_attempts=10)
+        result = await service.run_backfill_all(repo_id=repo1["id"], dry_run=True)
+
+        # Should only evaluate signals from repo1
+        assert result.total_evaluated == 1
+
+    async def test_all_repos_mode(self, db: Database, provider: StubGitProvider):
+        """run_backfill_all without repo_id should process all tracked repos."""
+        repo1 = await _insert_tracked_repo(db, owner="owner1", name="proj1", github_id=1001)
+        repo2 = await _insert_tracked_repo(db, owner="owner2", name="proj2", github_id=1002)
+        fork1 = await _insert_fork(db, repo1["id"], owner="forkerA", github_id=5001)
+        fork2 = await _insert_fork(db, repo2["id"], owner="forkerB", github_id=5002)
+        await _insert_signal(db, repo1["id"], fork1["id"], significance=8, summary="S1")
+        await _insert_signal(db, repo2["id"], fork2["id"], significance=8, summary="S2")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5, max_attempts=10)
+        result = await service.run_backfill_all(dry_run=True)
+
+        # Should evaluate signals from both repos
+        assert result.total_evaluated == 2
+
+    async def test_on_repo_start_callback(self, db: Database, provider: StubGitProvider):
+        """on_repo_start should be called with repo full_name before each repo."""
+        repo = await _insert_tracked_repo(db, owner="upstream", name="project")
+        fork = await _insert_fork(db, repo["id"])
+        await _insert_signal(db, repo["id"], fork["id"], significance=8)
+
+        called_with: list[str] = []
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        await service.run_backfill_all(
+            dry_run=True,
+            on_repo_start=lambda name: called_with.append(name),
+        )
+
+        assert called_with == ["upstream/project"]
+
+    async def test_aggregates_results_across_repos(self, db: Database, provider: StubGitProvider):
+        """Results from multiple repos should be aggregated correctly."""
+        repo1 = await _insert_tracked_repo(db, owner="o1", name="p1", github_id=1001)
+        repo2 = await _insert_tracked_repo(db, owner="o2", name="p2", github_id=1002)
+        fork1 = await _insert_fork(db, repo1["id"], owner="f1", github_id=5001)
+        fork2 = await _insert_fork(db, repo2["id"], owner="f2", github_id=5002)
+        for i in range(3):
+            await _insert_signal(
+                db,
+                repo1["id"],
+                fork1["id"],
+                significance=7,
+                summary=f"R1-S{i}",
+                files=[f"r1_{i}.py"],
+            )
+        for i in range(2):
+            await _insert_signal(
+                db,
+                repo2["id"],
+                fork2["id"],
+                significance=6,
+                summary=f"R2-S{i}",
+                files=[f"r2_{i}.py"],
+            )
+
+        service = BackfillService(db=db, provider=provider, min_significance=5, max_attempts=10)
+        result = await service.run_backfill_all(dry_run=True)
+
+        assert result.total_evaluated == 5
+        assert result.attempted == 5
