@@ -212,7 +212,9 @@ class BackfillService:
         if fork_row is None:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = f"Fork not found: {signal.fork_id}"
-            # Don't record — FK would fail since fork is deleted
+            logger.warning(
+                "Skipping backfill for signal %s: fork %s not found", signal.id, signal.fork_id
+            )
             return attempt
 
         tracked = await self._db.get_tracked_repo(signal.tracked_repo_id)
@@ -234,7 +236,7 @@ class BackfillService:
                 )
                 if diff:
                     patches.append(diff)
-            except Exception as exc:
+            except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
                 logger.warning("Failed to fetch diff for %s: %s", filepath, exc)
 
         if not patches:
@@ -264,24 +266,33 @@ class BackfillService:
             logger.exception("Backfill attempt failed for signal %s", signal.id)
         finally:
             # Always return to original branch and clean up candidate branch on failure
-            current = (
-                await self._run_safe_cmd(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    cwd=self._repo_path,
+            try:
+                current = (
+                    await self._run_safe_cmd(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=self._repo_path,
+                    )
+                ).stdout.strip()
+                if current == branch_name:
+                    await self._run_git("checkout", "-")
+                if attempt.status != BackfillStatus.ACCEPTED:
+                    check = await self._run_safe_cmd(
+                        ["git", "rev-parse", "--verify", branch_name],
+                        cwd=self._repo_path,
+                    )
+                    if check.returncode == 0:
+                        await self._run_git("branch", "-D", branch_name)
+            except Exception as cleanup_exc:
+                logger.error(
+                    "Failed to clean up after backfill attempt for signal %s: %s",
+                    signal.id,
+                    cleanup_exc,
                 )
-            ).stdout.strip()
-            if current == branch_name:
-                await self._run_git("checkout", "-")
-            if attempt.status != BackfillStatus.ACCEPTED:
-                # Delete the candidate branch if it exists and wasn't accepted
-                check = await self._run_safe_cmd(
-                    ["git", "rev-parse", "--verify", branch_name],
-                    cwd=self._repo_path,
-                )
-                if check.returncode == 0:
-                    await self._run_git("branch", "-D", branch_name)
 
-        await self._record_attempt(attempt)
+        try:
+            await self._record_attempt(attempt)
+        except Exception as db_exc:
+            logger.error("Failed to record backfill attempt for signal %s: %s", signal.id, db_exc)
         return attempt
 
     async def _apply_and_test(
@@ -390,11 +401,21 @@ class BackfillService:
         return await self._run_safe_cmd(args, cwd=self._repo_path, timeout=300)
 
     async def _run_git(self, *args: str) -> str:
-        """Run a git command in the repo directory and return stdout."""
+        """Run a git command in the repo directory and return stdout.
+
+        Raises subprocess.CalledProcessError if the command exits non-zero.
+        """
         result = await self._run_safe_cmd(
             ["git", *args],
             cwd=self._repo_path,
         )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                ["git", *args],
+                output=result.stdout,
+                stderr=result.stderr,
+            )
         return result.stdout or ""
 
     async def _run_exec(
@@ -433,15 +454,17 @@ class BackfillService:
             )
         except TimeoutError:
             proc.kill()
+            await proc.wait()
+            logger.error("Command timed out after %ds: %s", timeout, " ".join(str(a) for a in args))
             return subprocess.CompletedProcess(
                 args=args,
                 returncode=-1,
                 stdout="",
-                stderr="Command timed out",
+                stderr=f"Command timed out after {timeout}s",
             )
         return subprocess.CompletedProcess(
             args=args,
-            returncode=proc.returncode or 0,
+            returncode=proc.returncode if proc.returncode is not None else -1,
             stdout=stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else "",
             stderr=stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else "",
         )
