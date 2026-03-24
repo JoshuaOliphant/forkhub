@@ -12,6 +12,7 @@ from forkhub.models import (
     CompareResult,
     DeliveryResult,
     Digest,
+    FixSuggestion,
     ForkInfo,
     ForkPage,
     RateLimitInfo,
@@ -429,3 +430,40 @@ class StubEmbeddingProvider:
 
     def dimensions(self) -> int:
         return self._dims
+
+
+# ── Test Fixer Stub ──────────────────────────────────────────
+
+
+class StubTestFixerClient:
+    """Test stub for TestFixerClient that returns canned suggestions.
+
+    Provides a sequence of FixSuggestion responses. Records call
+    inputs so tests can assert what was passed to the agent.
+    """
+
+    def __init__(self, suggestions: list[FixSuggestion] | None = None) -> None:
+        self._suggestions = suggestions or []
+        self._call_count = 0
+        self.calls: list[dict] = []
+
+    async def suggest_fixes(
+        self,
+        test_output: str,
+        patch_summary: str,
+        files_patched: list[str],
+        test_file_contents: dict[str, str],
+    ) -> FixSuggestion:
+        self.calls.append(
+            {
+                "test_output": test_output,
+                "patch_summary": patch_summary,
+                "files_patched": files_patched,
+                "test_file_contents": test_file_contents,
+            }
+        )
+        if self._call_count < len(self._suggestions):
+            result = self._suggestions[self._call_count]
+            self._call_count += 1
+            return result
+        return FixSuggestion(reasoning="No more canned responses", should_reject=True)
