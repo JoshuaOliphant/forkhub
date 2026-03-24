@@ -34,7 +34,7 @@ async def _backfill_impl(
     dry_run: bool = False,
     min_significance: int = 5,
     max_attempts: int = 10,
-    auto_fix_tests: bool = True,
+    auto_fix_tests: bool = False,  # Enable when agentic test fixer is implemented
     repo_path: str | None = None,
     test_command: str | None = None,
     db: Database | None = None,
@@ -218,7 +218,7 @@ async def backfill_command(
         10, "--max-attempts", help="Maximum number of backfill attempts per run"
     ),
     auto_fix_tests: bool = typer.Option(
-        True,
+        False,
         "--auto-fix-tests/--no-auto-fix-tests",
         help="Attempt to fix failing tests after patch application",
     ),

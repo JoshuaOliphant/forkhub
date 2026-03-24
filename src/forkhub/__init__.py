@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from forkhub.database import Database
     from forkhub.interfaces import EmbeddingProvider, GitProvider, NotificationBackend
     from forkhub.models import (
+        BackfillAttempt as BackfillAttempt,
+    )
+    from forkhub.models import (
         BackfillResult,
         Cluster,
         DeliveryResult,
@@ -22,6 +25,9 @@ if TYPE_CHECKING:
         Fork,
         TrackedRepo,
         TrackingMode,
+    )
+    from forkhub.models import (
+        BackfillStatus as BackfillStatus,
     )
     from forkhub.services.sync import ReconcileResult, SyncResult
 
@@ -206,7 +212,7 @@ class ForkHub:
         repo_path: Path | None = None,
         min_significance: int = 5,
         max_attempts: int = 10,
-        auto_fix_tests: bool = True,
+        auto_fix_tests: bool = False,  # Enable when agentic test fixer is implemented
         test_command: str = "uv run pytest -x --tb=short -q",
     ) -> BackfillResult:
         """Run the agentic backfill loop to cherry-pick valuable fork changes.

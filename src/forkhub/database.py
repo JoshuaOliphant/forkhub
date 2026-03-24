@@ -352,6 +352,10 @@ class Database:
     # Fork CRUD
     # ------------------------------------------------------------------
 
+    async def delete_fork(self, fork_id: str) -> None:
+        await self._db.execute("DELETE FROM forks WHERE id = ?", (fork_id,))
+        await self._db.commit()
+
     async def insert_fork(self, fork: dict[str, Any]) -> None:
         await self._db.execute(
             """

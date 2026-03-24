@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shlex
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,7 +46,7 @@ class BackfillService:
         test_command: str = "uv run pytest -x --tb=short -q",
         min_significance: int = 5,
         max_attempts: int = 10,
-        auto_fix_tests: bool = True,
+        auto_fix_tests: bool = False,  # Enable when agentic test fixer is implemented
     ) -> None:
         self._db = db
         self._provider = provider
@@ -119,6 +120,9 @@ class BackfillService:
             # Skip upstream signals — we only backfill fork changes
             if row["is_upstream"]:
                 continue
+            # Skip signals with no associated fork — cannot be backfilled
+            if not row["fork_id"]:
+                continue
 
             files = json.loads(row["files_involved"]) if row["files_involved"] else []
             signal = Signal(
@@ -151,30 +155,19 @@ class BackfillService:
         Steps:
         1. Fetch the diff from the fork via provider.
         2. Create a candidate branch.
-        3. Apply the patch with `git apply`.
+        3. Apply the patch with git apply.
         4. Run the test suite.
         5. If tests fail and auto_fix_tests is enabled, attempt to fix tests.
         6. Record the attempt.
         """
-        # Signals without a fork can't be backfilled — skip without recording
-        if not signal.fork_id:
-            attempt = BackfillAttempt(
-                signal_id=signal.id,
-                fork_id=signal.fork_id or "",
-                tracked_repo_id=signal.tracked_repo_id,
-                status=BackfillStatus.PATCH_FAILED,
-                error="Signal has no associated fork",
-            )
-            return attempt
-
         attempt = BackfillAttempt(
             signal_id=signal.id,
-            fork_id=signal.fork_id,
+            fork_id=signal.fork_id or "",
             tracked_repo_id=signal.tracked_repo_id,
             patch_summary=signal.summary,
         )
 
-        fork_row = await self._db.get_fork(signal.fork_id)
+        fork_row = await self._db.get_fork(signal.fork_id)  # type: ignore[arg-type]
         if fork_row is None:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = f"Fork not found: {signal.fork_id}"
@@ -229,8 +222,23 @@ class BackfillService:
             attempt.error = str(exc)
             logger.exception("Backfill attempt failed for signal %s", signal.id)
         finally:
-            # Always return to the original branch
-            await self._run_git("checkout", "-")
+            # Always return to original branch and clean up candidate branch on failure
+            current = (
+                await self._run_safe_cmd(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=self._repo_path,
+                )
+            ).stdout.strip()
+            if current == branch_name:
+                await self._run_git("checkout", "-")
+            if attempt.status != BackfillStatus.ACCEPTED:
+                # Delete the candidate branch if it exists and wasn't accepted
+                check = await self._run_safe_cmd(
+                    ["git", "rev-parse", "--verify", branch_name],
+                    cwd=self._repo_path,
+                )
+                if check.returncode == 0:
+                    await self._run_git("branch", "-D", branch_name)
 
         await self._record_attempt(attempt)
         return attempt
@@ -245,44 +253,39 @@ class BackfillService:
 
         Modifies the attempt in-place with results.
         """
-        # Save current branch to return to later
-        current_branch = await self._run_git("rev-parse", "--abbrev-ref", "HEAD")
-        current_branch = current_branch.strip()
-
         # Create the candidate branch
         await self._run_git("checkout", "-b", branch_name)
 
-        # Apply each patch
+        # Apply each patch via stdin to avoid shell injection
         combined_patch = "\n".join(patches)
-        apply_result = await self._run_shell(
-            f"echo {_shell_quote(combined_patch)} | git apply --check -",
+        patch_bytes = combined_patch.encode()
+
+        apply_check = await self._run_safe_cmd(
+            ["git", "apply", "--check", "-"],
             cwd=self._repo_path,
+            stdin_data=patch_bytes,
         )
 
-        if apply_result.returncode != 0:
-            # Patch doesn't apply cleanly
+        if apply_check.returncode != 0:
+            # Patch doesn't apply cleanly — outer finally handles branch cleanup
             attempt.status = BackfillStatus.CONFLICT
-            attempt.error = f"Patch conflict: {apply_result.stderr}"
-            # Clean up the branch
-            await self._run_git("checkout", current_branch)
-            await self._run_git("branch", "-D", branch_name)
+            attempt.error = f"Patch conflict: {apply_check.stderr}"
             return
 
         # Actually apply the patch
-        apply_result = await self._run_shell(
-            f"echo {_shell_quote(combined_patch)} | git apply -",
+        apply_result = await self._run_safe_cmd(
+            ["git", "apply", "-"],
             cwd=self._repo_path,
+            stdin_data=patch_bytes,
         )
 
         if apply_result.returncode != 0:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = f"Patch apply failed: {apply_result.stderr}"
-            await self._run_git("checkout", current_branch)
-            await self._run_git("branch", "-D", branch_name)
             return
 
-        # Stage and commit the changes
-        await self._run_git("add", "-A")
+        # Stage only the files touched by this patch (not all working-tree changes)
+        await self._run_git("add", "--", *attempt.files_patched)
         commit_msg = (
             f"backfill: {attempt.patch_summary}\n\n"
             f"Signal: {attempt.signal_id}\nFork: {attempt.fork_id}"
@@ -342,46 +345,61 @@ class BackfillService:
 
     async def _run_tests(self) -> subprocess.CompletedProcess:
         """Run the project test suite and return the result."""
-        return await self._run_shell(
-            self._test_command,
-            cwd=self._repo_path,
-            timeout=300,
-        )
+        args = shlex.split(self._test_command)
+        return await self._run_safe_cmd(args, cwd=self._repo_path, timeout=300)
 
     async def _run_git(self, *args: str) -> str:
         """Run a git command in the repo directory and return stdout."""
-        result = await self._run_shell(
-            f"git {' '.join(args)}",
+        result = await self._run_safe_cmd(
+            ["git", *args],
             cwd=self._repo_path,
         )
         return result.stdout or ""
 
-    async def _run_shell(
+    async def _run_exec(
         self,
-        command: str,
+        args: list[str],
+        *,
         cwd: Path | None = None,
+        stdin_data: bytes | None = None,
         timeout: int = 120,
     ) -> subprocess.CompletedProcess:
-        """Run a shell command asynchronously."""
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=str(cwd or self._repo_path),
+        """Run a command as an argument list (no shell interpolation).
+
+        Public alias kept for testability; delegates to _run_safe_cmd.
+        """
+        return await self._run_safe_cmd(args, cwd=cwd, stdin_data=stdin_data, timeout=timeout)
+
+    async def _run_safe_cmd(
+        self,
+        args: list[str],
+        *,
+        cwd: Path | None = None,
+        stdin_data: bytes | None = None,
+        timeout: int = 120,
+    ) -> subprocess.CompletedProcess:
+        """Run a command as an argument list using subprocess_exec (no shell interpolation)."""
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE if stdin_data else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=str(cwd or self._repo_path),
         )
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(input=stdin_data), timeout=timeout
+            )
         except TimeoutError:
             proc.kill()
             return subprocess.CompletedProcess(
-                args=command,
+                args=args,
                 returncode=-1,
                 stdout="",
                 stderr="Command timed out",
             )
-
         return subprocess.CompletedProcess(
-            args=command,
+            args=args,
             returncode=proc.returncode or 0,
             stdout=stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else "",
             stderr=stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else "",
@@ -420,8 +438,3 @@ class BackfillService:
                 )
             )
         return attempts
-
-
-def _shell_quote(s: str) -> str:
-    """Quote a string for safe shell embedding."""
-    return "'" + s.replace("'", "'\\''") + "'"
