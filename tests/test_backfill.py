@@ -578,3 +578,135 @@ class TestBackfillModels:
         assert result.tests_failed == 0
         assert result.conflicts == 0
         assert result.branches_created == []
+
+
+# ---------------------------------------------------------------------------
+# Security: exec-based subprocess (Issue 1)
+# ---------------------------------------------------------------------------
+
+
+class TestRunExec:
+    async def test_run_exec_runs_command_and_returns_stdout(self, tmp_path, db, provider):
+        """_run_exec should run a command and capture stdout without shell."""
+        import subprocess
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service._run_exec(["echo", "hello"], cwd=tmp_path)
+        assert isinstance(result, subprocess.CompletedProcess)
+        assert result.stdout.strip() == "hello"
+        assert result.returncode == 0
+
+    async def test_run_exec_does_not_expand_shell_metacharacters(self, tmp_path, db, provider):
+        """_run_exec must not expand shell metacharacters — args are literal."""
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service._run_exec(["echo", "$HOME"], cwd=tmp_path)
+        assert result.stdout.strip() == "$HOME"
+
+    async def test_run_exec_passes_stdin_data(self, tmp_path, db, provider):
+        """_run_exec should pass stdin_data bytes to the process stdin."""
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service._run_exec(["cat"], cwd=tmp_path, stdin_data=b"patch content")
+        assert result.stdout == "patch content"
+
+    async def test_run_exec_times_out_and_returns_error(self, tmp_path, db, provider):
+        """_run_exec should return returncode -1 when command times out."""
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service._run_exec(["sleep", "10"], cwd=tmp_path, timeout=1)
+        assert result.returncode == -1
+        assert "timed out" in result.stderr.lower()
+
+    async def test_run_shell_no_longer_exists(self, db, provider):
+        """_run_shell must be removed — exec-based approach replaces it."""
+        service = BackfillService(db=db, provider=provider)
+        assert not hasattr(service, "_run_shell"), (
+            "_run_shell must be deleted; use _run_exec instead"
+        )
+
+    async def test_shell_quote_no_longer_exists(self, db, provider):
+        """_shell_quote module-level function must be removed."""
+        import forkhub.services.backfill as backfill_mod
+
+        assert not hasattr(backfill_mod, "_shell_quote"), (
+            "_shell_quote must be deleted along with _run_shell"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Security: branch cleanup on exception (Issue 8)
+# ---------------------------------------------------------------------------
+
+
+class TestBranchLeakOnException:
+    async def test_candidate_branch_cleaned_up_on_patch_failure(self, tmp_path, db, provider):
+        """When _apply_and_test raises, the candidate branch must not linger."""
+        import subprocess
+
+        subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("hello")
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True, capture_output=True
+        )
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        provider.set_file_diff(
+            "forker1",
+            "src/cache.py",
+            "--- a/src/cache.py\n+++ b/src/cache.py\n@@ -1 +1 @@\n-old\n+new",
+        )
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        await service.run_backfill(repo["id"])
+
+        result = subprocess.run(
+            ["git", "branch"], cwd=str(tmp_path), capture_output=True, text=True
+        )
+        branch_name = f"backfill/{signal['category']}/{fork['owner']}-{signal['id'][:8]}"
+        assert branch_name not in result.stdout, (
+            f"Candidate branch '{branch_name}' was not cleaned up after failure"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Security: targeted git add (Issue 6)
+# ---------------------------------------------------------------------------
+
+
+class TestTargetedGitAdd:
+    async def test_run_git_uses_exec_not_shell(self, tmp_path, db, provider):
+        """_run_git must delegate to _run_exec, not _run_shell."""
+        import inspect
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        source = inspect.getsource(service._run_git)
+        assert "_run_exec" in source or "_run_safe_cmd" in source, (
+            "_run_git must call _run_exec or _run_safe_cmd"
+        )
+        assert "_run_shell" not in source, "_run_git must not call _run_shell"
+
+    async def test_apply_and_test_uses_targeted_add(self, db, provider):
+        """_apply_and_test must stage only files_patched, not git add -A."""
+        import inspect
+
+        service = BackfillService(db=db, provider=provider)
+        source = inspect.getsource(service._apply_and_test)
+        assert '"add", "--"' in source or '"add", "--", *' in source, (
+            "_apply_and_test must use 'git add -- <files>' not 'git add -A'"
+        )
+        assert '"add", "-A"' not in source, "_apply_and_test must not use 'git add -A'"
