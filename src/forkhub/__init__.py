@@ -233,27 +233,14 @@ class ForkHub:
             auto_fix_tests=auto_fix_tests,
         )
 
+        repo_id = None
         if repo:
             owner, name = repo.split("/", 1)
             repo_row = await self._db.get_tracked_repo_by_name(f"{owner}/{name}")
             if repo_row is None:
                 raise ValueError(f"Repository {repo} is not tracked")
-            return await backfill_service.run_backfill(repo_row["id"], since=since, dry_run=dry_run)
+            repo_id = repo_row["id"]
 
-        # Backfill all tracked repos
-        from forkhub.models import BackfillResult as _BackfillResult
-
-        combined = _BackfillResult()
-        repos = await self._db.list_tracked_repos()
-        for repo_row in repos:
-            result = await backfill_service.run_backfill(
-                repo_row["id"], since=since, dry_run=dry_run
-            )
-            combined.total_evaluated += result.total_evaluated
-            combined.attempted += result.attempted
-            combined.accepted += result.accepted
-            combined.patch_failed += result.patch_failed
-            combined.tests_failed += result.tests_failed
-            combined.conflicts += result.conflicts
-            combined.branches_created.extend(result.branches_created)
-        return combined
+        return await backfill_service.run_backfill_all(
+            since=since, dry_run=dry_run, repo_id=repo_id
+        )

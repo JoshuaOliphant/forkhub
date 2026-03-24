@@ -20,6 +20,8 @@ from forkhub.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from forkhub.database import Database
     from forkhub.interfaces import GitProvider
 
@@ -99,6 +101,45 @@ class BackfillService:
                 result.conflicts += 1
 
         return result
+
+    async def run_backfill_all(
+        self,
+        *,
+        since: datetime | None = None,
+        dry_run: bool = False,
+        repo_id: str | None = None,
+        on_repo_start: Callable[[str], None] | None = None,
+    ) -> BackfillResult:
+        """Run backfill across one or all tracked repositories.
+
+        If repo_id is provided, runs only for that repo. Otherwise runs for
+        all tracked repos. Aggregates results into a single BackfillResult.
+        The optional on_repo_start callback is called with the repo full_name
+        before processing each repo, enabling progress reporting.
+        """
+        if repo_id is not None:
+            repo_ids = [repo_id]
+        else:
+            repos = await self._db.list_tracked_repos()
+            repo_ids = [r["id"] for r in repos]
+
+        combined = BackfillResult()
+        for rid in repo_ids:
+            if on_repo_start is not None:
+                repo_row = await self._db.get_tracked_repo(rid)
+                name = repo_row["full_name"] if repo_row else rid
+                on_repo_start(name)
+
+            result = await self.run_backfill(rid, since=since, dry_run=dry_run)
+            combined.total_evaluated += result.total_evaluated
+            combined.attempted += result.attempted
+            combined.accepted += result.accepted
+            combined.patch_failed += result.patch_failed
+            combined.tests_failed += result.tests_failed
+            combined.conflicts += result.conflicts
+            combined.branches_created.extend(result.branches_created)
+
+        return combined
 
     async def _gather_candidates(
         self,
