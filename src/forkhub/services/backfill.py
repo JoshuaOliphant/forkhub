@@ -412,8 +412,11 @@ class BackfillService:
                 if not _is_test_file(tf):
                     continue
                 path = self._repo_path / tf
-                if path.exists():
-                    test_file_contents[tf] = path.read_text()
+                if path.is_file():
+                    try:
+                        test_file_contents[tf] = path.read_text(encoding="utf-8", errors="replace")
+                    except OSError as exc:
+                        logger.warning("Could not read test file %s: %s", tf, exc)
 
             if not test_file_contents:
                 logger.warning("No readable test files found among failing files")
@@ -448,9 +451,13 @@ class BackfillService:
                     logger.warning("Agent tried to edit non-test file: %s, skipping", edit.path)
                     continue
                 try:
-                    target = self._repo_path / edit.path
+                    target = (self._repo_path / edit.path).resolve()
+                    repo_root = self._repo_path.resolve()
+                    if not target.is_relative_to(repo_root):
+                        logger.warning("Path escapes repo root: %s, skipping", edit.path)
+                        continue
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text(edit.content)
+                    target.write_text(edit.content, encoding="utf-8")
                     applied_files.append(edit.path)
                 except OSError as exc:
                     logger.error("Failed to write %s: %s", edit.path, exc)
@@ -599,10 +606,18 @@ _PYTEST_FILE_RE = re.compile(r"^([\w./\\-]+\.py):\d+:", re.MULTILINE)
 
 
 def _is_test_file(path: str) -> bool:
-    """Check if a file path looks like a test file (safety gate for edits)."""
+    """Check if a file path looks like a test file (safety gate for edits).
+
+    Rejects absolute paths and paths containing '..' to prevent traversal
+    attacks where an agent could write to production code via paths like
+    'tests/../src/forkhub/models.py'.
+    """
     from pathlib import PurePosixPath
 
     p = PurePosixPath(path)
+    # Reject absolute paths and path traversal
+    if p.is_absolute() or ".." in p.parts:
+        return False
     name = p.name
     # Must be a .py file
     if not name.endswith(".py"):

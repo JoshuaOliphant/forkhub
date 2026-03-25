@@ -73,6 +73,18 @@ async def _backfill_impl(
         effective_test_cmd = test_command or "uv run pytest -x --tb=short -q"
         effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
 
+        # Wire up the test fixer when auto_fix_tests is enabled
+        test_fixer = None
+        if auto_fix_tests:
+            from forkhub.agent.test_fixer import TestFixerClient
+            from forkhub.config import ForkHubSettings
+
+            fh_settings = ForkHubSettings()
+            test_fixer = TestFixerClient(
+                model=fh_settings.anthropic.digest_model,
+                budget_usd=fh_settings.anthropic.analysis_budget_usd / 5,
+            )
+
         backfill = BackfillService(
             db=db,
             provider=provider,
@@ -81,6 +93,7 @@ async def _backfill_impl(
             min_significance=min_significance,
             max_attempts=max_attempts,
             auto_fix_tests=auto_fix_tests,
+            test_fixer=test_fixer,
         )
 
         def _on_repo_start(name: str) -> None:

@@ -48,6 +48,15 @@ class TestIsTestFile:
     def test_conftest_in_tests_accepted(self):
         assert _is_test_file("tests/conftest.py") is True
 
+    def test_path_traversal_rejected(self):
+        assert _is_test_file("tests/../src/forkhub/models.py") is False
+
+    def test_absolute_path_rejected(self):
+        assert _is_test_file("/etc/passwd") is False
+
+    def test_double_dot_in_middle_rejected(self):
+        assert _is_test_file("tests/unit/../../src/bad.py") is False
+
 
 # ---------------------------------------------------------------------------
 # _parse_failing_test_files
