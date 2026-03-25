@@ -6,11 +6,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shlex
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from forkhub.models import (
     BackfillAttempt,
@@ -22,6 +23,7 @@ from forkhub.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from forkhub.agent.test_fixer import TestFixerClient
     from forkhub.database import Database
     from forkhub.interfaces import GitProvider
 
@@ -48,7 +50,8 @@ class BackfillService:
         test_command: str = "uv run pytest -x --tb=short -q",
         min_significance: int = 5,
         max_attempts: int = 10,
-        auto_fix_tests: bool = False,  # Enable when agentic test fixer is implemented
+        auto_fix_tests: bool = False,
+        test_fixer: Any = None,
     ) -> None:
         self._db = db
         self._provider = provider
@@ -57,6 +60,7 @@ class BackfillService:
         self._min_significance = min_significance
         self._max_attempts = max_attempts
         self._auto_fix_tests = auto_fix_tests
+        self._test_fixer: TestFixerClient | None = test_fixer
 
     async def run_backfill(
         self,
@@ -366,6 +370,8 @@ class BackfillService:
                 attempt.status = BackfillStatus.TESTS_FAILED
                 attempt.score = 0.0
 
+    _MAX_FIX_ROUNDS = 3
+
     async def _attempt_test_fix(
         self,
         attempt: BackfillAttempt,
@@ -373,26 +379,114 @@ class BackfillService:
     ) -> bool:
         """Try to fix failing tests after applying a patch.
 
-        This is where the agentic loop gets interesting: rather than
-        rejecting a valuable feature because tests broke, we attempt to
-        update the tests to accommodate the new behavior.
+        Runs a bounded loop (max 3 rounds) where each round:
+        1. Parses failing test files from pytest output
+        2. Reads their contents from disk
+        3. Asks the test-fixer agent for edits
+        4. Validates edits target only test files
+        5. Writes edits, commits, and re-runs tests
 
-        Returns True if tests were successfully fixed.
+        Returns True if tests pass after any round.
         """
-        # For now, this is a placeholder for the agent-powered test fixer.
-        # The full implementation would use the Agent SDK to:
-        # 1. Parse the test failure output
-        # 2. Read the failing test files
-        # 3. Understand the new behavior from the patch
-        # 4. Update tests to match the new behavior
-        # 5. Re-run tests to verify the fix
-        #
-        # This keeps the loop bounded (principle 3): max 3 fix attempts,
-        # each with a fast test run (principle 2).
-        logger.info(
-            "Test fix attempt for signal %s (auto_fix_tests enabled)",
-            attempt.signal_id,
-        )
+        if self._test_fixer is None:
+            logger.warning("auto_fix_tests enabled but no test_fixer configured")
+            return False
+
+        for fix_round in range(self._MAX_FIX_ROUNDS):
+            logger.info(
+                "Test fix round %d/%d for signal %s",
+                fix_round + 1,
+                self._MAX_FIX_ROUNDS,
+                attempt.signal_id,
+            )
+
+            # 1. Identify failing test files from pytest output
+            failing_files = _parse_failing_test_files(test_result.stdout or "")
+            if not failing_files:
+                logger.warning("Could not identify failing test files from output")
+                return False
+
+            # 2. Read their contents (only test files)
+            test_file_contents: dict[str, str] = {}
+            for tf in failing_files:
+                if not _is_test_file(tf):
+                    continue
+                path = self._repo_path / tf
+                if path.is_file():
+                    try:
+                        test_file_contents[tf] = path.read_text(encoding="utf-8", errors="replace")
+                    except OSError as exc:
+                        logger.warning("Could not read test file %s: %s", tf, exc)
+
+            if not test_file_contents:
+                logger.warning("No readable test files found among failing files")
+                return False
+
+            # 3. Ask the agent for fix suggestions
+            try:
+                suggestion = await self._test_fixer.suggest_fixes(
+                    test_output=test_result.stdout[-4000:] if test_result.stdout else "",
+                    patch_summary=attempt.patch_summary or "",
+                    files_patched=attempt.files_patched,
+                    test_file_contents=test_file_contents,
+                )
+            except Exception as exc:
+                logger.error("Test fixer call failed: %s", exc)
+                attempt.patch_summary = (
+                    attempt.patch_summary or ""
+                ) + f"\n[fix-round-{fix_round + 1}] Agent error: {exc}"
+                return False
+
+            # 4. If agent recommends rejection, bail
+            if suggestion.should_reject:
+                attempt.patch_summary = (
+                    attempt.patch_summary or ""
+                ) + f"\n[fix-round-{fix_round + 1}] Rejected: {suggestion.reasoning}"
+                return False
+
+            # 5. Validate and apply edits (only test files)
+            applied_files: list[str] = []
+            for edit in suggestion.edits:
+                if not _is_test_file(edit.path):
+                    logger.warning("Agent tried to edit non-test file: %s, skipping", edit.path)
+                    continue
+                try:
+                    target = (self._repo_path / edit.path).resolve()
+                    repo_root = self._repo_path.resolve()
+                    if not target.is_relative_to(repo_root):
+                        logger.warning("Path escapes repo root: %s, skipping", edit.path)
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(edit.content, encoding="utf-8")
+                    applied_files.append(edit.path)
+                except OSError as exc:
+                    logger.error("Failed to write %s: %s", edit.path, exc)
+
+            if not applied_files:
+                attempt.patch_summary = (
+                    attempt.patch_summary or ""
+                ) + f"\n[fix-round-{fix_round + 1}] No valid edits to apply"
+                return False
+
+            # 6. Stage, commit, and re-run tests
+            try:
+                await self._run_git("add", "--", *applied_files)
+                await self._run_git(
+                    "commit", "-m", f"test: fix tests for backfill (round {fix_round + 1})"
+                )
+            except subprocess.CalledProcessError as exc:
+                logger.error("Git commit failed after test fix: %s", exc)
+                continue
+
+            test_result = await self._run_tests()
+            attempt.test_output = test_result.stdout[-2000:] if test_result.stdout else ""
+            attempt.patch_summary = (
+                attempt.patch_summary or ""
+            ) + f"\n[fix-round-{fix_round + 1}] {suggestion.reasoning}"
+
+            if test_result.returncode == 0:
+                return True
+
         return False
 
     async def _run_tests(self) -> subprocess.CompletedProcess:
@@ -502,3 +596,44 @@ class BackfillService:
                 )
             )
         return attempts
+
+
+# ── Module-level helpers ─────────────────────────────────────
+
+
+# Regex for pytest --tb=short failure lines: "tests/test_foo.py:42: AssertionError"
+_PYTEST_FILE_RE = re.compile(r"^([\w./\\-]+\.py):\d+:", re.MULTILINE)
+
+
+def _is_test_file(path: str) -> bool:
+    """Check if a file path looks like a test file (safety gate for edits).
+
+    Rejects absolute paths and paths containing '..' to prevent traversal
+    attacks where an agent could write to production code via paths like
+    'tests/../src/forkhub/models.py'.
+    """
+    from pathlib import PurePosixPath
+
+    p = PurePosixPath(path)
+    # Reject absolute paths and path traversal
+    if p.is_absolute() or ".." in p.parts:
+        return False
+    name = p.name
+    # Must be a .py file
+    if not name.endswith(".py"):
+        return False
+    # File in a tests/ directory, or named test_*.py / *_test.py
+    parts = p.parts
+    return "tests" in parts or name.startswith("test_") or name.endswith("_test.py")
+
+
+def _parse_failing_test_files(pytest_output: str) -> list[str]:
+    """Extract unique test file paths from pytest --tb=short output."""
+    matches = _PYTEST_FILE_RE.findall(pytest_output)
+    seen: set[str] = set()
+    result: list[str] = []
+    for m in matches:
+        if m not in seen and _is_test_file(m):
+            seen.add(m)
+            result.append(m)
+    return result

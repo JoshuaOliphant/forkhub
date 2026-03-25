@@ -223,6 +223,21 @@ class BackfillResult(BaseModel):
     branches_created: list[str] = Field(default_factory=list)
 
 
+class FixEdit(BaseModel):
+    """A single file edit suggested by the test-fixer agent."""
+
+    path: str
+    content: str
+
+
+class FixSuggestion(BaseModel):
+    """Agent response containing test file edits to fix failing tests."""
+
+    reasoning: str
+    edits: list[FixEdit] = Field(default_factory=list)
+    should_reject: bool = False
+
+
 # ── API Response Models (from GitProvider) ──────────────────
 
 

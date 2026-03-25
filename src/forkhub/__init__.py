@@ -223,6 +223,15 @@ class ForkHub:
         """
         from forkhub.services.backfill import BackfillService
 
+        test_fixer = None
+        if auto_fix_tests:
+            from forkhub.agent.test_fixer import TestFixerClient
+
+            test_fixer = TestFixerClient(
+                model=self._settings.anthropic.digest_model,
+                budget_usd=self._settings.anthropic.analysis_budget_usd / 5,
+            )
+
         backfill_service = BackfillService(
             db=self._db,
             provider=self._provider,
@@ -231,6 +240,7 @@ class ForkHub:
             min_significance=min_significance,
             max_attempts=max_attempts,
             auto_fix_tests=auto_fix_tests,
+            test_fixer=test_fixer,
         )
 
         repo_id = None
