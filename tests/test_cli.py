@@ -71,6 +71,7 @@ class TestCLISmoke:
             "digest",
             "config",
             "repos",
+            "backfill",
         ],
     )
     def test_subcommand_help(self, subcommand):

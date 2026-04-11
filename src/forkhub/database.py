@@ -432,6 +432,11 @@ class Database:
         )
         await self._db.commit()
 
+    async def get_signal(self, signal_id: str) -> dict[str, Any] | None:
+        """Fetch a single signal by its id."""
+        cursor = await self._db.execute("SELECT * FROM signals WHERE id = ?", (signal_id,))
+        return await self._fetchone(cursor)
+
     async def list_signals(
         self,
         repo_id: str,

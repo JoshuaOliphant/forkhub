@@ -225,9 +225,9 @@ class ForkHub:
 
         test_fixer = None
         if auto_fix_tests:
-            from forkhub.agent.test_fixer import TestFixerClient
+            from forkhub.agent.test_fixer import ClaudeTestFixer
 
-            test_fixer = TestFixerClient(
+            test_fixer = ClaudeTestFixer(
                 model=self._settings.anthropic.digest_model,
                 budget_usd=self._settings.anthropic.analysis_budget_usd / 5,
             )

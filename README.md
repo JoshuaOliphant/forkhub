@@ -18,12 +18,23 @@ ForkHub watches the forks around your GitHub repositories, uses a Claude AI agen
 ### Install
 
 ```bash
-# Install as a CLI tool (recommended)
+# Core install (tracking, syncing, digests, clustering)
 uv tool install forkhub
 
+# With Claude-powered features (AI analysis + agentic backfill test-fixer)
+uv tool install 'forkhub[claude]'
+
 # Or with pip
-pip install forkhub
+pip install forkhub              # core
+pip install 'forkhub[claude]'    # with Claude integration
 ```
+
+**The `[claude]` extra** enables AI-powered features that use Anthropic's
+`claude-agent-sdk`: fork change classification during `sync`, and the
+agentic test-fixer for `backfill --auto-fix-tests`. ForkHub's core tracking,
+syncing, and digest features work without it — and you can plug in your
+own `TestFixer` implementation (OpenAI, local models, rule-based) via the
+Python API or drive backfill from external agents via the CLI primitives.
 
 For development:
 
@@ -96,9 +107,24 @@ uv run forkhub digest
 | `forkhub clusters <owner> <repo>` | Show signal clusters (similar changes across forks) |
 | `forkhub sync` | Sync fork data from GitHub |
 | `forkhub digest` | Generate and deliver a change digest |
-| `forkhub backfill` | Cherry-pick valuable fork changes into your repo |
-| `forkhub backfill-list` | List previous backfill attempts and outcomes |
+| `forkhub backfill run` | Run the autonomous backfill loop |
+| `forkhub backfill list` | List previous backfill attempts |
+| `forkhub backfill candidates` | List signals eligible for backfill |
+| `forkhub backfill apply <signal-id>` | Apply a patch to a candidate branch, run tests |
+| `forkhub backfill status <attempt-id>` | Inspect a backfill attempt |
+| `forkhub backfill record <attempt-id>` | Record the outcome of an attempt |
+| `forkhub backfill cleanup <attempt-id>` | Delete candidate branch, return to original |
+| `forkhub backfill read-failures` | Run tests, return failing test file contents |
+| `forkhub backfill write-test <path>` | Safety-gated test file write (stdin or --content) |
+| `forkhub backfill run-tests` | Run the configured test command |
 | `forkhub config show` | Show current configuration |
+
+> **Breaking change in v0.3.0**: `forkhub backfill` and `forkhub backfill-list`
+> are now `forkhub backfill run` and `forkhub backfill list`. The backfill
+> subcommands (candidates/apply/status/record/cleanup/read-failures/write-test/run-tests)
+> let any external agent — Claude Code, Cursor, Aider, local models, shell
+> scripts, humans — drive the backfill test-fix loop without requiring the
+> `[claude]` extra.
 
 ## Library Usage
 
@@ -186,11 +212,50 @@ forkhub digest ->  Query recent signals
                ->  AI agent composes readable summary
                ->  Deliver via notification backends
 
-forkhub backfill -> Rank high-significance signals
-                 -> Fetch diffs, apply patches to candidate branches
-                 -> Run test suite to score results
-                 -> Accept or reject based on test outcome
+forkhub backfill run -> Rank high-significance signals
+                     -> Fetch diffs, apply patches to candidate branches
+                     -> Run test suite to score results
+                     -> Accept or reject based on test outcome
 ```
+
+### External-agent backfill flow
+
+The `forkhub backfill` sub-app exposes composable primitives so any agent can
+drive the test-fix loop manually. Example shell-driven flow:
+
+```bash
+# 1. Find a candidate
+SIG=$(forkhub backfill candidates --json | jq -r '.candidates[0].signal_id')
+
+# Optional: preview without touching git or running tests
+forkhub backfill apply "$SIG" --dry-run --json
+
+# 2. Apply — preserves candidate branch on test failure
+forkhub backfill apply "$SIG" --json
+# Exit codes: 0=passed, 1=tests failed, 2=conflict/patch failed,
+#             3=fetch error, 4=signal not found
+
+# 3. Inspect failing tests (runs the test command fresh each call)
+forkhub backfill read-failures --json
+# Exit codes: 0=tests passed, 1=tests failed, 124=timeout/spawn failure
+
+# 4. Agent (any tool) produces fixed test content and pipes it in
+cat fixed_test.py | forkhub backfill write-test tests/test_foo.py
+
+# 5. Re-run tests (returncode propagated; -1 timeout maps to 124)
+forkhub backfill run-tests --json
+
+# 6. Record outcome (score is validated against 0.0-1.0)
+ATTEMPT=$(forkhub backfill list --json | jq -r '.[0].id')
+forkhub backfill record "$ATTEMPT" --status=accepted --score=0.9
+
+# 7. Or discard the attempt — exit 2 if any git op was swallowed
+forkhub backfill cleanup "$ATTEMPT"
+```
+
+Every primitive outputs JSON when `--json` is passed. The Python service
+layer enforces safety invariants (test-files-only, path traversal defense)
+regardless of which agent is driving.
 
 ## Configuration
 

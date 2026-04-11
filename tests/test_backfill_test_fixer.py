@@ -1,5 +1,5 @@
 # ABOUTME: Tests for the agentic test-fixer loop in BackfillService.
-# ABOUTME: Uses StubTestFixerClient for all tests — no real API calls.
+# ABOUTME: Uses StubTestFixer for all tests — no real API calls.
 
 from __future__ import annotations
 
@@ -7,10 +7,12 @@ import asyncio
 import subprocess
 from typing import TYPE_CHECKING
 
+import pytest
+
 from forkhub.models import BackfillAttempt, FixEdit, FixSuggestion
 from forkhub.services.backfill import BackfillService, _is_test_file, _parse_failing_test_files
 
-from .stubs import StubTestFixerClient
+from .stubs import StubTestFixer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -142,7 +144,7 @@ class TestAttemptTestFixHappyPath:
                 FixEdit(path="tests/test_example.py", content="def test_new(): assert 2 == 2\n")
             ],
         )
-        fixer = StubTestFixerClient(suggestions=[suggestion])
+        fixer = StubTestFixer(suggestions=[suggestion])
 
         service = BackfillService(
             db=db,
@@ -180,7 +182,7 @@ class TestAttemptTestFixRejection:
         test_dir.mkdir()
         (test_dir / "test_r.py").write_text("def test_r(): pass\n")
 
-        fixer = StubTestFixerClient(
+        fixer = StubTestFixer(
             suggestions=[FixSuggestion(reasoning="Patch is broken", should_reject=True)]
         )
 
@@ -225,7 +227,7 @@ class TestAttemptTestFixExhaustion:
             )
             for i in range(3)
         ]
-        fixer = StubTestFixerClient(suggestions=suggestions)
+        fixer = StubTestFixer(suggestions=suggestions)
 
         # Test command that always fails but produces parseable pytest-like output
         fail_script = tmp_path / "fail_test.sh"
@@ -269,7 +271,7 @@ class TestAttemptTestFixSafety:
         test_dir.mkdir()
         (test_dir / "test_s.py").write_text("def test_s(): pass\n")
 
-        fixer = StubTestFixerClient(
+        fixer = StubTestFixer(
             suggestions=[
                 FixSuggestion(
                     reasoning="Need to fix production code",
@@ -338,7 +340,7 @@ class TestAttemptTestFixNoFixer:
 class TestAttemptTestFixNoFiles:
     async def test_returns_false_when_no_files_parsed(self, db: Database, provider, tmp_path: Path):
         """If pytest output doesn't contain test file paths, returns False."""
-        fixer = StubTestFixerClient(suggestions=[])
+        fixer = StubTestFixer(suggestions=[])
 
         service = BackfillService(
             db=db,
@@ -383,3 +385,67 @@ class TestFixSuggestionModel:
         )
         assert len(s.edits) == 1
         assert s.edits[0].path == "tests/test_a.py"
+
+
+# ---------------------------------------------------------------------------
+# TestFixer protocol conformance
+# ---------------------------------------------------------------------------
+
+
+class TestProtocolConformance:
+    def test_stub_conforms_to_protocol(self):
+        """StubTestFixer must be recognized as a TestFixer at runtime."""
+        from forkhub.interfaces import TestFixer
+
+        stub = StubTestFixer()
+        assert isinstance(stub, TestFixer)
+
+    def test_claude_fixer_conforms_to_protocol(self):
+        """ClaudeTestFixer must be recognized as a TestFixer at runtime.
+
+        Skipped when the [claude] extra isn't installed (ClaudeTestFixer
+        raises ImportError in __init__ in that case).
+        """
+        pytest.importorskip("claude_agent_sdk")
+
+        from forkhub.agent.test_fixer import ClaudeTestFixer
+        from forkhub.interfaces import TestFixer
+
+        fixer = ClaudeTestFixer()
+        assert isinstance(fixer, TestFixer)
+
+
+# ---------------------------------------------------------------------------
+# Optional claude extra — graceful degradation
+# ---------------------------------------------------------------------------
+
+
+class TestOptionalClaudeExtra:
+    def test_claude_fixer_raises_helpful_error_without_sdk(self, monkeypatch):
+        """ClaudeTestFixer should raise ImportError with install instructions
+        when claude-agent-sdk is not available."""
+        import forkhub.agent.test_fixer as tf_mod
+
+        # Simulate the SDK being unavailable
+        monkeypatch.setattr(tf_mod, "_CLAUDE_SDK_AVAILABLE", False)
+
+        with pytest.raises(ImportError, match="claude"):
+            tf_mod.ClaudeTestFixer()
+
+    def test_core_modules_importable_without_sdk(self):
+        """Core forkhub modules must import without claude-agent-sdk.
+
+        This test verifies nothing in the main import path eagerly imports
+        claude_agent_sdk at module load time.
+        """
+        # These imports must all succeed regardless of SDK availability
+        import forkhub  # noqa: F401
+        from forkhub import ForkHub  # noqa: F401
+        from forkhub.interfaces import (  # noqa: F401
+            EmbeddingProvider,
+            GitProvider,
+            NotificationBackend,
+            TestFixer,
+        )
+        from forkhub.models import FixEdit, FixSuggestion  # noqa: F401
+        from forkhub.services.backfill import BackfillService  # noqa: F401

@@ -8,15 +8,19 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from claude_agent_sdk import (
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-    HookMatcher,
-    ResultMessage,
-    create_sdk_mcp_server,
-)
+try:
+    from claude_agent_sdk import (
+        ClaudeAgentOptions,
+        ClaudeSDKClient,
+        HookMatcher,
+        ResultMessage,
+        create_sdk_mcp_server,
+    )
 
-from forkhub.agent.agents import diff_analyst
+    _CLAUDE_SDK_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _CLAUDE_SDK_AVAILABLE = False
+
 from forkhub.agent.hooks import (
     create_cost_tracker_hook,
     create_pre_compact_hook,
@@ -50,6 +54,11 @@ class AnalysisRunner:
         embedding_provider: EmbeddingProvider,
         settings: ForkHubSettings,
     ) -> None:
+        if not _CLAUDE_SDK_AVAILABLE:
+            raise ImportError(
+                "AnalysisRunner requires the 'claude' extra. "
+                "Install with: uv add 'forkhub[claude]' or pip install 'forkhub[claude]'"
+            )
         self._db = db
         self._provider = provider
         self._embedding_provider = embedding_provider
@@ -220,6 +229,10 @@ class AnalysisRunner:
         mcp_server: Any,
     ) -> ClaudeAgentOptions:
         """Build ClaudeAgentOptions with hooks, budget, model, and agents."""
+        from forkhub.agent.agents import _build_subagents
+
+        diff_analyst, _digest_writer = _build_subagents()
+
         # Build hooks
         cost_tracker = create_cost_tracker_hook(self._db)
         rate_limit_guard = create_rate_limit_guard_hook(self._provider)

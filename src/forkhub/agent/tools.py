@@ -7,11 +7,19 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from claude_agent_sdk import SdkMcpTool, tool
+try:
+    from claude_agent_sdk import tool
+
+    _CLAUDE_SDK_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _CLAUDE_SDK_AVAILABLE = False
+    tool = None  # type: ignore[assignment]
 
 from forkhub.models import Signal, SignalCategory
 
 if TYPE_CHECKING:
+    from claude_agent_sdk import SdkMcpTool
+
     from forkhub.database import Database
     from forkhub.interfaces import EmbeddingProvider, GitProvider
 
@@ -33,6 +41,11 @@ def create_tools(
     clock: datetime | None = None,
 ) -> list[SdkMcpTool]:
     """Create all ForkHub agent tools with injected dependencies."""
+    if not _CLAUDE_SDK_AVAILABLE:
+        raise ImportError(
+            "create_tools requires the 'claude' extra. "
+            "Install with: uv add 'forkhub[claude]' or pip install 'forkhub[claude]'"
+        )
 
     # ------------------------------------------------------------------
     # 1. list_forks

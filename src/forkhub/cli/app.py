@@ -4,7 +4,7 @@
 
 import typer
 
-from forkhub.cli.backfill_cmd import backfill_command, backfill_list_command
+from forkhub.cli.backfill_cmd import backfill_app
 from forkhub.cli.clusters_cmd import clusters_command
 from forkhub.cli.config_cmd import config_app
 from forkhub.cli.digest_cmd import digest_command
@@ -37,11 +37,10 @@ app.command("inspect")(inspect_command)
 app.command("clusters")(clusters_command)
 app.command("sync")(sync_command)
 app.command("digest")(digest_command)
-app.command("backfill")(backfill_command)
-app.command("backfill-list")(backfill_list_command)
 
 # Register sub-apps (grouped commands)
 app.add_typer(config_app, name="config")
+app.add_typer(backfill_app, name="backfill")
 
 
 @app.callback()
