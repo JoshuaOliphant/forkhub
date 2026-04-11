@@ -227,24 +227,29 @@ drive the test-fix loop manually. Example shell-driven flow:
 # 1. Find a candidate
 SIG=$(forkhub backfill candidates --json | jq -r '.candidates[0].signal_id')
 
+# Optional: preview without touching git or running tests
+forkhub backfill apply "$SIG" --dry-run --json
+
 # 2. Apply — preserves candidate branch on test failure
 forkhub backfill apply "$SIG" --json
-# Exit codes: 0=passed, 1=tests failed, 2=conflict, 3=fetch error, 4=not found
+# Exit codes: 0=passed, 1=tests failed, 2=conflict/patch failed,
+#             3=fetch error, 4=signal not found
 
-# 3. Inspect failing tests
-ATTEMPT=$(forkhub backfill list --json | jq -r '.[0].id')
-forkhub backfill read-failures --attempt-id "$ATTEMPT" --json
+# 3. Inspect failing tests (runs the test command fresh each call)
+forkhub backfill read-failures --json
+# Exit codes: 0=tests passed, 1=tests failed, 124=timeout/spawn failure
 
-# 4. Agent (any tool) produces fixed test content
+# 4. Agent (any tool) produces fixed test content and pipes it in
 cat fixed_test.py | forkhub backfill write-test tests/test_foo.py
 
-# 5. Re-run tests
+# 5. Re-run tests (returncode propagated; -1 timeout maps to 124)
 forkhub backfill run-tests --json
 
-# 6. Record outcome
+# 6. Record outcome (score is validated against 0.0-1.0)
+ATTEMPT=$(forkhub backfill list --json | jq -r '.[0].id')
 forkhub backfill record "$ATTEMPT" --status=accepted --score=0.9
 
-# 7. Or discard the attempt
+# 7. Or discard the attempt — exit 2 if any git op was swallowed
 forkhub backfill cleanup "$ATTEMPT"
 ```
 
