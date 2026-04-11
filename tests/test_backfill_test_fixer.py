@@ -401,7 +401,13 @@ class TestProtocolConformance:
         assert isinstance(stub, TestFixer)
 
     def test_claude_fixer_conforms_to_protocol(self):
-        """ClaudeTestFixer must be recognized as a TestFixer at runtime."""
+        """ClaudeTestFixer must be recognized as a TestFixer at runtime.
+
+        Skipped when the [claude] extra isn't installed (ClaudeTestFixer
+        raises ImportError in __init__ in that case).
+        """
+        pytest.importorskip("claude_agent_sdk")
+
         from forkhub.agent.test_fixer import ClaudeTestFixer
         from forkhub.interfaces import TestFixer
 

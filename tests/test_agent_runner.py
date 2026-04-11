@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import pytest
 
-from forkhub.config import ForkHubSettings
+# Skip this whole module if the optional [claude] extra isn't installed —
+# AnalysisRunner requires claude-agent-sdk at runtime.
+pytest.importorskip("claude_agent_sdk")
+
+from forkhub.config import ForkHubSettings  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures

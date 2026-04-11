@@ -9,7 +9,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from forkhub.models import (
+# Skip this whole module if the optional [claude] extra isn't installed —
+# these tests exercise claude-agent-sdk directly.
+pytest.importorskip("claude_agent_sdk")
+
+from forkhub.models import (  # noqa: E402
     CommitInfo,
     CompareResult,
     FileChange,
@@ -22,7 +26,7 @@ from forkhub.models import (
     TrackedRepo,
     TrackingMode,
 )
-from tests.stubs import StubEmbeddingProvider, StubGitProvider
+from tests.stubs import StubEmbeddingProvider, StubGitProvider  # noqa: E402
 
 if TYPE_CHECKING:
     from forkhub.database import Database
