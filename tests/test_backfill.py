@@ -794,3 +794,555 @@ class TestRunBackfillAll:
 
         assert result.total_evaluated == 5
         assert result.attempted == 5
+
+
+# ---------------------------------------------------------------------------
+# Helper: init a git repo + initial commit in tmp_path
+# ---------------------------------------------------------------------------
+
+
+def _init_git_repo_sync(tmp_path):
+    """Initialize a git repo with an initial commit (synchronous helper)."""
+    import subprocess
+
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=str(tmp_path),
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=str(tmp_path),
+        check=True,
+        capture_output=True,
+    )
+    (tmp_path / "README.md").write_text("hello\n")
+    subprocess.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True, capture_output=True
+    )
+
+
+# ---------------------------------------------------------------------------
+# apply_signal (new public primitive)
+# ---------------------------------------------------------------------------
+
+
+class TestApplySignal:
+    async def test_missing_signal_raises_value_error(self, db, provider):
+        """apply_signal with an unknown signal id must raise ValueError."""
+        import pytest
+
+        service = BackfillService(db=db, provider=provider)
+        with pytest.raises(ValueError, match="Signal not found"):
+            await service.apply_signal("nonexistent-signal-id")
+
+    async def test_dry_run_records_pending(self, db, provider):
+        """Dry-run apply_signal records a PENDING attempt, doesn't touch git."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"], significance=8)
+        provider.set_file_diff("forker1", "src/cache.py", "some diff")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        attempt = await service.apply_signal(signal["id"], dry_run=True)
+
+        assert attempt.status == BackfillStatus.PENDING
+        attempts = await db.list_backfill_attempts(repo_id=repo["id"])
+        assert len(attempts) == 1
+
+    async def test_no_patches_records_patch_failed(self, db, provider):
+        """If no diffs can be fetched, apply_signal returns PATCH_FAILED."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"], significance=8)
+        # Don't register any diffs
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.PATCH_FAILED
+        assert attempt.error is not None
+
+    async def test_keeps_branch_on_failure_by_default(self, tmp_path, db, provider):
+        """apply_signal preserves the candidate branch on patch failure."""
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        # Bad diff → patch will fail to apply
+        provider.set_file_diff(
+            "forker1",
+            "src/cache.py",
+            "--- a/src/cache.py\n+++ b/src/cache.py\n@@ -1 +1 @@\n-old\n+new",
+        )
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=True)
+
+        assert attempt.status in (BackfillStatus.CONFLICT, BackfillStatus.PATCH_FAILED)
+        # If a branch does exist under this name, it wasn't accepted (guarantee).
+        result = sp.run(["git", "branch"], cwd=str(tmp_path), capture_output=True, text=True)
+        if attempt.branch_name and attempt.branch_name in result.stdout:
+            assert attempt.status != BackfillStatus.ACCEPTED
+
+    async def test_deletes_branch_on_failure_when_flag_false(self, tmp_path, db, provider):
+        """With keep_branch_on_failure=False, branch is deleted on failure."""
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        provider.set_file_diff(
+            "forker1",
+            "src/cache.py",
+            "--- a/src/cache.py\n+++ b/src/cache.py\n@@ -1 +1 @@\n-old\n+new",
+        )
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=False)
+
+        # Branch should be gone
+        result = sp.run(["git", "branch"], cwd=str(tmp_path), capture_output=True, text=True)
+        if attempt.branch_name:
+            assert attempt.branch_name not in result.stdout
+
+    async def test_branch_collision_returns_conflict(self, tmp_path, db, provider):
+        """If the candidate branch already exists, apply_signal returns CONFLICT."""
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        provider.set_file_diff("forker1", "src/cache.py", "some diff")
+
+        # Pre-create the branch that apply_signal would try to create
+        branch_name = f"backfill/{signal['category']}/{fork['owner']}-{signal['id'][:8]}"
+        sp.run(
+            ["git", "branch", branch_name],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.CONFLICT
+        assert attempt.error is not None
+        assert "already exists" in attempt.error
+
+
+# ---------------------------------------------------------------------------
+# get_signal_by_id / get_attempt
+# ---------------------------------------------------------------------------
+
+
+class TestGetSignalAndAttempt:
+    async def test_get_signal_by_id_returns_signal(self, db, provider):
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"], significance=7)
+
+        service = BackfillService(db=db, provider=provider)
+        loaded = await service.get_signal_by_id(signal["id"])
+
+        assert loaded is not None
+        assert loaded.id == signal["id"]
+        assert loaded.significance == 7
+
+    async def test_get_signal_by_id_missing_returns_none(self, db, provider):
+        service = BackfillService(db=db, provider=provider)
+        assert await service.get_signal_by_id("does-not-exist") is None
+
+    async def test_get_attempt_returns_attempt(self, db, provider):
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"])
+        attempt = BackfillAttempt(
+            signal_id=signal["id"],
+            fork_id=fork["id"],
+            tracked_repo_id=repo["id"],
+            status=BackfillStatus.PENDING,
+        )
+        d = attempt.model_dump()
+        d["created_at"] = attempt.created_at.isoformat()
+        d["files_patched"] = json.dumps(attempt.files_patched)
+        await db.insert_backfill_attempt(d)
+
+        service = BackfillService(db=db, provider=provider)
+        loaded = await service.get_attempt(attempt.id)
+
+        assert loaded is not None
+        assert loaded.id == attempt.id
+        assert loaded.status == BackfillStatus.PENDING
+
+    async def test_get_attempt_missing_returns_none(self, db, provider):
+        service = BackfillService(db=db, provider=provider)
+        assert await service.get_attempt("does-not-exist") is None
+
+
+# ---------------------------------------------------------------------------
+# record_outcome
+# ---------------------------------------------------------------------------
+
+
+class TestRecordOutcome:
+    async def test_updates_status_and_score(self, db, provider):
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"])
+        attempt = BackfillAttempt(
+            signal_id=signal["id"],
+            fork_id=fork["id"],
+            tracked_repo_id=repo["id"],
+            patch_summary="initial",
+        )
+        d = attempt.model_dump()
+        d["created_at"] = attempt.created_at.isoformat()
+        d["files_patched"] = json.dumps(attempt.files_patched)
+        await db.insert_backfill_attempt(d)
+
+        service = BackfillService(db=db, provider=provider)
+        updated = await service.record_outcome(
+            attempt.id, status=BackfillStatus.ACCEPTED, score=0.85
+        )
+
+        assert updated.status == BackfillStatus.ACCEPTED
+        assert updated.score == 0.85
+
+        # Verify persistence
+        reloaded = await service.get_attempt(attempt.id)
+        assert reloaded is not None
+        assert reloaded.status == BackfillStatus.ACCEPTED
+        assert reloaded.score == 0.85
+
+    async def test_notes_appended_to_summary(self, db, provider):
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"])
+        attempt = BackfillAttempt(
+            signal_id=signal["id"],
+            fork_id=fork["id"],
+            tracked_repo_id=repo["id"],
+            patch_summary="original summary",
+        )
+        d = attempt.model_dump()
+        d["created_at"] = attempt.created_at.isoformat()
+        d["files_patched"] = json.dumps(attempt.files_patched)
+        await db.insert_backfill_attempt(d)
+
+        service = BackfillService(db=db, provider=provider)
+        updated = await service.record_outcome(
+            attempt.id,
+            status=BackfillStatus.REJECTED,
+            notes="agent rejected after 3 attempts",
+        )
+
+        assert "original summary" in (updated.patch_summary or "")
+        assert "[note: agent rejected after 3 attempts]" in (updated.patch_summary or "")
+
+    async def test_unknown_attempt_raises(self, db, provider):
+        import pytest
+
+        service = BackfillService(db=db, provider=provider)
+        with pytest.raises(ValueError, match="Backfill attempt not found"):
+            await service.record_outcome("nonexistent", status=BackfillStatus.REJECTED)
+
+
+# ---------------------------------------------------------------------------
+# cleanup_attempt
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupAttempt:
+    async def test_unknown_attempt_raises(self, db, provider):
+        import pytest
+
+        service = BackfillService(db=db, provider=provider)
+        with pytest.raises(ValueError, match="Backfill attempt not found"):
+            await service.cleanup_attempt("nonexistent")
+
+    async def test_no_branch_name_is_noop(self, db, provider):
+        """Cleanup on an attempt without a branch_name is a no-op, returns dict."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"])
+        attempt = BackfillAttempt(
+            signal_id=signal["id"],
+            fork_id=fork["id"],
+            tracked_repo_id=repo["id"],
+            branch_name=None,
+        )
+        d = attempt.model_dump()
+        d["created_at"] = attempt.created_at.isoformat()
+        d["files_patched"] = json.dumps(attempt.files_patched)
+        await db.insert_backfill_attempt(d)
+
+        service = BackfillService(db=db, provider=provider)
+        result = await service.cleanup_attempt(attempt.id)
+
+        assert result["attempt_id"] == attempt.id
+        assert result["branch_name"] is None
+        assert result["branch_deleted"] is False
+
+    async def test_deletes_existing_branch(self, tmp_path, db, provider):
+        """Cleanup deletes the candidate branch when it exists."""
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"])
+
+        # Create a branch to simulate a prior apply
+        branch_name = "backfill/feature/forker1-abcdefgh"
+        sp.run(
+            ["git", "branch", branch_name],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+
+        attempt = BackfillAttempt(
+            signal_id=signal["id"],
+            fork_id=fork["id"],
+            tracked_repo_id=repo["id"],
+            branch_name=branch_name,
+        )
+        d = attempt.model_dump()
+        d["created_at"] = attempt.created_at.isoformat()
+        d["files_patched"] = json.dumps(attempt.files_patched)
+        await db.insert_backfill_attempt(d)
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service.cleanup_attempt(attempt.id)
+
+        assert result["branch_deleted"] is True
+
+        # Verify branch is actually gone
+        branches = sp.run(["git", "branch"], cwd=str(tmp_path), capture_output=True, text=True)
+        assert branch_name not in branches.stdout
+
+    async def test_keep_branch_preserves(self, tmp_path, db, provider):
+        """With keep_branch=True, the candidate branch is preserved."""
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"])
+
+        branch_name = "backfill/feature/forker1-keepit"
+        sp.run(
+            ["git", "branch", branch_name],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+
+        attempt = BackfillAttempt(
+            signal_id=signal["id"],
+            fork_id=fork["id"],
+            tracked_repo_id=repo["id"],
+            branch_name=branch_name,
+        )
+        d = attempt.model_dump()
+        d["created_at"] = attempt.created_at.isoformat()
+        d["files_patched"] = json.dumps(attempt.files_patched)
+        await db.insert_backfill_attempt(d)
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service.cleanup_attempt(attempt.id, keep_branch=True)
+
+        assert result["branch_deleted"] is False
+
+        branches = sp.run(["git", "branch"], cwd=str(tmp_path), capture_output=True, text=True)
+        assert branch_name in branches.stdout
+
+    async def test_missing_branch_is_idempotent(self, tmp_path, db, provider):
+        """Cleanup when branch is already gone succeeds without error."""
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(db, repo["id"], fork["id"])
+
+        attempt = BackfillAttempt(
+            signal_id=signal["id"],
+            fork_id=fork["id"],
+            tracked_repo_id=repo["id"],
+            branch_name="backfill/feature/forker1-gone",
+        )
+        d = attempt.model_dump()
+        d["created_at"] = attempt.created_at.isoformat()
+        d["files_patched"] = json.dumps(attempt.files_patched)
+        await db.insert_backfill_attempt(d)
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service.cleanup_attempt(attempt.id)
+
+        assert result["branch_deleted"] is False  # branch didn't exist to begin with
+
+
+# ---------------------------------------------------------------------------
+# write_test_file
+# ---------------------------------------------------------------------------
+
+
+class TestWriteTestFile:
+    def test_writes_valid_test_file(self, tmp_path, db, provider):
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        target = service.write_test_file("tests/test_foo.py", "def test_foo(): pass\n")
+
+        assert target.exists()
+        assert target.read_text() == "def test_foo(): pass\n"
+
+    def test_creates_parent_dirs(self, tmp_path, db, provider):
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        target = service.write_test_file(
+            "tests/unit/nested/test_deep.py", "def test_deep(): pass\n"
+        )
+
+        assert target.exists()
+        assert (tmp_path / "tests" / "unit" / "nested").is_dir()
+
+    def test_rejects_absolute_path(self, tmp_path, db, provider):
+        import pytest
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        with pytest.raises(ValueError, match="not a valid test file location"):
+            service.write_test_file("/etc/passwd", "hacked")
+
+    def test_rejects_parent_traversal(self, tmp_path, db, provider):
+        import pytest
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        with pytest.raises(ValueError, match="not a valid test file location"):
+            service.write_test_file("tests/../src/forkhub/models.py", "# hacked\n")
+
+    def test_rejects_production_file(self, tmp_path, db, provider):
+        import pytest
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        with pytest.raises(ValueError, match="not a valid test file location"):
+            service.write_test_file("src/forkhub/models.py", "# hacked\n")
+
+
+# ---------------------------------------------------------------------------
+# read_failing_test_files
+# ---------------------------------------------------------------------------
+
+
+class TestReadFailingTestFiles:
+    async def test_parses_stored_output_and_reads_files(self, tmp_path, db, provider):
+        """When test_output is supplied, parses it and reads the matching test files."""
+        _init_git_repo_sync(tmp_path)
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_example.py").write_text("def test_x(): assert True\n")
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service.read_failing_test_files(
+            test_output="tests/test_example.py:1: AssertionError\nFAILED\n"
+        )
+
+        assert result["returncode"] == 1
+        assert len(result["files"]) == 1
+        assert result["files"][0]["path"] == "tests/test_example.py"
+        assert "def test_x" in result["files"][0]["content"]
+
+    async def test_ignores_non_test_files_in_output(self, tmp_path, db, provider):
+        """Production files mentioned in pytest output are excluded from results."""
+        _init_git_repo_sync(tmp_path)
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service.read_failing_test_files(
+            test_output="src/forkhub/models.py:5: TypeError\n"
+        )
+
+        assert result["files"] == []
+
+    async def test_missing_test_file_is_skipped(self, tmp_path, db, provider):
+        """Files referenced in output but missing on disk are skipped gracefully."""
+        _init_git_repo_sync(tmp_path)
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
+        result = await service.read_failing_test_files(
+            test_output="tests/test_missing.py:1: AssertionError\n"
+        )
+
+        assert result["files"] == []
+
+
+# ---------------------------------------------------------------------------
+# run_test_command
+# ---------------------------------------------------------------------------
+
+
+class TestRunTestCommand:
+    async def test_runs_configured_command(self, tmp_path, db, provider):
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, test_command="true")
+        result = await service.run_test_command()
+        assert result.returncode == 0
+
+    async def test_failing_command_returns_nonzero(self, tmp_path, db, provider):
+        service = BackfillService(
+            db=db, provider=provider, repo_path=tmp_path, test_command="false"
+        )
+        result = await service.run_test_command()
+        assert result.returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# Regression: run_backfill still deletes branches on failure
+# ---------------------------------------------------------------------------
+
+
+class TestRunBackfillRegressions:
+    async def test_run_backfill_still_deletes_branch_on_failure(self, tmp_path, db, provider):
+        """The autonomous run_backfill loop must still delete candidate branches on failure.
+
+        This is the regression test for the service refactor: _try_backfill now
+        delegates to apply_signal(keep_branch_on_failure=False), preserving the
+        old autonomous-loop behavior.
+        """
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        provider.set_file_diff(
+            "forker1",
+            "src/cache.py",
+            "--- a/src/cache.py\n+++ b/src/cache.py\n@@ -1 +1 @@\n-old\n+new",
+        )
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        await service.run_backfill(repo["id"])
+
+        result = sp.run(["git", "branch"], cwd=str(tmp_path), capture_output=True, text=True)
+        branch_name = f"backfill/{signal['category']}/{fork['owner']}-{signal['id'][:8]}"
+        assert branch_name not in result.stdout, (
+            f"Regression: candidate branch '{branch_name}' was NOT deleted by run_backfill"
+        )

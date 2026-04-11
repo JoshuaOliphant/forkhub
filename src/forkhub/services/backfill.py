@@ -11,7 +11,7 @@ import shlex
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from forkhub.models import (
     BackfillAttempt,
@@ -144,7 +144,25 @@ class BackfillService:
 
         return combined
 
-    async def _gather_candidates(
+    @staticmethod
+    def _row_to_signal(row: dict) -> Signal:
+        """Convert a signals DB row dict into a Signal Pydantic model."""
+        files = json.loads(row["files_involved"]) if row["files_involved"] else []
+        return Signal(
+            id=row["id"],
+            fork_id=row["fork_id"],
+            tracked_repo_id=row["tracked_repo_id"],
+            category=row["category"],
+            summary=row["summary"],
+            detail=row["detail"],
+            files_involved=files,
+            significance=row["significance"],
+            embedding=row["embedding"],
+            is_upstream=bool(row["is_upstream"]),
+            release_tag=row["release_tag"],
+        )
+
+    async def gather_candidates(
         self,
         repo_id: str,
         since: datetime | None = None,
@@ -152,7 +170,9 @@ class BackfillService:
         """Query signals and rank by backfill potential.
 
         Prioritizes by: significance (desc), cluster membership, recency.
-        Filters out signals already attempted and those below min_significance.
+        Filters out signals below min_significance, upstream signals, and
+        signals with no associated fork. Does NOT filter out already-attempted
+        signals — callers can check that via db.has_backfill_for_signal.
         """
         since_dt = since or datetime(2000, 1, 1, tzinfo=UTC)
         signal_rows = await self._db.list_signals(repo_id, since=since_dt)
@@ -167,43 +187,51 @@ class BackfillService:
             # Skip signals with no associated fork — cannot be backfilled
             if not row["fork_id"]:
                 continue
-
-            files = json.loads(row["files_involved"]) if row["files_involved"] else []
-            signal = Signal(
-                id=row["id"],
-                fork_id=row["fork_id"],
-                tracked_repo_id=row["tracked_repo_id"],
-                category=row["category"],
-                summary=row["summary"],
-                detail=row["detail"],
-                files_involved=files,
-                significance=row["significance"],
-                embedding=row["embedding"],
-                is_upstream=bool(row["is_upstream"]),
-                release_tag=row["release_tag"],
-            )
-            candidates.append(signal)
+            candidates.append(self._row_to_signal(row))
 
         # Sort by significance descending, then by recency
         candidates.sort(key=lambda s: (-s.significance, s.created_at))
         return candidates
 
-    async def _try_backfill(
+    # Private alias for back-compat with existing tests
+    _gather_candidates = gather_candidates
+
+    async def get_signal_by_id(self, signal_id: str) -> Signal | None:
+        """Fetch and hydrate a Signal by id. Returns None if not found."""
+        row = await self._db.get_signal(signal_id)
+        if row is None:
+            return None
+        return self._row_to_signal(row)
+
+    async def apply_signal(
         self,
-        signal: Signal,
+        signal_id: str,
         *,
         dry_run: bool = False,
+        keep_branch_on_failure: bool = True,
     ) -> BackfillAttempt:
-        """Attempt to backfill a single signal's changes.
+        """Apply a signal's fork diffs to the local repo and run tests.
+
+        This is the core per-signal primitive. Unlike the autonomous
+        run_backfill loop, it preserves the candidate branch on test
+        failure by default so an external agent can fix tests on it.
 
         Steps:
-        1. Fetch the diff from the fork via provider.
-        2. Create a candidate branch.
-        3. Apply the patch with git apply.
-        4. Run the test suite.
-        5. If tests fail and auto_fix_tests is enabled, attempt to fix tests.
-        6. Record the attempt.
+        1. Load the signal.
+        2. Fetch diffs from the fork via provider.
+        3. Create a candidate branch (errors if branch already exists).
+        4. Apply the patch with git apply.
+        5. Commit and run the test suite.
+        6. On failure: if keep_branch_on_failure, leave the branch alone;
+           otherwise delete it (autonomous-loop behavior).
+        7. Record the attempt to the database.
+
+        Raises ValueError if the signal is not found.
         """
+        signal = await self.get_signal_by_id(signal_id)
+        if signal is None:
+            raise ValueError(f"Signal not found: {signal_id}")
+
         attempt = BackfillAttempt(
             signal_id=signal.id,
             fork_id=signal.fork_id or "",
@@ -260,6 +288,20 @@ class BackfillService:
         branch_name = f"backfill/{signal.category}/{fork_row['owner']}-{signal.id[:8]}"
         attempt.branch_name = branch_name
 
+        # Check for branch collision before attempting to create it
+        existing = await self._run_safe_cmd(
+            ["git", "rev-parse", "--verify", branch_name],
+            cwd=self._repo_path,
+        )
+        if existing.returncode == 0:
+            attempt.status = BackfillStatus.CONFLICT
+            attempt.error = (
+                f"Candidate branch '{branch_name}' already exists. "
+                "Run 'forkhub backfill cleanup <prior-attempt-id>' first."
+            )
+            await self._record_attempt(attempt)
+            return attempt
+
         try:
             # Create branch, apply patch, run tests
             await self._apply_and_test(attempt, patches, branch_name)
@@ -268,7 +310,8 @@ class BackfillService:
             attempt.error = str(exc)
             logger.exception("Backfill attempt failed for signal %s", signal.id)
         finally:
-            # Always return to original branch and clean up candidate branch on failure
+            # Always return to original branch for safety.
+            # Delete the candidate branch only if NOT accepted AND cleanup requested.
             try:
                 current = (
                     await self._run_safe_cmd(
@@ -278,7 +321,7 @@ class BackfillService:
                 ).stdout.strip()
                 if current == branch_name:
                     await self._run_git("checkout", "-")
-                if attempt.status != BackfillStatus.ACCEPTED:
+                if attempt.status != BackfillStatus.ACCEPTED and not keep_branch_on_failure:
                     check = await self._run_safe_cmd(
                         ["git", "rev-parse", "--verify", branch_name],
                         cwd=self._repo_path,
@@ -297,6 +340,19 @@ class BackfillService:
         except Exception as db_exc:
             logger.error("Failed to record backfill attempt for signal %s: %s", signal.id, db_exc)
         return attempt
+
+    async def _try_backfill(
+        self,
+        signal: Signal,
+        *,
+        dry_run: bool = False,
+    ) -> BackfillAttempt:
+        """Legacy path used by run_backfill — delete candidate branch on failure."""
+        return await self.apply_signal(
+            signal.id,
+            dry_run=dry_run,
+            keep_branch_on_failure=False,
+        )
 
     async def _apply_and_test(
         self,
@@ -569,6 +625,24 @@ class BackfillService:
         attempt_dict["files_patched"] = json.dumps(attempt.files_patched)
         await self._db.insert_backfill_attempt(attempt_dict)
 
+    @staticmethod
+    def _row_to_attempt(row: dict) -> BackfillAttempt:
+        """Convert a backfill_attempts DB row dict into a BackfillAttempt model."""
+        files = json.loads(row["files_patched"]) if row["files_patched"] else []
+        return BackfillAttempt(
+            id=row["id"],
+            signal_id=row["signal_id"],
+            fork_id=row["fork_id"],
+            tracked_repo_id=row["tracked_repo_id"],
+            status=row["status"],
+            branch_name=row["branch_name"],
+            patch_summary=row["patch_summary"],
+            test_output=row["test_output"],
+            error=row["error"],
+            files_patched=files,
+            score=row["score"],
+        )
+
     async def list_attempts(
         self,
         repo_id: str | None = None,
@@ -576,25 +650,174 @@ class BackfillService:
     ) -> list[BackfillAttempt]:
         """List backfill attempts, optionally filtered."""
         rows = await self._db.list_backfill_attempts(repo_id=repo_id, status=status)
-        attempts = []
-        for row in rows:
-            files = json.loads(row["files_patched"]) if row["files_patched"] else []
-            attempts.append(
-                BackfillAttempt(
-                    id=row["id"],
-                    signal_id=row["signal_id"],
-                    fork_id=row["fork_id"],
-                    tracked_repo_id=row["tracked_repo_id"],
-                    status=row["status"],
-                    branch_name=row["branch_name"],
-                    patch_summary=row["patch_summary"],
-                    test_output=row["test_output"],
-                    error=row["error"],
-                    files_patched=files,
-                    score=row["score"],
-                )
+        return [self._row_to_attempt(row) for row in rows]
+
+    async def get_attempt(self, attempt_id: str) -> BackfillAttempt | None:
+        """Fetch and hydrate a single BackfillAttempt by id. None if not found."""
+        row = await self._db.get_backfill_attempt(attempt_id)
+        if row is None:
+            return None
+        return self._row_to_attempt(row)
+
+    async def record_outcome(
+        self,
+        attempt_id: str,
+        *,
+        status: BackfillStatus,
+        score: float | None = None,
+        notes: str | None = None,
+    ) -> BackfillAttempt:
+        """Update an attempt's final outcome.
+
+        Used by external agents after they've driven their own fix loop.
+        Notes are appended to patch_summary with a [note: ...] marker.
+        Raises ValueError if the attempt is not found.
+        """
+        attempt = await self.get_attempt(attempt_id)
+        if attempt is None:
+            raise ValueError(f"Backfill attempt not found: {attempt_id}")
+
+        attempt.status = status
+        if score is not None:
+            attempt.score = score
+        if notes:
+            existing = attempt.patch_summary or ""
+            attempt.patch_summary = f"{existing}\n[note: {notes}]".strip()
+
+        # Persist via update_backfill_attempt (insert uses INSERT, update uses UPDATE)
+        attempt_dict = attempt.model_dump()
+        attempt_dict["files_patched"] = json.dumps(attempt.files_patched)
+        # update_backfill_attempt doesn't touch created_at; remove it from payload
+        attempt_dict.pop("created_at", None)
+        await self._db.update_backfill_attempt(attempt_dict)
+        return attempt
+
+    async def cleanup_attempt(
+        self,
+        attempt_id: str,
+        *,
+        keep_branch: bool = False,
+    ) -> dict[str, Any]:
+        """Return to original branch and optionally delete the candidate branch.
+
+        Returns a dict with {attempt_id, branch_name, branch_deleted, checked_out}.
+        Idempotent: does nothing surprising if the branch is already gone.
+        Raises ValueError if the attempt is not found.
+        """
+        attempt = await self.get_attempt(attempt_id)
+        if attempt is None:
+            raise ValueError(f"Backfill attempt not found: {attempt_id}")
+
+        branch_name = attempt.branch_name
+        result: dict[str, Any] = {
+            "attempt_id": attempt_id,
+            "branch_name": branch_name,
+            "branch_deleted": False,
+            "checked_out": None,
+        }
+
+        if branch_name is None:
+            return result
+
+        # Return to original branch if we're currently on the candidate
+        current = (
+            await self._run_safe_cmd(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=self._repo_path,
             )
-        return attempts
+        ).stdout.strip()
+        if current == branch_name:
+            try:
+                await self._run_git("checkout", "-")
+                result["checked_out"] = (
+                    await self._run_safe_cmd(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=self._repo_path,
+                    )
+                ).stdout.strip()
+            except subprocess.CalledProcessError as exc:
+                logger.warning("Failed to checkout previous branch: %s", exc)
+        else:
+            result["checked_out"] = current
+
+        if keep_branch:
+            return result
+
+        # Delete the candidate branch if it still exists
+        check = await self._run_safe_cmd(
+            ["git", "rev-parse", "--verify", branch_name],
+            cwd=self._repo_path,
+        )
+        if check.returncode == 0:
+            try:
+                await self._run_git("branch", "-D", branch_name)
+                result["branch_deleted"] = True
+            except subprocess.CalledProcessError as exc:
+                logger.warning("Failed to delete candidate branch %s: %s", branch_name, exc)
+
+        return result
+
+    async def run_test_command(self) -> subprocess.CompletedProcess:
+        """Run the configured test command. Public wrapper over _run_tests."""
+        return await self._run_tests()
+
+    async def read_failing_test_files(
+        self,
+        test_output: str | None = None,
+    ) -> dict[str, Any]:
+        """Run tests (if no output passed), parse failing test files, read contents.
+
+        Returns {returncode, test_output, files: [{path, content}]}.
+        Only files that pass _is_test_file are included — never production code.
+        """
+        if test_output is None:
+            proc = await self._run_tests()
+            returncode = proc.returncode
+            output = proc.stdout or ""
+        else:
+            returncode = 1  # assume failing since caller passed stored output
+            output = test_output
+
+        failing = _parse_failing_test_files(output)
+        files: list[dict[str, str]] = []
+        for tf in failing:
+            if not _is_test_file(tf):
+                continue
+            path = self._repo_path / tf
+            if path.is_file():
+                try:
+                    content = path.read_text(encoding="utf-8", errors="replace")
+                    files.append({"path": tf, "content": content})
+                except OSError as exc:
+                    logger.warning("Could not read test file %s: %s", tf, exc)
+
+        return {
+            "returncode": returncode,
+            "test_output": output,
+            "files": files,
+        }
+
+    def write_test_file(self, path: str, content: str) -> Path:
+        """Write content to a test file after safety validation.
+
+        Validates via _is_test_file (rejects '..', absolute paths, non-test
+        patterns) AND resolves the final path inside repo_path to catch any
+        symlink-based escapes. Raises ValueError if the path is not acceptable.
+        """
+        if not _is_test_file(path):
+            raise ValueError(
+                f"Path '{path}' is not a valid test file location. "
+                "Must be under tests/ or match test_*.py / *_test.py (no '..' or absolute paths)."
+            )
+
+        target = (self._repo_path / path).resolve()
+        repo_root = self._repo_path.resolve()
+        if not target.is_relative_to(repo_root):
+            raise ValueError(f"Resolved path '{target}' escapes repo root '{repo_root}'")
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return target
 
 
 # ── Module-level helpers ─────────────────────────────────────
