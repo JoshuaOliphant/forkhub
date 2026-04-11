@@ -11,7 +11,7 @@ import shlex
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from forkhub.models import (
     BackfillAttempt,
@@ -23,9 +23,8 @@ from forkhub.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from forkhub.agent.test_fixer import TestFixerClient
     from forkhub.database import Database
-    from forkhub.interfaces import GitProvider
+    from forkhub.interfaces import GitProvider, TestFixer
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,7 @@ class BackfillService:
         min_significance: int = 5,
         max_attempts: int = 10,
         auto_fix_tests: bool = False,
-        test_fixer: Any = None,
+        test_fixer: TestFixer | None = None,
     ) -> None:
         self._db = db
         self._provider = provider
@@ -60,7 +59,7 @@ class BackfillService:
         self._min_significance = min_significance
         self._max_attempts = max_attempts
         self._auto_fix_tests = auto_fix_tests
-        self._test_fixer: TestFixerClient | None = test_fixer
+        self._test_fixer: TestFixer | None = test_fixer
 
     async def run_backfill(
         self,

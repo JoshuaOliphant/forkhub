@@ -1,5 +1,5 @@
 # ABOUTME: Protocol definitions for ForkHub's plugin system.
-# ABOUTME: Defines GitProvider, NotificationBackend, and EmbeddingProvider interfaces.
+# ABOUTME: Defines GitProvider, NotificationBackend, EmbeddingProvider, and TestFixer interfaces.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -12,6 +12,7 @@ if TYPE_CHECKING:
         CompareResult,
         DeliveryResult,
         Digest,
+        FixSuggestion,
         ForkPage,
         RateLimitInfo,
         Release,
@@ -62,3 +63,21 @@ class EmbeddingProvider(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
     def dimensions(self) -> int: ...
+
+
+@runtime_checkable
+class TestFixer(Protocol):
+    """Interface for suggesting test file edits when backfill tests fail.
+
+    Implementations can use any LLM provider (Claude, OpenAI, local models),
+    a rule-based approach, or anything else. The BackfillService calls
+    suggest_fixes and is responsible for validating and applying the results.
+    """
+
+    async def suggest_fixes(
+        self,
+        test_output: str,
+        patch_summary: str,
+        files_patched: list[str],
+        test_file_contents: dict[str, str],
+    ) -> FixSuggestion: ...

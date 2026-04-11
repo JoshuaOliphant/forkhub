@@ -1,5 +1,5 @@
 # ABOUTME: Tests for the agentic test-fixer loop in BackfillService.
-# ABOUTME: Uses StubTestFixerClient for all tests — no real API calls.
+# ABOUTME: Uses StubTestFixer for all tests — no real API calls.
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from forkhub.models import BackfillAttempt, FixEdit, FixSuggestion
 from forkhub.services.backfill import BackfillService, _is_test_file, _parse_failing_test_files
 
-from .stubs import StubTestFixerClient
+from .stubs import StubTestFixer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -142,7 +142,7 @@ class TestAttemptTestFixHappyPath:
                 FixEdit(path="tests/test_example.py", content="def test_new(): assert 2 == 2\n")
             ],
         )
-        fixer = StubTestFixerClient(suggestions=[suggestion])
+        fixer = StubTestFixer(suggestions=[suggestion])
 
         service = BackfillService(
             db=db,
@@ -180,7 +180,7 @@ class TestAttemptTestFixRejection:
         test_dir.mkdir()
         (test_dir / "test_r.py").write_text("def test_r(): pass\n")
 
-        fixer = StubTestFixerClient(
+        fixer = StubTestFixer(
             suggestions=[FixSuggestion(reasoning="Patch is broken", should_reject=True)]
         )
 
@@ -225,7 +225,7 @@ class TestAttemptTestFixExhaustion:
             )
             for i in range(3)
         ]
-        fixer = StubTestFixerClient(suggestions=suggestions)
+        fixer = StubTestFixer(suggestions=suggestions)
 
         # Test command that always fails but produces parseable pytest-like output
         fail_script = tmp_path / "fail_test.sh"
@@ -269,7 +269,7 @@ class TestAttemptTestFixSafety:
         test_dir.mkdir()
         (test_dir / "test_s.py").write_text("def test_s(): pass\n")
 
-        fixer = StubTestFixerClient(
+        fixer = StubTestFixer(
             suggestions=[
                 FixSuggestion(
                     reasoning="Need to fix production code",
@@ -338,7 +338,7 @@ class TestAttemptTestFixNoFixer:
 class TestAttemptTestFixNoFiles:
     async def test_returns_false_when_no_files_parsed(self, db: Database, provider, tmp_path: Path):
         """If pytest output doesn't contain test file paths, returns False."""
-        fixer = StubTestFixerClient(suggestions=[])
+        fixer = StubTestFixer(suggestions=[])
 
         service = BackfillService(
             db=db,
@@ -383,3 +383,25 @@ class TestFixSuggestionModel:
         )
         assert len(s.edits) == 1
         assert s.edits[0].path == "tests/test_a.py"
+
+
+# ---------------------------------------------------------------------------
+# TestFixer protocol conformance
+# ---------------------------------------------------------------------------
+
+
+class TestProtocolConformance:
+    def test_stub_conforms_to_protocol(self):
+        """StubTestFixer must be recognized as a TestFixer at runtime."""
+        from forkhub.interfaces import TestFixer
+
+        stub = StubTestFixer()
+        assert isinstance(stub, TestFixer)
+
+    def test_claude_fixer_conforms_to_protocol(self):
+        """ClaudeTestFixer must be recognized as a TestFixer at runtime."""
+        from forkhub.agent.test_fixer import ClaudeTestFixer
+        from forkhub.interfaces import TestFixer
+
+        fixer = ClaudeTestFixer()
+        assert isinstance(fixer, TestFixer)

@@ -435,11 +435,11 @@ class StubEmbeddingProvider:
 # ── Test Fixer Stub ──────────────────────────────────────────
 
 
-class StubTestFixerClient:
-    """Test stub for TestFixerClient that returns canned suggestions.
+class StubTestFixer:
+    """Real stub conforming to the TestFixer protocol.
 
-    Provides a sequence of FixSuggestion responses. Records call
-    inputs so tests can assert what was passed to the agent.
+    Provides a sequence of canned FixSuggestion responses and records
+    call inputs so tests can assert what was passed to the fixer.
     """
 
     def __init__(self, suggestions: list[FixSuggestion] | None = None) -> None:

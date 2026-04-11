@@ -1,5 +1,5 @@
-# ABOUTME: Test-fixer agent client that suggests edits to failing tests.
-# ABOUTME: Uses one-shot Claude SDK queries to analyze failures and return file edits.
+# ABOUTME: Claude-backed TestFixer implementation for the backfill service.
+# ABOUTME: Uses one-shot Claude SDK queries to suggest test file edits.
 
 from __future__ import annotations
 
@@ -14,12 +14,13 @@ from forkhub.models import FixSuggestion
 logger = logging.getLogger(__name__)
 
 
-class TestFixerClient:
-    """Calls the Claude SDK to suggest test file edits for failing tests.
+class ClaudeTestFixer:
+    """Claude-backed TestFixer that suggests test file edits via one-shot queries.
 
-    Uses minimal one-shot queries (no MCP tools, no subagents) to keep
-    the interaction cheap and bounded. The calling service controls the
-    retry loop and safety validation.
+    One concrete implementation of the TestFixer protocol. Uses minimal
+    one-shot queries (no MCP tools, no subagents) to keep the interaction
+    cheap and bounded. The calling service controls the retry loop and
+    safety validation.
     """
 
     def __init__(self, *, model: str = "haiku", budget_usd: float = 0.10) -> None:

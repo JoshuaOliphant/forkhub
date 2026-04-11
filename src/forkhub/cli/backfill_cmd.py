@@ -76,11 +76,11 @@ async def _backfill_impl(
         # Wire up the test fixer when auto_fix_tests is enabled
         test_fixer = None
         if auto_fix_tests:
-            from forkhub.agent.test_fixer import TestFixerClient
+            from forkhub.agent.test_fixer import ClaudeTestFixer
             from forkhub.config import ForkHubSettings
 
             fh_settings = ForkHubSettings()
-            test_fixer = TestFixerClient(
+            test_fixer = ClaudeTestFixer(
                 model=fh_settings.anthropic.digest_model,
                 budget_usd=fh_settings.anthropic.analysis_budget_usd / 5,
             )
