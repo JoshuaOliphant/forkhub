@@ -6,7 +6,12 @@ from __future__ import annotations
 import json
 import logging
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
+try:
+    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
+
+    _CLAUDE_SDK_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _CLAUDE_SDK_AVAILABLE = False
 
 from forkhub.agent.prompts import TEST_FIXER_PROMPT
 from forkhub.models import FixSuggestion
@@ -24,6 +29,11 @@ class ClaudeTestFixer:
     """
 
     def __init__(self, *, model: str = "haiku", budget_usd: float = 0.10) -> None:
+        if not _CLAUDE_SDK_AVAILABLE:
+            raise ImportError(
+                "ClaudeTestFixer requires the 'claude' extra. "
+                "Install with: uv add 'forkhub[claude]' or pip install 'forkhub[claude]'"
+            )
         self._model = model
         self._budget_usd = budget_usd
 

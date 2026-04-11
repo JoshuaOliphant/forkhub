@@ -18,12 +18,23 @@ ForkHub watches the forks around your GitHub repositories, uses a Claude AI agen
 ### Install
 
 ```bash
-# Install as a CLI tool (recommended)
+# Core install (tracking, syncing, digests, clustering)
 uv tool install forkhub
 
+# With Claude-powered features (AI analysis + agentic backfill test-fixer)
+uv tool install 'forkhub[claude]'
+
 # Or with pip
-pip install forkhub
+pip install forkhub              # core
+pip install 'forkhub[claude]'    # with Claude integration
 ```
+
+**The `[claude]` extra** enables AI-powered features that use Anthropic's
+`claude-agent-sdk`: fork change classification during `sync`, and the
+agentic test-fixer for `backfill --auto-fix-tests`. ForkHub's core tracking,
+syncing, and digest features work without it — and you can plug in your
+own `TestFixer` implementation (OpenAI, local models, rule-based) via the
+Python API or drive backfill from external agents via the CLI primitives.
 
 For development:
 

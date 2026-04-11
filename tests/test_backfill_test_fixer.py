@@ -7,6 +7,8 @@ import asyncio
 import subprocess
 from typing import TYPE_CHECKING
 
+import pytest
+
 from forkhub.models import BackfillAttempt, FixEdit, FixSuggestion
 from forkhub.services.backfill import BackfillService, _is_test_file, _parse_failing_test_files
 
@@ -405,3 +407,39 @@ class TestProtocolConformance:
 
         fixer = ClaudeTestFixer()
         assert isinstance(fixer, TestFixer)
+
+
+# ---------------------------------------------------------------------------
+# Optional claude extra — graceful degradation
+# ---------------------------------------------------------------------------
+
+
+class TestOptionalClaudeExtra:
+    def test_claude_fixer_raises_helpful_error_without_sdk(self, monkeypatch):
+        """ClaudeTestFixer should raise ImportError with install instructions
+        when claude-agent-sdk is not available."""
+        import forkhub.agent.test_fixer as tf_mod
+
+        # Simulate the SDK being unavailable
+        monkeypatch.setattr(tf_mod, "_CLAUDE_SDK_AVAILABLE", False)
+
+        with pytest.raises(ImportError, match="claude"):
+            tf_mod.ClaudeTestFixer()
+
+    def test_core_modules_importable_without_sdk(self):
+        """Core forkhub modules must import without claude-agent-sdk.
+
+        This test verifies nothing in the main import path eagerly imports
+        claude_agent_sdk at module load time.
+        """
+        # These imports must all succeed regardless of SDK availability
+        import forkhub  # noqa: F401
+        from forkhub import ForkHub  # noqa: F401
+        from forkhub.interfaces import (  # noqa: F401
+            EmbeddingProvider,
+            GitProvider,
+            NotificationBackend,
+            TestFixer,
+        )
+        from forkhub.models import FixEdit, FixSuggestion  # noqa: F401
+        from forkhub.services.backfill import BackfillService  # noqa: F401

@@ -398,11 +398,10 @@ wheels = [
 
 [[package]]
 name = "forkhub"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
-    { name = "claude-agent-sdk" },
     { name = "githubkit" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -411,6 +410,11 @@ dependencies = [
     { name = "sentence-transformers" },
     { name = "sqlite-vec" },
     { name = "typer" },
+]
+
+[package.optional-dependencies]
+claude = [
+    { name = "claude-agent-sdk" },
 ]
 
 [package.dev-dependencies]
@@ -427,7 +431,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
-    { name = "claude-agent-sdk", specifier = ">=0.1" },
+    { name = "claude-agent-sdk", marker = "extra == 'claude'", specifier = ">=0.1" },
     { name = "githubkit", specifier = ">=0.12,<1" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
