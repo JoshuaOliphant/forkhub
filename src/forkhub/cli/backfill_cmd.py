@@ -119,6 +119,7 @@ class CleanupResponse(BaseModel):
     branch_name: str | None
     branch_deleted: bool
     checked_out: str | None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class WriteTestResponse(BaseModel):
@@ -532,6 +533,7 @@ async def _apply_impl(
     signal_id: str,
     repo_path: str | None = None,
     test_command: str | None = None,
+    dry_run: bool = False,
     as_json: bool = False,
     db: Database | None = None,
     provider: GitProvider | None = None,
@@ -557,7 +559,9 @@ async def _apply_impl(
         )
 
         try:
-            attempt = await service.apply_signal(signal_id, keep_branch_on_failure=True)
+            attempt = await service.apply_signal(
+                signal_id, dry_run=dry_run, keep_branch_on_failure=True
+            )
         except ValueError as exc:
             _output(f"[red]Error: {exc}[/red]", capture_output)
             return 4
@@ -588,17 +592,25 @@ async def apply_command(
     signal_id: str = typer.Argument(..., help="ID of the signal to apply"),
     repo_path: str | None = typer.Option(None, "--repo-path"),
     test_command: str | None = typer.Option(None, "--test-command"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Preview the attempt without creating a branch or running tests",
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Apply a signal's patches to a candidate branch and run tests.
 
-    Exit codes: 0=tests passed, 1=tests failed, 2=conflict/patch failed,
-    3=fetch error, 4=signal not found. Branch preserved on failure.
+    Exit codes: 0=tests passed (or dry-run pending), 1=tests failed,
+    2=conflict/patch failed, 3=fetch error, 4=signal not found.
+    Branch preserved on failure.
     """
     exit_code = await _apply_impl(
         signal_id=signal_id,
         repo_path=repo_path,
         test_command=test_command,
+        dry_run=dry_run,
         as_json=as_json,
     )
     raise typer.Exit(exit_code)
@@ -690,6 +702,13 @@ async def _record_impl(
         )
         return 2
 
+    if score is not None and not (0.0 <= score <= 1.0):
+        _output(
+            f"[red]Error: --score must be between 0.0 and 1.0 (got {score})[/red]",
+            capture_output,
+        )
+        return 2
+
     owns_db = False
     if db is None or provider is None:
         _settings, db, provider = await get_services()
@@ -773,7 +792,7 @@ async def _cleanup_impl(
             _output(f"[red]Error: {exc}[/red]", capture_output)
             return 1
 
-        response = CleanupResponse(**result)
+        response = CleanupResponse.model_validate(result)
         if as_json:
             _emit_json(response, capture_output)
         else:
@@ -784,7 +803,12 @@ async def _cleanup_impl(
                 f"checked_out={response.checked_out or '-'}",
                 capture_output,
             )
-        return 0
+            for warning in response.warnings:
+                _output(f"  [yellow]warning: {warning}[/yellow]", capture_output)
+
+        # Non-zero exit when any git op was swallowed so callers can detect
+        # partial failures (stranded branches, failed checkouts, etc.)
+        return 2 if response.warnings else 0
     finally:
         if owns_db:
             await db.close()
@@ -816,7 +840,6 @@ async def cleanup_command(
 
 
 async def _read_failures_impl(
-    attempt_id: str | None = None,
     repo_path: str | None = None,
     test_command: str | None = None,
     as_json: bool = True,
@@ -843,11 +866,6 @@ async def _read_failures_impl(
             test_command=effective_test_cmd,
         )
 
-        # If attempt_id provided, we could use its stored output; for now we always
-        # run fresh since working tree may have changed. attempt_id is accepted for
-        # future use (and to let the agent scope the call) but not required.
-        _ = attempt_id
-
         result = await service.read_failing_test_files()
         response = ReadFailuresResponse(**result)
 
@@ -860,7 +878,14 @@ async def _read_failures_impl(
             )
             for f in response.files:
                 _output(f"  {f['path']}", capture_output)
-        return 0
+
+        # Propagate the test command's outcome so callers can script on it.
+        # 0 = tests passed (no failing files), 1 = tests failed, 124 = timeout.
+        if response.returncode == 0:
+            return 0
+        if response.returncode < 0:
+            return 124  # convention for timeout / spawn failure
+        return 1
     finally:
         if owns_db:
             await db.close()
@@ -869,14 +894,12 @@ async def _read_failures_impl(
 @backfill_app.command("read-failures")
 @async_command
 async def read_failures_command(
-    attempt_id: str | None = typer.Option(None, "--attempt-id"),
     repo_path: str | None = typer.Option(None, "--repo-path"),
     test_command: str | None = typer.Option(None, "--test-command"),
     as_json: bool = typer.Option(True, "--json/--no-json"),
 ) -> None:
     """Run the test command and return failing test file paths + contents."""
     exit_code = await _read_failures_impl(
-        attempt_id=attempt_id,
         repo_path=repo_path,
         test_command=test_command,
         as_json=as_json,
@@ -1014,7 +1037,11 @@ async def _run_tests_impl(
             if response.stderr:
                 _output(response.stderr, capture_output)
 
-        return max(0, min(255, response.returncode))
+        # Map negative (timeout / spawn failure) to 124 by convention;
+        # otherwise propagate the test command's real returncode.
+        if response.returncode < 0:
+            return 124
+        return min(255, response.returncode)
     finally:
         if owns_db:
             await db.close()

@@ -226,32 +226,52 @@ class BackfillService:
            otherwise delete it (autonomous-loop behavior).
         7. Record the attempt to the database.
 
-        Raises ValueError if the signal is not found.
+        Raises ValueError if the signal is not found or has no associated fork.
         """
         signal = await self.get_signal_by_id(signal_id)
         if signal is None:
             raise ValueError(f"Signal not found: {signal_id}")
+        if not signal.fork_id:
+            raise ValueError(f"Signal {signal_id} has no associated fork — cannot backfill")
 
         attempt = BackfillAttempt(
             signal_id=signal.id,
-            fork_id=signal.fork_id or "",
+            fork_id=signal.fork_id,
             tracked_repo_id=signal.tracked_repo_id,
             patch_summary=signal.summary,
         )
 
-        fork_row = await self._db.get_fork(signal.fork_id)  # type: ignore[arg-type]
+        fork_row = await self._db.get_fork(signal.fork_id)
         if fork_row is None:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = f"Fork not found: {signal.fork_id}"
             logger.warning(
                 "Skipping backfill for signal %s: fork %s not found", signal.id, signal.fork_id
             )
+            # _record_attempt may fail FK (fork was deleted) — best-effort persist
+            # so the attempt id handed back to CLI callers is queryable.
+            try:
+                await self._record_attempt(attempt)
+            except Exception as exc:
+                logger.warning(
+                    "Could not persist fork-not-found attempt for signal %s: %s",
+                    signal.id,
+                    exc,
+                )
             return attempt
 
         tracked = await self._db.get_tracked_repo(signal.tracked_repo_id)
         if tracked is None:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = f"Tracked repo not found: {signal.tracked_repo_id}"
+            try:
+                await self._record_attempt(attempt)
+            except Exception as exc:
+                logger.warning(
+                    "Could not persist tracked-repo-not-found attempt for signal %s: %s",
+                    signal.id,
+                    exc,
+                )
             return attempt
 
         # Fetch the diffs for files involved in this signal
@@ -589,14 +609,29 @@ class BackfillService:
         stdin_data: bytes | None = None,
         timeout: int = 120,
     ) -> subprocess.CompletedProcess:
-        """Run a command as an argument list using subprocess_exec (no shell interpolation)."""
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE if stdin_data else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(cwd or self._repo_path),
-        )
+        """Run a command as an argument list using subprocess_exec (no shell interpolation).
+
+        Returns a CompletedProcess with synthesized returncode=-1 on spawn
+        failure (missing binary, permission denied) or timeout. Callers that
+        need to distinguish "command ran and said no" from "command couldn't
+        run at all" should inspect stderr and check for returncode < 0.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.PIPE if stdin_data else None,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(cwd or self._repo_path),
+            )
+        except (FileNotFoundError, PermissionError, OSError) as exc:
+            logger.error("Failed to spawn %s: %s", args[0] if args else "<empty>", exc)
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=-1,
+                stdout="",
+                stderr=f"failed to spawn {args[0] if args else '<empty>'}: {exc}",
+            )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(input=stdin_data), timeout=timeout
@@ -700,8 +735,11 @@ class BackfillService:
     ) -> dict[str, Any]:
         """Return to original branch and optionally delete the candidate branch.
 
-        Returns a dict with {attempt_id, branch_name, branch_deleted, checked_out}.
-        Idempotent: does nothing surprising if the branch is already gone.
+        Returns a dict with {attempt_id, branch_name, branch_deleted, checked_out,
+        warnings}. Warnings is a list of error messages from any git operation
+        that was swallowed — callers should treat a non-empty warnings list as
+        a partial success and exit non-zero.
+
         Raises ValueError if the attempt is not found.
         """
         attempt = await self.get_attempt(attempt_id)
@@ -714,29 +752,41 @@ class BackfillService:
             "branch_name": branch_name,
             "branch_deleted": False,
             "checked_out": None,
+            "warnings": [],
         }
 
         if branch_name is None:
             return result
 
         # Return to original branch if we're currently on the candidate
-        current = (
-            await self._run_safe_cmd(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=self._repo_path,
-            )
-        ).stdout.strip()
+        current_proc = await self._run_safe_cmd(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=self._repo_path,
+        )
+        if current_proc.returncode != 0:
+            msg = f"rev-parse HEAD failed: {current_proc.stderr.strip() or current_proc.stdout}"
+            logger.error(msg)
+            result["warnings"].append(msg)
+            return result
+
+        current = current_proc.stdout.strip()
         if current == branch_name:
             try:
                 await self._run_git("checkout", "-")
-                result["checked_out"] = (
-                    await self._run_safe_cmd(
-                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                        cwd=self._repo_path,
+                post = await self._run_safe_cmd(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=self._repo_path,
+                )
+                if post.returncode == 0:
+                    result["checked_out"] = post.stdout.strip()
+                else:
+                    result["warnings"].append(
+                        f"post-checkout rev-parse failed: {post.stderr.strip()}"
                     )
-                ).stdout.strip()
             except subprocess.CalledProcessError as exc:
-                logger.warning("Failed to checkout previous branch: %s", exc)
+                msg = f"checkout previous branch failed: {exc.stderr or exc}"
+                logger.error(msg)
+                result["warnings"].append(msg)
         else:
             result["checked_out"] = current
 
@@ -748,12 +798,21 @@ class BackfillService:
             ["git", "rev-parse", "--verify", branch_name],
             cwd=self._repo_path,
         )
+        # rev-parse --verify exits 0 on existence, 1 on missing. A timeout or
+        # spawn failure returns -1; treat that as "unknown" (warn, don't touch).
         if check.returncode == 0:
             try:
                 await self._run_git("branch", "-D", branch_name)
                 result["branch_deleted"] = True
             except subprocess.CalledProcessError as exc:
-                logger.warning("Failed to delete candidate branch %s: %s", branch_name, exc)
+                msg = f"delete candidate branch {branch_name} failed: {exc.stderr or exc}"
+                logger.error(msg)
+                result["warnings"].append(msg)
+        elif check.returncode < 0:
+            msg = f"could not verify branch {branch_name} (spawn/timeout): {check.stderr.strip()}"
+            logger.error(msg)
+            result["warnings"].append(msg)
+        # returncode == 1 means the branch is already gone — nothing to do
 
         return result
 
@@ -764,18 +823,29 @@ class BackfillService:
     async def read_failing_test_files(
         self,
         test_output: str | None = None,
+        returncode: int | None = None,
     ) -> dict[str, Any]:
         """Run tests (if no output passed), parse failing test files, read contents.
 
         Returns {returncode, test_output, files: [{path, content}]}.
         Only files that pass _is_test_file are included — never production code.
+
+        If the caller supplies stored test_output, they must also supply the
+        matching returncode — otherwise the contract of "returncode reflects
+        the captured run" can't be honored. Passing test_output without
+        returncode raises ValueError.
         """
         if test_output is None:
             proc = await self._run_tests()
-            returncode = proc.returncode
+            rc = proc.returncode
             output = proc.stdout or ""
         else:
-            returncode = 1  # assume failing since caller passed stored output
+            if returncode is None:
+                raise ValueError(
+                    "read_failing_test_files: when passing stored test_output, "
+                    "the caller must also pass the matching returncode."
+                )
+            rc = returncode
             output = test_output
 
         failing = _parse_failing_test_files(output)
@@ -792,7 +862,7 @@ class BackfillService:
                     logger.warning("Could not read test file %s: %s", tf, exc)
 
         return {
-            "returncode": returncode,
+            "returncode": rc,
             "test_output": output,
             "files": files,
         }

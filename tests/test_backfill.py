@@ -7,6 +7,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+import pytest
+
 from forkhub.models import (
     BackfillAttempt,
     BackfillResult,
@@ -867,7 +869,13 @@ class TestApplySignal:
         assert attempt.error is not None
 
     async def test_keeps_branch_on_failure_by_default(self, tmp_path, db, provider):
-        """apply_signal preserves the candidate branch on patch failure."""
+        """apply_signal preserves the candidate branch on patch failure.
+
+        The bad diff triggers `git apply --check` failure inside
+        `_apply_and_test`, which creates the candidate branch first and
+        then sets CONFLICT status. With keep_branch_on_failure=True the
+        branch must survive the finally-block cleanup.
+        """
         import subprocess as sp
 
         _init_git_repo_sync(tmp_path)
@@ -887,11 +895,16 @@ class TestApplySignal:
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
         attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=True)
 
-        assert attempt.status in (BackfillStatus.CONFLICT, BackfillStatus.PATCH_FAILED)
-        # If a branch does exist under this name, it wasn't accepted (guarantee).
+        # The apply path must have been reached (branch_name set), and the
+        # patch must have been rejected at git apply --check (CONFLICT).
+        assert attempt.branch_name is not None
+        assert attempt.status == BackfillStatus.CONFLICT
+        # The branch must still exist under keep_branch_on_failure=True.
         result = sp.run(["git", "branch"], cwd=str(tmp_path), capture_output=True, text=True)
-        if attempt.branch_name and attempt.branch_name in result.stdout:
-            assert attempt.status != BackfillStatus.ACCEPTED
+        assert attempt.branch_name in result.stdout, (
+            f"Branch {attempt.branch_name!r} was deleted despite keep_branch_on_failure=True. "
+            f"git branch output: {result.stdout!r}"
+        )
 
     async def test_deletes_branch_on_failure_when_flag_false(self, tmp_path, db, provider):
         """With keep_branch_on_failure=False, branch is deleted on failure."""
@@ -913,10 +926,13 @@ class TestApplySignal:
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
         attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=False)
 
-        # Branch should be gone
+        assert attempt.branch_name is not None
+        assert attempt.status == BackfillStatus.CONFLICT
+        # Branch must be deleted under keep_branch_on_failure=False.
         result = sp.run(["git", "branch"], cwd=str(tmp_path), capture_output=True, text=True)
-        if attempt.branch_name:
-            assert attempt.branch_name not in result.stdout
+        assert attempt.branch_name not in result.stdout, (
+            f"Branch {attempt.branch_name!r} was NOT deleted despite keep_branch_on_failure=False."
+        )
 
     async def test_branch_collision_returns_conflict(self, tmp_path, db, provider):
         """If the candidate branch already exists, apply_signal returns CONFLICT."""
@@ -946,6 +962,84 @@ class TestApplySignal:
         assert attempt.status == BackfillStatus.CONFLICT
         assert attempt.error is not None
         assert "already exists" in attempt.error
+
+    @pytest.mark.parametrize("keep_branch_on_failure", [True, False])
+    async def test_accepted_happy_path_preserves_branch(
+        self, tmp_path, db, provider, keep_branch_on_failure
+    ):
+        """End-to-end happy path: valid diff applies cleanly, tests pass,
+        attempt reaches ACCEPTED status, and the candidate branch is
+        preserved regardless of keep_branch_on_failure.
+
+        This is the only test that exercises the full apply_signal flow
+        through to ACCEPTED — every other TestApplySignal case tests a
+        failure branch. A regression that made apply_signal unable to
+        reach ACCEPTED would otherwise pass the entire suite.
+        """
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+        # Create a file that the patch will modify
+        (tmp_path / "src").mkdir()
+        target_file = tmp_path / "src" / "cache.py"
+        target_file.write_text("old\n")
+        sp.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+        sp.run(
+            ["git", "commit", "-m", "add cache"],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        # Valid unified diff that matches the current file content
+        valid_diff = "--- a/src/cache.py\n+++ b/src/cache.py\n@@ -1 +1 @@\n-old\n+new\n"
+        provider.set_file_diff("forker1", "src/cache.py", valid_diff)
+
+        service = BackfillService(
+            db=db,
+            provider=provider,
+            repo_path=tmp_path,
+            min_significance=5,
+            test_command="true",  # always passes
+        )
+        attempt = await service.apply_signal(
+            signal["id"], keep_branch_on_failure=keep_branch_on_failure
+        )
+
+        # The headline invariants of the refactor
+        assert attempt.status == BackfillStatus.ACCEPTED
+        assert attempt.branch_name is not None
+        assert attempt.score == 1.0
+        assert attempt.files_patched == ["src/cache.py"]
+
+        # Candidate branch must survive regardless of keep_branch_on_failure
+        # (success branches are always preserved)
+        branches = sp.run(["git", "branch"], cwd=str(tmp_path), capture_output=True, text=True)
+        assert attempt.branch_name in branches.stdout, (
+            f"ACCEPTED branch {attempt.branch_name!r} was deleted. git branch: {branches.stdout!r}"
+        )
+
+        # The attempt must be persisted to the DB
+        attempts = await db.list_backfill_attempts(repo_id=repo["id"])
+        assert len(attempts) == 1
+        assert attempts[0]["id"] == attempt.id
+        assert attempts[0]["status"] == "accepted"
+
+        # And the patch content must be on disk (on whatever branch we're on
+        # after cleanup — if we're back on the original branch, the file
+        # still says "old"; if we're on the candidate, it says "new")
+        sp.run(
+            ["git", "checkout", attempt.branch_name],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+        assert target_file.read_text() == "new\n"
 
 
 # ---------------------------------------------------------------------------
@@ -1260,7 +1354,8 @@ class TestReadFailingTestFiles:
 
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
         result = await service.read_failing_test_files(
-            test_output="tests/test_example.py:1: AssertionError\nFAILED\n"
+            test_output="tests/test_example.py:1: AssertionError\nFAILED\n",
+            returncode=1,
         )
 
         assert result["returncode"] == 1
@@ -1268,13 +1363,22 @@ class TestReadFailingTestFiles:
         assert result["files"][0]["path"] == "tests/test_example.py"
         assert "def test_x" in result["files"][0]["content"]
 
+    async def test_requires_returncode_when_passing_stored_output(self, db, provider):
+        """Supplying stored test_output without returncode raises ValueError."""
+        import pytest
+
+        service = BackfillService(db=db, provider=provider)
+        with pytest.raises(ValueError, match="returncode"):
+            await service.read_failing_test_files(test_output="some output")
+
     async def test_ignores_non_test_files_in_output(self, tmp_path, db, provider):
         """Production files mentioned in pytest output are excluded from results."""
         _init_git_repo_sync(tmp_path)
 
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
         result = await service.read_failing_test_files(
-            test_output="src/forkhub/models.py:5: TypeError\n"
+            test_output="src/forkhub/models.py:5: TypeError\n",
+            returncode=1,
         )
 
         assert result["files"] == []
@@ -1285,7 +1389,8 @@ class TestReadFailingTestFiles:
 
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
         result = await service.read_failing_test_files(
-            test_output="tests/test_missing.py:1: AssertionError\n"
+            test_output="tests/test_missing.py:1: AssertionError\n",
+            returncode=1,
         )
 
         assert result["files"] == []

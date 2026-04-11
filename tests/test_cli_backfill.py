@@ -339,6 +339,46 @@ class TestApplyCommand:
         assert payload["exit_reason"] == "fetch_error"
 
 
+class TestApplyExitCodeMapping:
+    """Lock the public exit-code contract for external agents.
+
+    `_apply_exit_code_and_reason` is the single source of truth for how
+    BackfillAttempt status translates to CLI exit codes. This table
+    guards against any silent renumbering or collapsing of codes.
+    """
+
+    @pytest.mark.parametrize(
+        ("status", "error", "expected_code", "expected_reason"),
+        [
+            (BackfillStatus.ACCEPTED, None, 0, "accepted"),
+            (BackfillStatus.PENDING, None, 0, "pending"),
+            (BackfillStatus.TESTS_FAILED, None, 1, "tests_failed"),
+            (BackfillStatus.CONFLICT, "branch already exists", 2, "conflict"),
+            (BackfillStatus.PATCH_FAILED, "patch did not apply cleanly", 2, "patch_failed"),
+            (
+                BackfillStatus.PATCH_FAILED,
+                "No diffs could be fetched for signal files",
+                3,
+                "fetch_error",
+            ),
+            (BackfillStatus.REJECTED, None, 1, "rejected"),
+        ],
+    )
+    def test_exit_code_mapping(self, status, error, expected_code, expected_reason):
+        from forkhub.cli.backfill_cmd import _apply_exit_code_and_reason
+
+        attempt = BackfillAttempt(
+            signal_id="s1",
+            fork_id="f1",
+            tracked_repo_id="r1",
+            status=status,
+            error=error,
+        )
+        code, reason = _apply_exit_code_and_reason(attempt)
+        assert code == expected_code
+        assert reason == expected_reason
+
+
 # ---------------------------------------------------------------------------
 # cleanup
 # ---------------------------------------------------------------------------
@@ -502,7 +542,8 @@ class TestReadFailuresCommand:
             provider=provider,
             capture_output=output,
         )
-        assert exit_code == 0
+        # Tests failed, so CLI returns exit 1 (was 0 before — now propagates outcome)
+        assert exit_code == 1
         payload = json.loads(output[0])
         assert payload["returncode"] == 1
         assert len(payload["files"]) == 1
