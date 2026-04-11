@@ -95,3 +95,7 @@
 {"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-10T22:37:56Z","event_type":"closed","id":95,"issue_id":"forkhub-3un","new_value":"Shipped in PR #6 (feature/backfill-decoupling): TestFixer protocol extracted, claude-agent-sdk moved to [claude] optional extra, CLI primitives sub-app with 10 subcommands for external-agent-driven backfill","old_value":""}
 {"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-11T06:58:20Z","event_type":"created","id":96,"issue_id":"forkhub-0tf","new_value":"","old_value":""}
 {"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-11T07:45:14Z","event_type":"created","id":97,"issue_id":"forkhub-7qk","new_value":"","old_value":""}
+{"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-11T07:45:39Z","event_type":"created","id":98,"issue_id":"forkhub-618","new_value":"","old_value":""}
+{"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-11T07:45:40Z","event_type":"created","id":99,"issue_id":"forkhub-hgm","new_value":"","old_value":""}
+{"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-11T07:46:04Z","event_type":"closed","id":100,"issue_id":"forkhub-0tf","new_value":"Superseded by forkhub-hgm (Wire SyncService → Analyzer). Same root cause, more complete description with fix plan and verification steps. Part of the forkhub-7qk analyzer decoupling epic.","old_value":""}
+{"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-11T08:02:56Z","event_type":"created","id":101,"issue_id":"forkhub-73l","new_value":"","old_value":""}
