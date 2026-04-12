@@ -82,8 +82,11 @@ uv run forkhub init --user your-github-username
 # See what's tracked
 uv run forkhub repos
 
-# Sync fork data from GitHub
+# Sync fork data from GitHub (and classify changes with the AI analyzer)
 uv run forkhub sync
+
+# Skip analysis — discovery only, no Anthropic API cost
+uv run forkhub sync --no-analyze
 
 # View forks for a specific repo
 uv run forkhub forks owner/repo
@@ -105,7 +108,8 @@ uv run forkhub digest
 | `forkhub forks <owner> <repo>` | List forks of a tracked repo |
 | `forkhub inspect <owner> <repo>` | Detailed view of a single fork |
 | `forkhub clusters <owner> <repo>` | Show signal clusters (similar changes across forks) |
-| `forkhub sync` | Sync fork data from GitHub |
+| `forkhub sync` | Sync fork data from GitHub and run AI analysis on changed forks |
+| `forkhub sync --no-analyze` | Sync without running the AI analyzer (no Anthropic API cost) |
 | `forkhub digest` | Generate and deliver a change digest |
 | `forkhub backfill run` | Run the autonomous backfill loop |
 | `forkhub backfill list` | List previous backfill attempts |

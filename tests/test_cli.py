@@ -443,6 +443,59 @@ class TestSyncCommand:
         output = "\n".join(output_lines)
         assert "not found" in output.lower() or "not tracked" in output.lower()
 
+    async def test_sync_no_analyze_flag_skips_auto_built_analyzer(
+        self, db: Database, provider: StubGitProvider
+    ):
+        """With `auto_analyze=False` and no injected analyzer, `_sync_impl`
+        must NOT attempt to construct a ClaudeAnalyzer. Sync should still
+        complete successfully."""
+        from forkhub.cli.sync_cmd import _sync_impl
+        from forkhub.cli.track_cmd import _track_impl
+        from forkhub.config import SyncSettings
+
+        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
+
+        output_lines: list[str] = []
+        await _sync_impl(
+            repo="testuser/alpha",
+            db=db,
+            provider=provider,
+            sync_settings=SyncSettings(),
+            capture_output=output_lines,
+            auto_analyze=False,
+        )
+
+        output = "\n".join(output_lines)
+        # With no analyzer wired, the CLI must distinguish "skipped"
+        # from a real "0 signals" result so the user isn't misled.
+        assert "New signals: skipped (no analyzer)" in output
+
+    async def test_sync_output_shows_new_signals_count(
+        self, db: Database, provider: StubGitProvider
+    ):
+        """The single-repo sync output must include a 'New signals:' line."""
+        from forkhub.cli.sync_cmd import _sync_impl
+        from forkhub.cli.track_cmd import _track_impl
+        from forkhub.config import SyncSettings
+
+        from .stubs import StubAnalyzer
+
+        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
+
+        output_lines: list[str] = []
+        await _sync_impl(
+            repo="testuser/alpha",
+            db=db,
+            provider=provider,
+            sync_settings=SyncSettings(),
+            capture_output=output_lines,
+            auto_analyze=False,
+            analyzer=StubAnalyzer(),
+        )
+
+        output = "\n".join(output_lines)
+        assert "New signals:" in output
+
 
 # ---------------------------------------------------------------------------
 # digest command

@@ -1,5 +1,5 @@
-# ABOUTME: Analysis orchestration that wraps Agent SDK sessions.
-# ABOUTME: Manages agent lifecycle, budget caps, and session batching.
+# ABOUTME: ClaudeAnalyzer — Claude-backed Analyzer implementation via Agent SDK sessions.
+# ABOUTME: One concrete Analyzer protocol implementation; manages sessions, budgets, and batching.
 
 from __future__ import annotations
 
@@ -39,11 +39,12 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 30
 
 
-class AnalysisRunner:
-    """Orchestrates Agent SDK sessions for fork analysis.
+class ClaudeAnalyzer:
+    """Claude-backed Analyzer that orchestrates Agent SDK sessions.
 
-    Coordinates the lifecycle of analysis sessions including MCP tool setup,
-    hook registration, prompt construction, budget management, and batching
+    One concrete implementation of the `Analyzer` protocol. Coordinates
+    the lifecycle of analysis sessions including MCP tool setup, hook
+    registration, prompt construction, budget management, and batching
     of large fork sets.
     """
 
@@ -56,7 +57,7 @@ class AnalysisRunner:
     ) -> None:
         if not _CLAUDE_SDK_AVAILABLE:
             raise ImportError(
-                "AnalysisRunner requires the 'claude' extra. "
+                "ClaudeAnalyzer requires the 'claude' extra. "
                 "Install with: uv add 'forkhub[claude]' or pip install 'forkhub[claude]'"
             )
         self._db = db
@@ -64,7 +65,7 @@ class AnalysisRunner:
         self._embedding_provider = embedding_provider
         self._settings = settings
 
-    async def analyze_repo(
+    async def analyze(
         self,
         repo: TrackedRepo,
         changed_forks: list[Fork],
@@ -74,7 +75,7 @@ class AnalysisRunner:
 
         Splits large fork sets into batches of 30, runs an Agent SDK
         session for each batch, and collects all signals created during
-        the sessions.
+        the sessions. Conforms to the `Analyzer` protocol.
         """
         from forkhub.models import Signal
 
@@ -270,3 +271,10 @@ class AnalysisRunner:
             permission_mode="bypassPermissions",
             max_turns=50,
         )
+
+    # Alias: `analyze_repo` is an accepted name for `analyze`.
+    analyze_repo = analyze
+
+
+# Alias: `AnalysisRunner` is an accepted name for `ClaudeAnalyzer`.
+AnalysisRunner = ClaudeAnalyzer

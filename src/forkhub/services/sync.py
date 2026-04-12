@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -13,7 +14,7 @@ from forkhub.models import Fork, ForkVitality, SyncStatus, TrackedRepo
 if TYPE_CHECKING:
     from forkhub.config import SyncSettings
     from forkhub.database import Database
-    from forkhub.interfaces import GitProvider
+    from forkhub.interfaces import Analyzer, GitProvider
     from forkhub.models import ForkInfo
     from forkhub.services.tracker import TrackerService
 
@@ -37,6 +38,7 @@ class RepoSyncResult:
     new_forks: int = 0
     changed_forks: list[str] = field(default_factory=list)
     new_releases: int = 0
+    signals_generated: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -47,6 +49,7 @@ class SyncResult:
     repos_synced: int = 0
     total_changed_forks: int = 0
     total_new_releases: int = 0
+    total_signals_generated: int = 0
     results: list[RepoSyncResult] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     reconcile: ReconcileResult | None = None
@@ -77,11 +80,13 @@ class SyncService:
         settings: SyncSettings,
         *,
         clock: datetime | None = None,
+        analyzer: Analyzer | None = None,
     ) -> None:
         self._db = db
         self._provider = provider
         self._settings = settings
         self._clock = clock
+        self._analyzer = analyzer
 
     async def sync_all(
         self,
@@ -119,6 +124,7 @@ class SyncService:
                 result.repos_synced += 1
                 result.total_changed_forks += len(repo_result.changed_forks)
                 result.total_new_releases += repo_result.new_releases
+                result.total_signals_generated += repo_result.signals_generated
                 result.errors.extend(repo_result.errors)
             except Exception as exc:
                 error_msg = f"Error syncing {repo_row['full_name']}: {exc}"
@@ -236,6 +242,34 @@ class SyncService:
                     vitality=self._classify_vitality(fork_info.last_pushed_at),
                     head_sha=self._provider_head_sha(fork_info),
                 )
+
+                # Active forks are compared on first discovery so
+                # `commits_ahead` / `changed_forks` reflect divergence
+                # immediately, before a second sync establishes a
+                # baseline SHA. Only ACTIVE vitality qualifies; dormant,
+                # dead, and unknown forks skip the compare to conserve
+                # API budget.
+                if new_fork.vitality == ForkVitality.ACTIVE:
+                    try:
+                        compare_result = await self._provider.compare(
+                            repo.owner,
+                            repo.name,
+                            repo.default_branch,
+                            f"{fork_info.owner}:{fork_info.default_branch}",
+                        )
+                        new_fork.commits_ahead = compare_result.ahead_by
+                        new_fork.commits_behind = compare_result.behind_by
+                        if compare_result.ahead_by > 0:
+                            result.changed_forks.append(fork_info.full_name)
+                    except Exception as exc:
+                        # Mirror the existing-fork compare handler:
+                        # record to result.errors so callers can tell
+                        # something failed, not just hope they're reading
+                        # the warning log.
+                        error_msg = f"Error comparing new fork {fork_info.full_name}: {exc}"
+                        result.errors.append(error_msg)
+                        logger.warning(error_msg)
+
                 await self._db.insert_fork(_fork_to_dict(new_fork))
                 result.new_forks += 1
             else:
@@ -278,6 +312,35 @@ class SyncService:
             repo.owner, repo.name, since=repo.last_synced_at
         )
         result.new_releases = len(releases)
+
+        # Step 5: Run the analyzer on changed forks + new releases when
+        # one is configured. Wrapped in try/except so analyzer failures
+        # don't abort the sync — discovery data is valuable even without
+        # classification. `CancelledError` is re-raised so Ctrl-C and
+        # shutdown semantics stay intact.
+        if self._analyzer is not None and (result.changed_forks or releases):
+            # Build Fork models OUTSIDE the analyzer try/except so any
+            # row→model conversion bug surfaces as a distinct error
+            # instead of being attributed to the analyzer.
+            changed_fork_models: list[Fork] = []
+            for name in result.changed_forks:
+                row = await self._db.get_fork_by_name(name)
+                if row is not None:
+                    changed_fork_models.append(_fork_from_row(row))
+
+            try:
+                signals = await self._analyzer.analyze(repo, changed_fork_models, releases)
+                result.signals_generated = len(signals)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                error_msg = (
+                    f"Analyzer failed for {repo.full_name} "
+                    f"({len(changed_fork_models)} forks, {len(releases)} releases): "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                logger.exception(error_msg)
+                result.errors.append(error_msg)
 
         # Successful sync — clear any previous error state
         _set_sync_status(repo_row, SyncStatus.OK)
@@ -338,3 +401,13 @@ def _fork_to_dict(fork: Fork) -> dict:
     d["updated_at"] = fork.updated_at.isoformat()
     d["last_pushed_at"] = fork.last_pushed_at.isoformat() if fork.last_pushed_at else None
     return d
+
+
+def _fork_from_row(row: dict) -> Fork:
+    """Convert a database row dict back into a Fork model.
+
+    Pydantic handles ISO datetime string coercion automatically, so the
+    raw row can be unpacked directly. Extra keys are ignored by Pydantic
+    v2 when the model's `extra` config is the default.
+    """
+    return Fork(**row)

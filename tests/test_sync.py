@@ -409,3 +409,346 @@ class TestReconciliation:
         assert repo.full_name in result.repos_recovered
         # Phase 2 failed, so no discovered repos
         assert result.new_repos_discovered == []
+
+
+# ---------------------------------------------------------------------------
+# Analyzer integration (forkhub-hgm)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncAnalyzerIntegration:
+    """SyncService must call the injected analyzer when forks change."""
+
+    async def test_sync_invokes_analyzer_when_forks_change(
+        self, db: Database, provider: SyncStubGitProvider, settings: SyncSettings
+    ):
+        """Analyzer.analyze is called once with the changed forks and its
+        returned signal count is exposed on the result."""
+        from forkhub.models import Signal, SignalCategory
+
+        from .stubs import StubAnalyzer
+
+        repo = await _insert_tracked_repo(db)
+        # Pre-seed forker1 with a stale SHA so compare() fires
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=5001,
+            owner="forker1",
+            full_name="forker1/repo-a",
+            head_sha="stale-sha",
+        )
+
+        canned_signals = [
+            Signal(
+                tracked_repo_id=repo.id,
+                fork_id=None,
+                category=SignalCategory.FEATURE,
+                summary="Added X",
+                significance=7,
+            ),
+            Signal(
+                tracked_repo_id=repo.id,
+                fork_id=None,
+                category=SignalCategory.FIX,
+                summary="Fixed Y",
+                significance=6,
+            ),
+        ]
+        analyzer = StubAnalyzer(signals=canned_signals)
+
+        sync_service = SyncService(
+            db=db, provider=provider, settings=settings, clock=_NOW, analyzer=analyzer
+        )
+        result = await sync_service.sync_repo(repo.id)
+
+        assert len(analyzer.calls) == 1
+        call = analyzer.calls[0]
+        assert call["repo_full_name"] == "owner/repo-a"
+        assert "forker1/repo-a" in call["changed_fork_names"]
+        # SyncStubGitProvider seeds two releases for owner/repo-a; both
+        # must be passed through to the analyzer.
+        assert call["release_count"] == 2
+        # Two stub signals were returned → signals_generated == 2
+        assert result.signals_generated == 2
+
+    async def test_sync_skips_analyzer_when_no_changed_forks_or_releases(
+        self, db: Database, settings: SyncSettings
+    ):
+        """If nothing diverged and there are no releases, analyzer is not called."""
+        from .stubs import StubAnalyzer
+
+        repo = await _insert_tracked_repo(db, owner="owner", name="repo-b", github_id=1002)
+
+        # Pre-seed forker4 with the SHA the provider will report, so no
+        # change is detected. repo-b has no releases in SyncStubGitProvider.
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=6001,
+            owner="forker4",
+            full_name="forker4/repo-b",
+            head_sha="new-sha-forker4",
+        )
+
+        analyzer = StubAnalyzer()
+        sync_service = SyncService(
+            db=db,
+            provider=SyncStubGitProvider(),
+            settings=settings,
+            clock=_NOW,
+            analyzer=analyzer,
+        )
+        result = await sync_service.sync_repo(repo.id)
+
+        assert analyzer.calls == []
+        assert result.signals_generated == 0
+
+    async def test_sync_handles_analyzer_failure_gracefully(
+        self, db: Database, provider: SyncStubGitProvider, settings: SyncSettings
+    ):
+        """Analyzer exceptions must not abort the sync — record an error."""
+        from .stubs import StubAnalyzer
+
+        repo = await _insert_tracked_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=5001,
+            owner="forker1",
+            full_name="forker1/repo-a",
+            head_sha="stale-sha",
+        )
+
+        analyzer = StubAnalyzer(raise_error=RuntimeError("LLM budget exhausted"))
+        sync_service = SyncService(
+            db=db, provider=provider, settings=settings, clock=_NOW, analyzer=analyzer
+        )
+        result = await sync_service.sync_repo(repo.id)
+
+        assert result.signals_generated == 0
+        assert any("Analyzer failed" in e for e in result.errors)
+        assert any("LLM budget exhausted" in e for e in result.errors)
+
+    async def test_sync_without_analyzer_is_noop_for_analysis(
+        self, sync_service: SyncService, db: Database
+    ):
+        """SyncService constructed with analyzer=None (the default) must
+        still complete normally — no signals generated, no errors."""
+        repo = await _insert_tracked_repo(db)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert result.signals_generated == 0
+
+    async def test_sync_invokes_analyzer_for_releases_only_no_changed_forks(
+        self, db: Database, settings: SyncSettings
+    ):
+        """When new releases exist but no forks diverged, the analyzer
+        must still be called with an empty `changed_forks` list."""
+        from forkhub.models import Signal, SignalCategory
+
+        from .stubs import StubAnalyzer
+
+        # Use owner/repo-a which has two canned releases in the stub.
+        # Pre-seed forker1 with the provider's reported SHA so no fork
+        # compare fires. Pre-seed forker2 and forker3 so they are not
+        # new (would otherwise trigger new-fork compare on forker1
+        # which would add it to changed_forks).
+        provider = SyncStubGitProvider()
+        repo = await _insert_tracked_repo(db)
+        for github_id, owner, name, sha in [
+            (5001, "forker1", "forker1/repo-a", "new-sha-forker1"),
+            (5002, "forker2", "forker2/repo-a", "unchanged-sha-forker2"),
+            (5003, "forker3", "forker3/repo-a", "new-sha-forker3"),
+        ]:
+            await _insert_fork_in_db(
+                db,
+                tracked_repo_id=repo.id,
+                github_id=github_id,
+                owner=owner,
+                full_name=name,
+                head_sha=sha,
+            )
+
+        analyzer = StubAnalyzer(
+            signals=[
+                Signal(
+                    tracked_repo_id=repo.id,
+                    category=SignalCategory.RELEASE,
+                    summary="v2.0.0",
+                    significance=8,
+                )
+            ]
+        )
+        sync_service = SyncService(
+            db=db, provider=provider, settings=settings, clock=_NOW, analyzer=analyzer
+        )
+        result = await sync_service.sync_repo(repo.id)
+
+        assert len(analyzer.calls) == 1
+        call = analyzer.calls[0]
+        assert call["changed_fork_names"] == []
+        assert call["release_count"] == 2
+        assert result.signals_generated == 1
+
+    async def test_sync_passes_fully_hydrated_fork_models_to_analyzer(
+        self, db: Database, provider: SyncStubGitProvider, settings: SyncSettings
+    ):
+        """`_fork_from_row` must return real Fork models with populated
+        fields. A silent bug that dropped fields or mis-coerced the ISO
+        datetime would slip past the name-only assertions in the happy-path
+        test above."""
+        from .stubs import StubAnalyzer
+
+        repo = await _insert_tracked_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=5001,
+            owner="forker1",
+            full_name="forker1/repo-a",
+            head_sha="stale-sha",
+            stars=15,
+        )
+
+        analyzer = StubAnalyzer()
+        sync_service = SyncService(
+            db=db, provider=provider, settings=settings, clock=_NOW, analyzer=analyzer
+        )
+        await sync_service.sync_repo(repo.id)
+
+        assert len(analyzer.calls) == 1
+        fork_models = analyzer.calls[0]["changed_forks"]
+        assert len(fork_models) == 1
+        f = fork_models[0]
+        assert f.full_name == "forker1/repo-a"
+        assert f.head_sha == "new-sha-forker1"  # updated by sync
+        assert f.commits_ahead == 5  # from canned CompareResult
+        assert f.stars == 15
+
+    async def test_sync_all_aggregates_signals_generated(
+        self, db: Database, settings: SyncSettings
+    ):
+        """`SyncResult.total_signals_generated` must be the sum of
+        per-repo `signals_generated` across all repos in `sync_all`."""
+        from forkhub.models import Signal, SignalCategory
+
+        from .stubs import StubAnalyzer
+
+        repo_a = await _insert_tracked_repo(db, owner="owner", name="repo-a", github_id=1001)
+        repo_b = await _insert_tracked_repo(db, owner="owner", name="repo-b", github_id=1002)
+        # Pre-seed both repos' forks with stale SHAs so compare fires.
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo_a.id,
+            github_id=5001,
+            owner="forker1",
+            full_name="forker1/repo-a",
+            head_sha="stale-sha-1",
+        )
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo_b.id,
+            github_id=6001,
+            owner="forker4",
+            full_name="forker4/repo-b",
+            head_sha="stale-sha-2",
+        )
+
+        # Stub returns 3 signals per call (2 repos × 3 = 6 total).
+        canned = [
+            Signal(
+                tracked_repo_id=repo_a.id,
+                category=SignalCategory.FEATURE,
+                summary=f"Signal {i}",
+                significance=5,
+            )
+            for i in range(3)
+        ]
+        analyzer = StubAnalyzer(signals=canned)
+
+        sync_service = SyncService(
+            db=db,
+            provider=SyncStubGitProvider(),
+            settings=settings,
+            clock=_NOW,
+            analyzer=analyzer,
+        )
+        result = await sync_service.sync_all(reconcile=False)
+
+        assert result.repos_synced == 2
+        assert len(analyzer.calls) == 2
+        # StubAnalyzer returns the same canned list on every call, so
+        # each per-repo result has signals_generated == 3 → total == 6.
+        assert result.total_signals_generated == 6
+        per_repo = [r.signals_generated for r in result.results]
+        assert per_repo == [3, 3]
+
+
+# ---------------------------------------------------------------------------
+# New-fork compare-on-first-discovery fix (forkhub-0tf root cause)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncNewForkCompare:
+    """First-sync discovery must compare active forks so `changed_forks`
+    isn't always empty when a repo is freshly tracked."""
+
+    async def test_new_active_fork_gets_compared_on_first_sync(
+        self, sync_service: SyncService, db: Database
+    ):
+        """forker1 is brand-new + active + diverged (ahead_by=5) → must
+        land in changed_forks and have commits_ahead persisted."""
+        repo = await _insert_tracked_repo(db)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert "forker1/repo-a" in result.changed_forks
+
+        row = await db.get_fork_by_name("forker1/repo-a")
+        assert row is not None
+        assert row["commits_ahead"] == 5
+        assert row["commits_behind"] == 2
+
+    async def test_new_dormant_fork_not_compared(self, sync_service: SyncService, db: Database):
+        """Dormant forks must skip compare() on first discovery to save
+        API budget. forker2 is dormant, so commits_ahead stays 0."""
+        repo = await _insert_tracked_repo(db)
+        await sync_service.sync_repo(repo.id)
+
+        row = await db.get_fork_by_name("forker2/repo-a")
+        assert row is not None
+        assert row["commits_ahead"] == 0
+        assert row["vitality"] == "dormant"
+
+    async def test_new_active_fork_with_zero_ahead_not_marked_changed(
+        self, db: Database, settings: SyncSettings
+    ):
+        """An active fork whose compare returns ahead_by=0 must NOT be
+        added to changed_forks — nothing diverged."""
+        provider = SyncStubGitProvider()
+        # forker4/repo-b is active but SyncStubGitProvider has no canned
+        # CompareResult for it → defaults to ahead_by=0, behind_by=0.
+        repo = await _insert_tracked_repo(db, owner="owner", name="repo-b", github_id=1002)
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert "forker4/repo-b" not in result.changed_forks
+        row = await db.get_fork_by_name("forker4/repo-b")
+        assert row is not None
+        assert row["commits_ahead"] == 0
+
+    async def test_new_fork_compare_failure_logged_not_raised(
+        self, db: Database, provider: SyncStubGitProvider, settings: SyncSettings
+    ):
+        """If provider.compare() raises during first-sync discovery, the
+        fork must still be inserted and changed_forks stays empty for it."""
+        provider._error_forks.add("forker1/repo-a")
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        repo = await _insert_tracked_repo(db)
+        result = await sync_service.sync_repo(repo.id)
+
+        # Fork should still have been inserted
+        row = await db.get_fork_by_name("forker1/repo-a")
+        assert row is not None
+        # But not counted as changed (compare failed)
+        assert "forker1/repo-a" not in result.changed_forks

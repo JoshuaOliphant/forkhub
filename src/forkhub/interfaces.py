@@ -1,5 +1,5 @@
 # ABOUTME: Protocol definitions for ForkHub's plugin system.
-# ABOUTME: Defines GitProvider, NotificationBackend, EmbeddingProvider, and TestFixer interfaces.
+# ABOUTME: GitProvider, NotificationBackend, EmbeddingProvider, TestFixer, Analyzer.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -13,10 +13,13 @@ if TYPE_CHECKING:
         DeliveryResult,
         Digest,
         FixSuggestion,
+        Fork,
         ForkPage,
         RateLimitInfo,
         Release,
         RepoInfo,
+        Signal,
+        TrackedRepo,
     )
 
 
@@ -81,3 +84,23 @@ class TestFixer(Protocol):
         files_patched: list[str],
         test_file_contents: dict[str, str],
     ) -> FixSuggestion: ...
+
+
+@runtime_checkable
+class Analyzer(Protocol):
+    """Interface for analyzing fork changes and generating signals.
+
+    Implementations can use any LLM provider (Claude, OpenAI, local
+    models), a rule-based approach, or anything else. SyncService calls
+    `analyze` with the forks that have diverged since the last sync and
+    the new upstream releases, and expects a list of `Signal` objects
+    back. How those signals get built or persisted is implementation-
+    defined — callers should treat the returned list as authoritative.
+    """
+
+    async def analyze(
+        self,
+        repo: TrackedRepo,
+        changed_forks: list[Fork],
+        new_releases: list[Release],
+    ) -> list[Signal]: ...

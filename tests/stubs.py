@@ -13,11 +13,14 @@ from forkhub.models import (
     DeliveryResult,
     Digest,
     FixSuggestion,
+    Fork,
     ForkInfo,
     ForkPage,
     RateLimitInfo,
     Release,
     RepoInfo,
+    Signal,
+    TrackedRepo,
 )
 
 # ---------------------------------------------------------------------------
@@ -467,3 +470,44 @@ class StubTestFixer:
             self._call_count += 1
             return result
         return FixSuggestion(reasoning="No more canned responses", should_reject=True)
+
+
+# ── Analyzer Stub ────────────────────────────────────────────
+
+
+class StubAnalyzer:
+    """Real stub conforming to the Analyzer protocol.
+
+    Returns canned Signal responses and records call inputs so tests
+    can assert what was passed to the analyzer. Set `raise_error` to
+    make analyze() raise an exception for failure-path testing.
+    """
+
+    def __init__(
+        self,
+        signals: list[Signal] | None = None,
+        *,
+        raise_error: Exception | None = None,
+    ) -> None:
+        self._signals = signals or []
+        self._raise_error = raise_error
+        self.calls: list[dict] = []
+
+    async def analyze(
+        self,
+        repo: TrackedRepo,
+        changed_forks: list[Fork],
+        new_releases: list[Release],
+    ) -> list[Signal]:
+        self.calls.append(
+            {
+                "repo_full_name": repo.full_name,
+                "changed_fork_names": [f.full_name for f in changed_forks],
+                "changed_forks": list(changed_forks),
+                "release_count": len(new_releases),
+                "releases": list(new_releases),
+            }
+        )
+        if self._raise_error is not None:
+            raise self._raise_error
+        return list(self._signals)
