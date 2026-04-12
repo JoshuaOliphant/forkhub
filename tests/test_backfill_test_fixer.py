@@ -12,7 +12,7 @@ import pytest
 from forkhub.models import BackfillAttempt, FixEdit, FixSuggestion
 from forkhub.services.backfill import BackfillService, _is_test_file, _parse_failing_test_files
 
-from .stubs import StubTestFixer
+from .stubs import StubAnalyzer, StubTestFixer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -415,6 +415,45 @@ class TestProtocolConformance:
         assert isinstance(fixer, TestFixer)
 
 
+class TestAnalyzerProtocolConformance:
+    def test_stub_analyzer_conforms_to_protocol(self):
+        """StubAnalyzer must be recognized as an Analyzer at runtime."""
+        from forkhub.interfaces import Analyzer
+
+        stub = StubAnalyzer()
+        assert isinstance(stub, Analyzer)
+
+    async def test_claude_analyzer_conforms_to_protocol(self, db):
+        """ClaudeAnalyzer must be recognized as an Analyzer at runtime.
+
+        Skipped when the [claude] extra isn't installed (ClaudeAnalyzer
+        raises ImportError in __init__ in that case).
+        """
+        pytest.importorskip("claude_agent_sdk")
+
+        from forkhub.agent.runner import ClaudeAnalyzer
+        from forkhub.config import ForkHubSettings
+        from forkhub.interfaces import Analyzer
+
+        from .stubs import StubEmbeddingProvider, StubGitProvider
+
+        analyzer = ClaudeAnalyzer(
+            db=db,
+            provider=StubGitProvider(),
+            embedding_provider=StubEmbeddingProvider(),
+            settings=ForkHubSettings(),
+        )
+        assert isinstance(analyzer, Analyzer)
+
+    def test_analysis_runner_back_compat_alias(self):
+        """The old `AnalysisRunner` name must still point at ClaudeAnalyzer."""
+        pytest.importorskip("claude_agent_sdk")
+
+        from forkhub.agent.runner import AnalysisRunner, ClaudeAnalyzer
+
+        assert AnalysisRunner is ClaudeAnalyzer
+
+
 # ---------------------------------------------------------------------------
 # Optional claude extra — graceful degradation
 # ---------------------------------------------------------------------------
@@ -431,6 +470,36 @@ class TestOptionalClaudeExtra:
 
         with pytest.raises(ImportError, match="claude"):
             tf_mod.ClaudeTestFixer()
+
+    def test_claude_analyzer_raises_helpful_error_without_sdk(self, monkeypatch):
+        """ClaudeAnalyzer should raise ImportError with install instructions
+        when claude-agent-sdk is not available."""
+        import forkhub.agent.runner as runner_mod
+
+        monkeypatch.setattr(runner_mod, "_CLAUDE_SDK_AVAILABLE", False)
+
+        with pytest.raises(ImportError, match="claude"):
+            runner_mod.ClaudeAnalyzer(
+                db=None,  # type: ignore[arg-type]
+                provider=None,  # type: ignore[arg-type]
+                embedding_provider=None,  # type: ignore[arg-type]
+                settings=None,  # type: ignore[arg-type]
+            )
+
+    async def test_forkhub_facade_degrades_when_sdk_unavailable(self, monkeypatch):
+        """ForkHub() with auto_analyze=True must not crash when the SDK
+        isn't installed — analyzer should silently be None."""
+        import forkhub.agent.runner as runner_mod
+
+        monkeypatch.setattr(runner_mod, "_CLAUDE_SDK_AVAILABLE", False)
+
+        from forkhub import ForkHub
+        from forkhub.config import ForkHubSettings
+        from forkhub.database import Database
+
+        db = Database(":memory:")
+        hub = ForkHub(settings=ForkHubSettings(), db=db, auto_analyze=True)
+        assert hub._analyzer is None
 
     def test_core_modules_importable_without_sdk(self):
         """Core forkhub modules must import without claude-agent-sdk.

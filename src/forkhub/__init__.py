@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,7 +14,12 @@ if TYPE_CHECKING:
 
     from forkhub.config import ForkHubSettings
     from forkhub.database import Database
-    from forkhub.interfaces import EmbeddingProvider, GitProvider, NotificationBackend
+    from forkhub.interfaces import (
+        Analyzer,
+        EmbeddingProvider,
+        GitProvider,
+        NotificationBackend,
+    )
     from forkhub.models import (
         BackfillAttempt as BackfillAttempt,
     )
@@ -31,7 +37,54 @@ if TYPE_CHECKING:
     )
     from forkhub.services.sync import ReconcileResult, SyncResult
 
+logger = logging.getLogger(__name__)
+
 __version__ = "0.3.0"
+
+
+def _build_default_embedding_provider() -> EmbeddingProvider:
+    """Construct the default embedding provider (LocalEmbeddingProvider).
+
+    Single source of truth so both `ForkHub.__init__` and the CLI pick
+    up the same implementation when new providers are wired in later.
+    """
+    from forkhub.embeddings.local import LocalEmbeddingProvider
+
+    return LocalEmbeddingProvider()
+
+
+def _build_default_analyzer(
+    db: Database,
+    provider: GitProvider,
+    settings: ForkHubSettings,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> Analyzer | None:
+    """Construct the default `ClaudeAnalyzer`, or return None when the
+    `[claude]` optional extra is not installed.
+
+    Single source of truth so both `ForkHub.__init__` and the CLI share
+    the same construction and graceful-degradation behavior. Callers
+    that already have an embedding provider can pass it in to avoid
+    re-instantiating the default.
+    """
+    if embedding_provider is None:
+        embedding_provider = _build_default_embedding_provider()
+
+    try:
+        from forkhub.agent.runner import ClaudeAnalyzer
+
+        return ClaudeAnalyzer(
+            db=db,
+            provider=provider,
+            embedding_provider=embedding_provider,
+            settings=settings,
+        )
+    except ImportError:
+        logger.info(
+            "Analyzer skipped: [claude] extra not installed. "
+            "Discovery will still run but no signals will be generated."
+        )
+        return None
 
 
 class ForkHub:
@@ -48,6 +101,9 @@ class ForkHub:
         notification_backends: list[NotificationBackend] | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         db: Database | None = None,
+        *,
+        auto_analyze: bool = True,
+        analyzer: Analyzer | None = None,
     ) -> None:
         from forkhub.config import get_db_path, load_settings
         from forkhub.database import Database as _Database
@@ -65,8 +121,21 @@ class ForkHub:
         )
         self._embedding_provider = embedding_provider or self._build_default_embedding_provider()
 
+        # Build the default analyzer via the shared factory when one
+        # wasn't injected and `auto_analyze` is enabled.
+        if analyzer is None and auto_analyze:
+            analyzer = _build_default_analyzer(
+                db=self._db,
+                provider=self._provider,
+                embedding_provider=self._embedding_provider,
+                settings=self._settings,
+            )
+        self._analyzer: Analyzer | None = analyzer
+
         self._tracker = TrackerService(self._db, self._provider)
-        self._sync = SyncService(self._db, self._provider, self._settings.sync)
+        self._sync = SyncService(
+            self._db, self._provider, self._settings.sync, analyzer=self._analyzer
+        )
         self._cluster = ClusterService(self._db, self._embedding_provider)
         self._digest = DigestService(self._db, self._backends)
 
@@ -78,9 +147,7 @@ class ForkHub:
 
     def _build_default_embedding_provider(self) -> EmbeddingProvider:
         """Build the default local embedding provider."""
-        from forkhub.embeddings.local import LocalEmbeddingProvider
-
-        return LocalEmbeddingProvider()
+        return _build_default_embedding_provider()
 
     async def __aenter__(self) -> ForkHub:
         await self._db.connect()
@@ -147,6 +214,7 @@ class ForkHub:
                 repos_synced=1,
                 total_changed_forks=len(result.changed_forks),
                 total_new_releases=result.new_releases,
+                total_signals_generated=result.signals_generated,
                 results=[result],
                 errors=result.errors,
             )

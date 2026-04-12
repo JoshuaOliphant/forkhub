@@ -13,7 +13,7 @@ from forkhub.cli.helpers import async_command
 if TYPE_CHECKING:
     from forkhub.config import SyncSettings
     from forkhub.database import Database
-    from forkhub.interfaces import GitProvider
+    from forkhub.interfaces import Analyzer, GitProvider
 
 console = Console()
 
@@ -33,10 +33,15 @@ async def _sync_impl(
     provider: GitProvider | None = None,
     sync_settings: SyncSettings | None = None,
     capture_output: list[str] | None = None,
+    *,
+    auto_analyze: bool = True,
+    analyzer: Analyzer | None = None,
 ) -> None:
     """Core sync logic."""
+    from forkhub import _build_default_analyzer
     from forkhub.cli.helpers import get_services
     from forkhub.config import SyncSettings as SyncSettingsImpl
+    from forkhub.config import load_settings
     from forkhub.services.sync import SyncService
     from forkhub.services.tracker import TrackerService
 
@@ -51,8 +56,26 @@ async def _sync_impl(
     if sync_settings is None:
         sync_settings = SyncSettingsImpl()
 
+    # Build the analyzer via the shared factory when the caller opted in
+    # and didn't inject one. The factory owns graceful degradation for a
+    # missing [claude] extra so the CLI stays thin.
+    if analyzer is None and auto_analyze:
+        analyzer_settings = settings if settings is not None else load_settings()
+        analyzer = _build_default_analyzer(
+            db=db,
+            provider=provider,
+            settings=analyzer_settings,
+        )
+        if analyzer is None:
+            _output(
+                "Analyzer skipped: [claude] extra not installed",
+                capture_output,
+            )
+
     try:
-        sync_service = SyncService(db=db, provider=provider, settings=sync_settings)
+        sync_service = SyncService(
+            db=db, provider=provider, settings=sync_settings, analyzer=analyzer
+        )
         tracker_service = TrackerService(db=db, provider=provider)
 
         if repo is not None:
@@ -70,6 +93,10 @@ async def _sync_impl(
             _output(f"  New forks discovered: {result.new_forks}", capture_output)
             _output(f"  Changed forks: {len(result.changed_forks)}", capture_output)
             _output(f"  New releases: {result.new_releases}", capture_output)
+            if analyzer is not None:
+                _output(f"  New signals: {result.signals_generated}", capture_output)
+            else:
+                _output("  New signals: skipped (no analyzer)", capture_output)
 
             if result.changed_forks:
                 _output("  Changed:", capture_output)
@@ -112,6 +139,13 @@ async def _sync_impl(
             _output(f"  Repos synced: {result.repos_synced}", capture_output)
             _output(f"  Total changed forks: {result.total_changed_forks}", capture_output)
             _output(f"  Total new releases: {result.total_new_releases}", capture_output)
+            if analyzer is not None:
+                _output(
+                    f"  Total new signals: {result.total_signals_generated}",
+                    capture_output,
+                )
+            else:
+                _output("  Total new signals: skipped (no analyzer)", capture_output)
 
             for repo_result in result.results:
                 if repo_result.new_forks or repo_result.changed_forks:
@@ -139,6 +173,14 @@ async def sync_command(
     no_reconcile: bool = typer.Option(
         False, "--no-reconcile", help="Skip repo reconciliation (health check + auto-discover)"
     ),
+    analyze: bool = typer.Option(
+        True,
+        "--analyze/--no-analyze",
+        help=(
+            "Run the AI analyzer on changed forks to generate signals. "
+            "Requires the [claude] extra; gracefully skipped if not installed."
+        ),
+    ),
 ) -> None:
     """Run the sync pipeline to discover and compare forks."""
-    await _sync_impl(repo=repo, no_reconcile=no_reconcile)
+    await _sync_impl(repo=repo, no_reconcile=no_reconcile, auto_analyze=analyze)

@@ -50,16 +50,15 @@ src/forkhub/
 │   └── console.py       # ConsoleBackend (Rich-formatted terminal output)
 ├── services/
 │   ├── tracker.py       # Repo discovery, track/untrack/exclude/include
-│   ├── sync.py          # Fork sync pipeline, vitality classification
+│   ├── sync.py          # Fork sync pipeline + analyzer invocation
 │   ├── cluster.py       # Cosine-similarity clustering
-│   ├── digest.py        # Signal filtering, digest generation/delivery
-│   └── analyzer.py      # AnalyzerService (thin wrapper over agent runner)
+│   └── digest.py        # Signal filtering, digest generation/delivery
 ├── agent/
 │   ├── tools.py         # 7 custom MCP tools via create_tools() factory
 │   ├── prompts.py       # System prompts for coordinator + subagents
 │   ├── agents.py        # diff_analyst, digest_writer AgentDefinitions
 │   ├── hooks.py         # Cost tracker + rate limit guard hooks
-│   └── runner.py        # AnalysisRunner (batch processing, sessions)
+│   └── runner.py        # ClaudeAnalyzer (Analyzer protocol, batching)
 └── cli/
     ├── app.py           # Root Typer app (11 commands)
     ├── helpers.py       # async_command decorator, get_services()
