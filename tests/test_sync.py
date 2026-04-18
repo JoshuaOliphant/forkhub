@@ -818,7 +818,13 @@ class TestLastPushedAtChangeDetection:
         assert result.changed_forks == []
 
     async def test_advanced_pushed_at_fires_compare(self, db: Database, settings: SyncSettings):
-        """When pushed_at advances, the fork must be compared and land in changed_forks."""
+        """When pushed_at advances, the fork must be compared and land in changed_forks.
+
+        Provider has get_head_sha but returns None for this fork (not in head_shas),
+        so the pushed_at fallback path drives change detection.
+        head_sha must remain None in DB — no SHA should be written when provider
+        returns None, which also guards against the if-new_sha-is-not-None check.
+        """
         repo = await self._insert_repo(db)
         await _insert_fork_in_db(
             db,
@@ -830,6 +836,54 @@ class TestLastPushedAtChangeDetection:
         )
         provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
         sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert self._FORK_FULL in result.changed_forks
+        row = await db.get_fork_by_name(self._FORK_FULL)
+        assert row is not None
+        assert row["head_sha"] is None  # no SHA written when provider returns None
+
+    async def test_no_get_head_sha_method_uses_pushed_at(
+        self, db: Database, settings: SyncSettings
+    ):
+        """Provider with no get_head_sha attribute at all must fall back to pushed_at.
+
+        This tests the production GitHubProvider scenario — the attribute does not
+        exist, not just returns None.
+        """
+        fork_info = ForkInfo(
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            default_branch="main",
+            description=None,
+            stars=0,
+            last_pushed_at=_ACTIVE_DATE,
+            has_diverged=True,
+            created_at=_NOW - timedelta(days=90),
+        )
+
+        # Minimal provider with no get_head_sha — mirrors real GitHubProvider
+        class _NoShaProvider:
+            async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
+                return ForkPage(forks=[fork_info], total_count=1, page=1, has_next=False)
+
+            async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
+                return CompareResult(ahead_by=0, behind_by=0, files=[], commits=[])
+
+            async def get_releases(self, owner: str, repo: str, **_: object) -> list:
+                return []
+
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            last_pushed_at=_ACTIVE_DATE - timedelta(days=7),  # stale
+        )
+        sync_service = SyncService(db=db, provider=_NoShaProvider(), settings=settings, clock=_NOW)
         result = await sync_service.sync_repo(repo.id)
 
         assert self._FORK_FULL in result.changed_forks

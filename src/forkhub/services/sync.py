@@ -240,9 +240,7 @@ class SyncService:
                     stars=fork_info.stars,
                     last_pushed_at=fork_info.last_pushed_at,
                     vitality=self._classify_vitality(fork_info.last_pushed_at),
-                    head_sha=(
-                        getattr(self._provider, "get_head_sha", lambda _: None)(fork_info.full_name)
-                    ),
+                    head_sha=self._provider_sha(fork_info.full_name),
                 )
 
                 # Active forks are compared on first discovery so
@@ -299,17 +297,19 @@ class SyncService:
                         )
                         existing_row["commits_ahead"] = compare_result.ahead_by
                         existing_row["commits_behind"] = compare_result.behind_by
-                        # Only update head_sha when the provider supplied a real SHA
-                        _get_sha = getattr(self._provider, "get_head_sha", None)
-                        if callable(_get_sha):
-                            new_sha: str | None = _get_sha(fork_info.full_name)
-                            if new_sha is not None:
-                                existing_row["head_sha"] = new_sha
-                        result.changed_forks.append(fork_info.full_name)
                     except Exception as exc:
                         error_msg = f"Error comparing {fork_info.full_name}: {exc}"
                         result.errors.append(error_msg)
                         logger.warning(error_msg)
+                    else:
+                        # Compare succeeded: update head_sha when provider supplies one.
+                        # SHA update is tied to compare success — a SHA fetch failure
+                        # must not prevent the fork from entering changed_forks or
+                        # create a partial-state DB write.
+                        new_sha = self._provider_sha(fork_info.full_name)
+                        if new_sha is not None:
+                            existing_row["head_sha"] = new_sha
+                        result.changed_forks.append(fork_info.full_name)
 
                 await self._db.update_fork(existing_row)
 
@@ -391,18 +391,20 @@ class SyncService:
 
         Caller must read existing_row["last_pushed_at"] BEFORE overwriting it.
         """
-        get_head_sha = getattr(self._provider, "get_head_sha", None)
-        if callable(get_head_sha):
-            old_sha = existing_row.get("head_sha")
-            new_sha: str | None = get_head_sha(fork_info.full_name)
-            if new_sha is not None:
-                return old_sha != new_sha
+        new_sha = self._provider_sha(fork_info.full_name)
+        if new_sha is not None:
+            return existing_row.get("head_sha") != new_sha
 
         # Fallback: compare last_pushed_at strings. Both sides are ISO-format
         # strings produced by datetime.isoformat(), so string equality is safe.
         old_pushed = existing_row.get("last_pushed_at")
         new_pushed = fork_info.last_pushed_at.isoformat() if fork_info.last_pushed_at else None
         return old_pushed != new_pushed
+
+    def _provider_sha(self, fork_full_name: str) -> str | None:
+        """Return the HEAD SHA for a fork if the provider supports it, else None."""
+        fn = getattr(self._provider, "get_head_sha", None)
+        return fn(fork_full_name) if callable(fn) else None
 
 
 def _fork_to_dict(fork: Fork) -> dict:
