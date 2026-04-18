@@ -27,6 +27,7 @@ from forkhub.services.sync import SyncService
 
 if TYPE_CHECKING:
     from forkhub.database import Database
+    from tests.stubs import StubGitProvider
 
 # ---------------------------------------------------------------------------
 # Time constants
@@ -752,3 +753,125 @@ class TestSyncNewForkCompare:
         assert row is not None
         # But not counted as changed (compare failed)
         assert "forker1/repo-a" not in result.changed_forks
+
+
+# ---------------------------------------------------------------------------
+# last_pushed_at fallback change detection (forkhub-99c)
+# ---------------------------------------------------------------------------
+
+
+class TestLastPushedAtChangeDetection:
+    """Verify last_pushed_at drives change detection when no real HEAD SHA exists.
+
+    The GitHub /forks endpoint does not return a commit SHA, so the production
+    GitHubProvider has no get_head_sha() — _has_fork_changed() must fall back to
+    comparing last_pushed_at timestamps, which /forks always provides.
+    """
+
+    _OWNER = "testowner"
+    _REPO = "repo-c"
+    _FORK_GITHUB_ID = 8001
+    _FORK_OWNER = "test-forker"
+    _FORK_FULL = "test-forker/repo-c"
+
+    def _make_provider(
+        self,
+        last_pushed_at: datetime | None,
+        head_shas: dict[str, str] | None = None,
+    ) -> StubGitProvider:
+        from .stubs import StubGitProvider
+
+        fork_info = ForkInfo(
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            default_branch="main",
+            description=None,
+            stars=0,
+            last_pushed_at=last_pushed_at,
+            has_diverged=True,
+            created_at=_NOW - timedelta(days=90),
+        )
+        return StubGitProvider(
+            forks={f"{self._OWNER}/{self._REPO}": [fork_info]},
+            head_shas=head_shas or {},
+        )
+
+    async def _insert_repo(self, db: Database) -> TrackedRepo:
+        return await _insert_tracked_repo(db, owner=self._OWNER, name=self._REPO, github_id=9001)
+
+    async def test_same_pushed_at_skips_compare(self, db: Database, settings: SyncSettings):
+        """When pushed_at is unchanged, existing fork must not be compared."""
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            last_pushed_at=_ACTIVE_DATE,
+        )
+        provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert result.changed_forks == []
+
+    async def test_advanced_pushed_at_fires_compare(self, db: Database, settings: SyncSettings):
+        """When pushed_at advances, the fork must be compared and land in changed_forks."""
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            last_pushed_at=_ACTIVE_DATE - timedelta(days=7),
+        )
+        provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert self._FORK_FULL in result.changed_forks
+
+    async def test_none_pushed_at_both_sides_skips_compare(
+        self, db: Database, settings: SyncSettings
+    ):
+        """When both old and new pushed_at are None, no compare fires (conserves budget)."""
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            last_pushed_at=None,
+        )
+        provider = self._make_provider(last_pushed_at=None)
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert result.changed_forks == []
+
+    async def test_sha_provider_uses_sha_not_pushed_at(self, db: Database, settings: SyncSettings):
+        """When provider has get_head_sha and SHA matches, pushed_at change is ignored."""
+        matching_sha = "sha-abc123"
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=matching_sha,
+            last_pushed_at=_ACTIVE_DATE - timedelta(days=7),  # stale, but SHA matches
+        )
+        # Provider reports newer pushed_at but the same SHA → no change
+        provider = self._make_provider(
+            last_pushed_at=_ACTIVE_DATE,
+            head_shas={self._FORK_FULL: matching_sha},
+        )
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert result.changed_forks == []

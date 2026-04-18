@@ -240,7 +240,9 @@ class SyncService:
                     stars=fork_info.stars,
                     last_pushed_at=fork_info.last_pushed_at,
                     vitality=self._classify_vitality(fork_info.last_pushed_at),
-                    head_sha=self._provider_head_sha(fork_info),
+                    head_sha=(
+                        getattr(self._provider, "get_head_sha", lambda _: None)(fork_info.full_name)
+                    ),
                 )
 
                 # Active forks are compared on first discovery so
@@ -273,9 +275,9 @@ class SyncService:
                 await self._db.insert_fork(_fork_to_dict(new_fork))
                 result.new_forks += 1
             else:
-                # Existing fork: check for changes
-                old_sha = existing_row["head_sha"]
-                new_sha = self._provider_head_sha(fork_info)
+                # Existing fork: check for changes.
+                # NB: Read last_pushed_at BEFORE overwriting it below.
+                changed = self._has_fork_changed(fork_info, existing_row)
 
                 # Update stars (always)
                 old_stars = existing_row["stars"]
@@ -287,8 +289,7 @@ class SyncService:
                 existing_row["vitality"] = self._classify_vitality(fork_info.last_pushed_at)
                 existing_row["updated_at"] = self._now().isoformat()
 
-                if old_sha != new_sha:
-                    # SHA changed: fetch comparison data
+                if changed:
                     try:
                         compare_result = await self._provider.compare(
                             repo.owner,
@@ -298,7 +299,12 @@ class SyncService:
                         )
                         existing_row["commits_ahead"] = compare_result.ahead_by
                         existing_row["commits_behind"] = compare_result.behind_by
-                        existing_row["head_sha"] = new_sha
+                        # Only update head_sha when the provider supplied a real SHA
+                        _get_sha = getattr(self._provider, "get_head_sha", None)
+                        if callable(_get_sha):
+                            new_sha: str | None = _get_sha(fork_info.full_name)
+                            if new_sha is not None:
+                                existing_row["head_sha"] = new_sha
                         result.changed_forks.append(fork_info.full_name)
                     except Exception as exc:
                         error_msg = f"Error comparing {fork_info.full_name}: {exc}"
@@ -376,22 +382,27 @@ class SyncService:
         else:
             return ForkVitality.DEAD
 
-    def _provider_head_sha(self, fork_info: ForkInfo) -> str | None:
-        """Extract or derive the HEAD SHA for a fork from provider data.
+    def _has_fork_changed(self, fork_info: ForkInfo, existing_row: dict) -> bool:
+        """Return True if the fork has changed since the last sync.
 
-        The StubGitProvider stores SHAs in a _head_shas dict. For the real
-        GitProvider, the SHA would come from the fork info or a separate API call.
-        We use a deterministic fallback based on the fork's metadata to detect changes.
+        Prefers a real HEAD SHA when the provider supplies one (stubs, future real API).
+        Falls back to last_pushed_at as a zero-cost change signal — the GitHub /forks
+        endpoint always returns pushed_at, and it advances when the branch head moves.
+
+        Caller must read existing_row["last_pushed_at"] BEFORE overwriting it.
         """
-        # If the provider has a get_head_sha method (stub), use it
         get_head_sha = getattr(self._provider, "get_head_sha", None)
         if callable(get_head_sha):
-            sha: str | None = get_head_sha(fork_info.full_name)
-            if sha is not None:
-                return sha
-        # Fallback: use a hash of fork metadata to detect changes
-        # In production, the real provider would supply this from the API
-        return None
+            old_sha = existing_row.get("head_sha")
+            new_sha: str | None = get_head_sha(fork_info.full_name)
+            if new_sha is not None:
+                return old_sha != new_sha
+
+        # Fallback: compare last_pushed_at strings. Both sides are ISO-format
+        # strings produced by datetime.isoformat(), so string equality is safe.
+        old_pushed = existing_row.get("last_pushed_at")
+        new_pushed = fork_info.last_pushed_at.isoformat() if fork_info.last_pushed_at else None
+        return old_pushed != new_pushed
 
 
 def _fork_to_dict(fork: Fork) -> dict:
