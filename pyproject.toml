@@ -58,6 +58,7 @@ dev = [
     "ruff>=0.9,<1",
     "mypy>=1.14,<2",
     "ty>=0.0.24",
+    "claude-agent-sdk>=0.1",
 ]
 
 [tool.pytest.ini_options]

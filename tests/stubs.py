@@ -443,10 +443,17 @@ class StubTestFixer:
 
     Provides a sequence of canned FixSuggestion responses and records
     call inputs so tests can assert what was passed to the fixer.
+    Set raise_error to make suggest_fixes raise an exception.
     """
 
-    def __init__(self, suggestions: list[FixSuggestion] | None = None) -> None:
+    def __init__(
+        self,
+        suggestions: list[FixSuggestion] | None = None,
+        *,
+        raise_error: Exception | None = None,
+    ) -> None:
         self._suggestions = suggestions or []
+        self._raise_error = raise_error
         self._call_count = 0
         self.calls: list[dict] = []
 
@@ -465,6 +472,8 @@ class StubTestFixer:
                 "test_file_contents": test_file_contents,
             }
         )
+        if self._raise_error is not None:
+            raise self._raise_error
         if self._call_count < len(self._suggestions):
             result = self._suggestions[self._call_count]
             self._call_count += 1

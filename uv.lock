@@ -398,7 +398,7 @@ wheels = [
 
 [[package]]
 name = "forkhub"
-version = "0.2.1"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -419,6 +419,7 @@ claude = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "claude-agent-sdk" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -444,6 +445,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "claude-agent-sdk", specifier = ">=0.1" },
     { name = "mypy", specifier = ">=1.14,<2" },
     { name = "pytest", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", specifier = ">=0.24,<1" },
