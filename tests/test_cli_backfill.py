@@ -52,6 +52,12 @@ def _init_git_repo(tmp_path: Path) -> None:
         check=True,
         capture_output=True,
     )
+    sp.run(
+        ["git", "config", "commit.gpgsign", "false"],
+        cwd=str(tmp_path),
+        check=True,
+        capture_output=True,
+    )
     (tmp_path / "README.md").write_text("hello\n")
     sp.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
     sp.run(["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True, capture_output=True)

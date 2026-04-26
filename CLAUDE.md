@@ -173,6 +173,22 @@ Test conventions:
 - **Slow tests** marked `@pytest.mark.slow` — e.g., model downloads
 - **Before adding tests**: always check existing test files for overlapping coverage. Prefer parameterizing existing tests over adding new ones. Use `tests/stubs.py` stubs instead of defining local copies
 
+### Coverage policy: 100% required
+
+The unit-test suite must hit **100% statement coverage** of `src/forkhub`.
+This is enforced by `coverage.fail_under = 100` in `pyproject.toml`, so the
+test command itself fails when coverage drops below 100%.
+
+How to run the gate locally:
+
+```bash
+uv run pytest --cov=src/forkhub --cov-report=term-missing -m "not integration and not slow"
+```
+
+The full rule, including testability patterns and exclusion guidance, is in
+[.claude/rules/coverage.md](.claude/rules/coverage.md). It loads automatically
+into every Claude Code session.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.

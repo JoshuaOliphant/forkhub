@@ -68,6 +68,22 @@ markers = [
     "slow: marks tests that are slow (e.g., model downloads) (deselect with '-m \"not slow\"')",
 ]
 
+[tool.coverage.run]
+branch = false
+source = ["src/forkhub"]
+
+[tool.coverage.report]
+# 100% statement coverage is required. See CLAUDE.md (Coverage policy).
+fail_under = 100
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "except ImportError:",
+    "if __name__ == .__main__.:",
+]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100

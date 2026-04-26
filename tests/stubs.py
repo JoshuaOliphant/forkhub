@@ -50,7 +50,7 @@ def make_tracked_repo(**overrides: object) -> dict:
         "owner": "torvalds",
         "name": "linux",
         "full_name": "torvalds/linux",
-        "tracking_mode": "active",
+        "tracking_mode": "watched",
         "default_branch": "main",
         "description": "Linux kernel source tree",
         "fork_depth": 1,
