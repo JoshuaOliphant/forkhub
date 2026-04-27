@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import shlex
 import subprocess
 import sys
 from typing import TYPE_CHECKING
@@ -243,7 +245,7 @@ class TestApplySignalTrackedRepoMissing:
 
 class TestApplySignalDiffFetchError:
     async def test_exception_during_diff_fetch_is_swallowed(
-        self, db: Database, provider: StubGitProvider
+        self, db: Database, provider: StubGitProvider, caplog: pytest.LogCaptureFixture
     ) -> None:
         """When get_file_diff raises, the exception is caught and patch fails gracefully."""
         repo = await _insert_repo(db)
@@ -254,13 +256,14 @@ class TestApplySignalDiffFetchError:
         provider._error_files.add("src/cache.py")
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        # All files raised → no patches → PATCH_FAILED
         attempts_before = await db.list_backfill_attempts(repo_id=repo["id"])
-        result = await service.run_backfill(repo["id"])
+        with caplog.at_level(logging.WARNING, logger="forkhub.services.backfill"):
+            result = await service.run_backfill(repo["id"])
 
         assert result.patch_failed == 1
         attempts_after = await db.list_backfill_attempts(repo_id=repo["id"])
         assert len(attempts_after) == len(attempts_before) + 1
+        assert any("Failed to fetch diff for" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +273,11 @@ class TestApplySignalDiffFetchError:
 
 class TestApplySignalOuterExcept:
     async def test_outer_except_caught_when_git_fails_in_apply_and_test(
-        self, tmp_path: Path, db: Database, provider: StubGitProvider
+        self,
+        tmp_path: Path,
+        db: Database,
+        provider: StubGitProvider,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """When _apply_and_test raises (git in non-repo dir), apply_signal handles it."""
         # tmp_path is NOT a git repo — git commands will fail with non-zero returncode
@@ -283,11 +290,12 @@ class TestApplySignalOuterExcept:
         provider.set_file_diff("forker1", "src/cache.py", "some diff content")
 
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
-        attempt = await service.apply_signal((await db.list_signals(repo["id"]))[0]["id"])
+        with caplog.at_level(logging.ERROR, logger="forkhub.services.backfill"):
+            attempt = await service.apply_signal((await db.list_signals(repo["id"]))[0]["id"])
 
-        # The outer except sets PATCH_FAILED and records the error message.
         assert attempt.status == BackfillStatus.PATCH_FAILED
         assert attempt.error is not None
+        assert any("Backfill attempt failed" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +359,7 @@ class TestApplyAndTestAutoFix:
             min_significance=5,
             auto_fix_tests=True,
             test_fixer=fixer,
-            test_command=f"{sys.executable} {runner_script}",
+            test_command=f"{shlex.quote(sys.executable)} {shlex.quote(str(runner_script))}",
         )
         sig_id = (await db.list_signals(repo["id"]))[0]["id"]
         attempt = await service.apply_signal(sig_id)
@@ -404,7 +412,11 @@ class TestApplyAndTestAutoFix:
 
 class TestAttemptTestFixOSError:
     async def test_oserror_reading_test_file_is_swallowed(
-        self, tmp_path: Path, db: Database, provider: StubGitProvider
+        self,
+        tmp_path: Path,
+        db: Database,
+        provider: StubGitProvider,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """OSError reading a test file is caught; test_file_contents stays empty."""
         (tmp_path / "tests").mkdir()
@@ -430,9 +442,11 @@ class TestAttemptTestFixOSError:
         failing_result = _make_failing_result("tests/test_oserror.py:1: AssertionError\n")
 
         try:
-            result = await service._attempt_test_fix(attempt, failing_result)
+            with caplog.at_level(logging.WARNING, logger="forkhub.services.backfill"):
+                result = await service._attempt_test_fix(attempt, failing_result)
             # File unreadable → test_file_contents empty → returns False
             assert result is False
+            assert any("Could not read test file" in r.message for r in caplog.records)
         finally:
             test_file.chmod(0o644)
 
@@ -557,7 +571,11 @@ class TestAttemptTestFixPathEscape:
 
 class TestAttemptTestFixWriteError:
     async def test_oserror_writing_edit_is_caught(
-        self, tmp_path: Path, db: Database, provider: StubGitProvider
+        self,
+        tmp_path: Path,
+        db: Database,
+        provider: StubGitProvider,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """OSError writing an edit file is caught; applied_files stays empty → False."""
         (tmp_path / "tests").mkdir()
@@ -589,10 +607,12 @@ class TestAttemptTestFixWriteError:
             files_patched=["src/cache.py"],
         )
         failing_result = _make_failing_result("tests/test_write_err.py:1: AssertionError\n")
-        result = await service._attempt_test_fix(attempt, failing_result)
+        with caplog.at_level(logging.ERROR, logger="forkhub.services.backfill"):
+            result = await service._attempt_test_fix(attempt, failing_result)
 
-        # Write failed → no applied_files → returns False
         assert result is False
+        assert "No valid edits to apply" in (attempt.patch_summary or "")
+        assert any("Failed to write" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -602,7 +622,11 @@ class TestAttemptTestFixWriteError:
 
 class TestAttemptTestFixGitCommitFails:
     async def test_git_commit_failure_continues_loop(
-        self, tmp_path: Path, db: Database, provider: StubGitProvider
+        self,
+        tmp_path: Path,
+        db: Database,
+        provider: StubGitProvider,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """CalledProcessError from git commit is swallowed and the loop continues."""
         _init_git_repo(tmp_path)
@@ -641,10 +665,14 @@ class TestAttemptTestFixGitCommitFails:
             files_patched=["src/cache.py"],
         )
         failing_result = _make_failing_result("tests/test_commit_fail.py:1: AssertionError\n")
-        result = await service._attempt_test_fix(attempt, failing_result)
+        with caplog.at_level(logging.ERROR, logger="forkhub.services.backfill"):
+            result = await service._attempt_test_fix(attempt, failing_result)
 
-        # Commit fails → continue loop → exhausts MAX_FIX_ROUNDS → returns False.
+        # Round 1: git commit fails (nothing to commit) → continue.
+        # Round 2: fixer has no more suggestions → should_reject=True → returns False.
         assert result is False
+        assert len(fixer.calls) == 2
+        assert any("Git commit failed" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

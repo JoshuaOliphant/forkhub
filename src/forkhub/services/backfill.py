@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import shlex
+import sqlite3
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -252,26 +253,33 @@ class BackfillService:
             # so the attempt id handed back to CLI callers is queryable.
             try:
                 await self._record_attempt(attempt)
-            except Exception as exc:  # pragma: no cover — FK failure during best-effort persist
+            except sqlite3.Error as exc:  # pragma: no cover — FK failure during best-effort persist
                 logger.warning(
                     "Could not persist fork-not-found attempt for signal %s: %s",
                     signal.id,
                     exc,
                 )
+                attempt.error = (attempt.error or "") + f" [attempt not persisted: {exc}]"
             return attempt
 
         tracked = await self._db.get_tracked_repo(signal.tracked_repo_id)
         if tracked is None:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = f"Tracked repo not found: {signal.tracked_repo_id}"
+            logger.warning(
+                "Skipping backfill for signal %s: tracked repo %s not found",
+                signal.id,
+                signal.tracked_repo_id,
+            )
             try:
                 await self._record_attempt(attempt)
-            except Exception as exc:  # pragma: no cover — FK failure during best-effort persist
+            except sqlite3.Error as exc:  # pragma: no cover — FK failure during best-effort persist
                 logger.warning(
                     "Could not persist tracked-repo-not-found attempt for signal %s: %s",
                     signal.id,
                     exc,
                 )
+                attempt.error = (attempt.error or "") + f" [attempt not persisted: {exc}]"
             return attempt
 
         # Fetch the diffs for files involved in this signal
@@ -410,7 +418,9 @@ class BackfillService:
             stdin_data=patch_bytes,
         )
 
-        if apply_result.returncode != 0:  # pragma: no cover — --check and apply use same content
+        if (
+            apply_result.returncode != 0
+        ):  # pragma: no cover — hard to reproduce without process injection
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = f"Patch apply failed: {apply_result.stderr}"
             return
