@@ -28,8 +28,6 @@ from forkhub.models import BackfillAttempt, BackfillResult, BackfillStatus
 from tests.stubs import StubGitProvider, make_fork, make_signal, make_tracked_repo
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from forkhub.database import Database
 
 

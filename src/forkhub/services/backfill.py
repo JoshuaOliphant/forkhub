@@ -777,7 +777,7 @@ class BackfillService:
                 )
                 if post.returncode == 0:
                     result["checked_out"] = post.stdout.strip()
-                else:  # pragma: no cover — post-checkout rev-parse failure after successful checkout
+                else:  # pragma: no cover — post-checkout rev-parse fails after successful checkout
                     result["warnings"].append(
                         f"post-checkout rev-parse failed: {post.stderr.strip()}"
                     )

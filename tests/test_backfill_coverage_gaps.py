@@ -7,7 +7,6 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -18,6 +17,8 @@ from forkhub.services.backfill import BackfillService
 from .stubs import StubGitProvider, StubTestFixer, make_fork, make_signal, make_tracked_repo
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from forkhub.database import Database
 
 
@@ -298,7 +299,7 @@ class TestApplyAndTestAutoFix:
     async def test_auto_fix_accepted_when_fixer_succeeds(
         self, tmp_path: Path, db: Database, provider: StubGitProvider
     ) -> None:
-        """When auto_fix_tests is True and _attempt_test_fix returns True, status is ACCEPTED (0.8)."""
+        """When auto_fix_tests=True and _attempt_test_fix returns True, status is ACCEPTED (0.8)."""
         _init_git_repo(tmp_path)
         (tmp_path / "src").mkdir()
         (tmp_path / "src" / "cache.py").write_text("old\n")
@@ -604,8 +605,6 @@ class TestAttemptTestFixGitCommitFails:
         self, tmp_path: Path, db: Database, provider: StubGitProvider
     ) -> None:
         """CalledProcessError from git commit is swallowed and the loop continues."""
-        import asyncio
-
         _init_git_repo(tmp_path)
         (tmp_path / "tests").mkdir()
         # Write a test file and commit it so its content is known.
@@ -619,7 +618,7 @@ class TestAttemptTestFixGitCommitFails:
             capture_output=True,
         )
 
-        # Fixer returns identical content → git detects nothing to commit → exit 1 → CalledProcessError.
+        # Identical content → git finds nothing to commit → exit 1 → CalledProcessError.
         fixer = StubTestFixer(
             suggestions=[
                 FixSuggestion(

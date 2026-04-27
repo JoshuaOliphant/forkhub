@@ -64,6 +64,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--cov=src/forkhub --cov-report=term-missing -m 'not integration and not slow'"
 markers = [
     "integration: marks tests requiring external services (deselect with '-m \"not integration\"')",
     "slow: marks tests that are slow (e.g., model downloads) (deselect with '-m \"not slow\"')",
