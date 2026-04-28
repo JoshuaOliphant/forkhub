@@ -104,6 +104,7 @@ async def _init_git_repo(path: Path) -> None:
         ["git", "init"],
         ["git", "config", "user.email", "test@test.com"],
         ["git", "config", "user.name", "Test"],
+        ["git", "config", "commit.gpgsign", "false"],
         ["git", "add", "-A"],
         ["git", "commit", "-m", "initial", "--allow-empty"],
     ]:

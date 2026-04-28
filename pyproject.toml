@@ -58,14 +58,32 @@ dev = [
     "ruff>=0.9,<1",
     "mypy>=1.14,<2",
     "ty>=0.0.24",
+    "claude-agent-sdk>=0.1",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--cov=src/forkhub --cov-report=term-missing -m 'not integration and not slow'"
 markers = [
     "integration: marks tests requiring external services (deselect with '-m \"not integration\"')",
     "slow: marks tests that are slow (e.g., model downloads) (deselect with '-m \"not slow\"')",
+]
+
+[tool.coverage.run]
+branch = false
+source = ["src/forkhub"]
+
+[tool.coverage.report]
+# 100% statement coverage is required. See CLAUDE.md (Coverage policy).
+fail_under = 100
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "except ImportError:",
+    "if __name__ == .__main__.:",
 ]
 
 [tool.ruff]

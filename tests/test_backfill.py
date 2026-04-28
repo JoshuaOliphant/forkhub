@@ -644,24 +644,7 @@ class TestBranchLeakOnException:
         """When _apply_and_test raises, the candidate branch must not linger."""
         import subprocess
 
-        subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
-        subprocess.run(
-            ["git", "config", "user.email", "test@test.com"],
-            cwd=str(tmp_path),
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Test"],
-            cwd=str(tmp_path),
-            check=True,
-            capture_output=True,
-        )
-        (tmp_path / "README.md").write_text("hello")
-        subprocess.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
-        subprocess.run(
-            ["git", "commit", "-m", "init"], cwd=str(tmp_path), check=True, capture_output=True
-        )
+        _init_git_repo_sync(tmp_path)
 
         repo = await _insert_tracked_repo(db)
         fork = await _insert_fork(db, repo["id"])
@@ -816,6 +799,12 @@ def _init_git_repo_sync(tmp_path):
     )
     subprocess.run(
         ["git", "config", "user.name", "Test"],
+        cwd=str(tmp_path),
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "commit.gpgsign", "false"],
         cwd=str(tmp_path),
         check=True,
         capture_output=True,
