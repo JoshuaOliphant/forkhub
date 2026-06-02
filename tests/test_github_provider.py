@@ -377,6 +377,7 @@ class TestGetFileDiff:
         added_patch = "@@ -0,0 +1,2 @@\n+line one\n+line two"
         removed_patch = "@@ -1,2 +0,0 @@\n-gone one\n-gone two"
         rename_patch = "@@ -1 +1 @@\n-old\n+new"
+        copy_patch = "@@ -1 +1,2 @@\n base\n+extra"
         compare_json = {
             "ahead_by": 1,
             "behind_by": 0,
@@ -390,6 +391,14 @@ class TestGetFileDiff:
                     "additions": 1,
                     "deletions": 1,
                     "patch": rename_patch,
+                },
+                {
+                    "filename": "copy.py",
+                    "status": "copied",
+                    "previous_filename": "source.py",
+                    "additions": 1,
+                    "deletions": 0,
+                    "patch": copy_patch,
                 },
                 # Binary / pure-rename files arrive with no patch field.
                 {"filename": "logo.png", "status": "modified", "additions": 0, "deletions": 0},
@@ -420,7 +429,22 @@ class TestGetFileDiff:
 
         renamed = await provider.get_file_diff("octocat", "hello-world", "abc", "def", "renamed.py")
         assert renamed == (
-            f"diff --git a/orig.py b/renamed.py\n--- a/orig.py\n+++ b/renamed.py\n{rename_patch}\n"
+            "diff --git a/orig.py b/renamed.py\n"
+            "rename from orig.py\n"
+            "rename to renamed.py\n"
+            "--- a/orig.py\n"
+            "+++ b/renamed.py\n"
+            f"{rename_patch}\n"
+        )
+
+        copied = await provider.get_file_diff("octocat", "hello-world", "abc", "def", "copy.py")
+        assert copied == (
+            "diff --git a/source.py b/copy.py\n"
+            "copy from source.py\n"
+            "copy to copy.py\n"
+            "--- a/source.py\n"
+            "+++ b/copy.py\n"
+            f"{copy_patch}\n"
         )
 
         # File with no patch (binary) yields an empty string, not a header-only diff.
@@ -462,13 +486,16 @@ class TestGetFileDiff:
 
         diff = await provider.get_file_diff("octocat", "hello-world", "abc", "def", "cache.py")
 
-        check = subprocess.run(
-            ["git", "apply", "--check", "-"],
+        # Actually apply (not just --check) and verify the resulting contents, so
+        # an applyable-but-semantically-wrong reconstruction can't pass silently.
+        applied = subprocess.run(
+            ["git", "apply", "-"],
             cwd=tmp_path,
             input=diff.encode(),
             capture_output=True,
         )
-        assert check.returncode == 0, check.stderr.decode()
+        assert applied.returncode == 0, applied.stderr.decode()
+        assert (tmp_path / "cache.py").read_text() == "new line\nkeep\n"
 
 
 # ===========================================================================

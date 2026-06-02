@@ -272,6 +272,15 @@ class GitHubProvider:
         GitHub's compare endpoint returns ``patch`` as hunks only. Prepend a
         ``diff --git`` header plus the ``---``/``+++`` file lines (with
         ``/dev/null`` for added/removed files) so ``git apply`` accepts it.
+        Renames and copies also get explicit ``rename``/``copy`` ``from``/``to``
+        directives so ``git apply`` moves (or duplicates) the file rather than
+        guessing from the path pair.
+
+        The compare API does not expose the file mode, so added/removed files
+        use a hardcoded ``100644``. As a result the executable bit and symlink
+        type are not preserved: an added executable becomes a regular file, and
+        an added symlink becomes a regular file containing the link target.
+        Backfill consumers should not rely on mode being carried over.
         """
         patch = file_data.get("patch")
         if not patch:
@@ -292,6 +301,12 @@ class GitHubProvider:
         else:
             # modified, renamed, copied, changed: use previous path on the a/ side.
             header = [f"diff --git a/{previous} b/{filename}"]
+            if status == "renamed":
+                # Without these, git apply leaves the source file in place.
+                header += [f"rename from {previous}", f"rename to {filename}"]
+            elif status == "copied":
+                # Without these, git apply deletes the source instead of copying.
+                header += [f"copy from {previous}", f"copy to {filename}"]
             old_line, new_line = f"--- a/{previous}", f"+++ b/{filename}"
 
         body = patch if patch.endswith("\n") else patch + "\n"
