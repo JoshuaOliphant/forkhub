@@ -9,6 +9,7 @@ import os
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -19,9 +20,16 @@ from forkhub.services.backfill import BackfillService
 from .stubs import StubGitProvider, StubTestFixer, make_fork, make_signal, make_tracked_repo
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from forkhub.database import Database
+
+
+def _raise_oserror(*args: object, **kwargs: object) -> str:
+    """A ``Path.read_text`` replacement that always raises.
+
+    Triggers the ``except OSError`` read paths deterministically, unlike
+    ``chmod(0o000)``, which root bypasses.
+    """
+    raise OSError("simulated unreadable file")
 
 
 # ---------------------------------------------------------------------------
@@ -420,19 +428,12 @@ class TestAttemptTestFixOSError:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """OSError reading a test file is caught; test_file_contents stays empty."""
-        from pathlib import Path as _Path
-
         (tmp_path / "tests").mkdir()
         test_file = tmp_path / "tests" / "test_oserror.py"
         test_file.write_text("content")
 
         # The file exists (passes is_file()), but reading it raises OSError.
-        # Patching read_text triggers the error path deterministically, unlike
-        # chmod(0o000), which root bypasses.
-        def _raise_oserror(self: _Path, *args: object, **kwargs: object) -> str:
-            raise OSError("simulated unreadable file")
-
-        monkeypatch.setattr(_Path, "read_text", _raise_oserror)
+        monkeypatch.setattr(Path, "read_text", _raise_oserror)
 
         fixer = StubTestFixer()
         service = BackfillService(
@@ -788,19 +789,12 @@ class TestReadFailingTestFilesOSError:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """OSError reading a failing test file is caught; files list stays empty."""
-        from pathlib import Path as _Path
-
         (tmp_path / "tests").mkdir()
         unreadable = tmp_path / "tests" / "test_unreadable.py"
         unreadable.write_text("content")
 
         # The file exists (passes is_file()), but reading it raises OSError.
-        # Patching read_text triggers the error path deterministically, unlike
-        # chmod(0o000), which root bypasses.
-        def _raise_oserror(self: _Path, *args: object, **kwargs: object) -> str:
-            raise OSError("simulated unreadable file")
-
-        monkeypatch.setattr(_Path, "read_text", _raise_oserror)
+        monkeypatch.setattr(Path, "read_text", _raise_oserror)
 
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
         result = await service.read_failing_test_files(

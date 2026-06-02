@@ -309,8 +309,9 @@ class GitHubProvider:
                 header += [f"copy from {previous}", f"copy to {filename}"]
             old_line, new_line = f"--- a/{previous}", f"+++ b/{filename}"
 
+        lines = [*header, old_line, new_line]
         body = patch if patch.endswith("\n") else patch + "\n"
-        return "\n".join([*header, old_line, new_line, ""]) + body
+        return "\n".join(lines) + "\n" + body
 
     async def get_rate_limit(self) -> RateLimitInfo:
         """Fetch current GitHub API rate limit status."""
