@@ -42,20 +42,3 @@
 {"created_at":"2026-03-01T18:53:14Z","created_by":"Joshua Oliphant","depends_on_id":"forkhub-v0i","issue_id":"forkhub-wwz","type":"blocks"}
 {"created_at":"2026-03-01T18:53:12Z","created_by":"Joshua Oliphant","depends_on_id":"forkhub-5y4","issue_id":"forkhub-zlr","type":"blocks"}
 {"created_at":"2026-03-01T18:53:12Z","created_by":"Joshua Oliphant","depends_on_id":"forkhub-8ej","issue_id":"forkhub-zlr","type":"blocks"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-504", "issue_id": "forkhub-ag8", "type": "parent-child"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-504", "issue_id": "forkhub-7g7", "type": "parent-child"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-504", "issue_id": "forkhub-d20", "type": "parent-child"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-504", "issue_id": "forkhub-vxn", "type": "parent-child"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-504", "issue_id": "forkhub-2y3", "type": "parent-child"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-504", "issue_id": "forkhub-28g", "type": "parent-child"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-504", "issue_id": "forkhub-82b", "type": "parent-child"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-504", "issue_id": "forkhub-nh2", "type": "parent-child"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-504", "issue_id": "forkhub-cj7", "type": "parent-child"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-ag8", "issue_id": "forkhub-7g7", "type": "blocks"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-ag8", "issue_id": "forkhub-d20", "type": "blocks"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-ag8", "issue_id": "forkhub-vxn", "type": "blocks"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-ag8", "issue_id": "forkhub-cj7", "type": "blocks"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-d20", "issue_id": "forkhub-cj7", "type": "blocks"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-vxn", "issue_id": "forkhub-cj7", "type": "blocks"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-2y3", "issue_id": "forkhub-cj7", "type": "blocks"}
-{"created_at": "2026-06-02T05:15:00Z", "created_by": "Claude", "depends_on_id": "forkhub-82b", "issue_id": "forkhub-cj7", "type": "blocks"}
