@@ -356,15 +356,119 @@ class TestGetFileDiff:
             return_value=Response(200, json=compare_json),
         )
 
-        # Matching file returns its patch
+        # Matching file returns its patch wrapped in git apply-able headers
         diff = await provider.get_file_diff("octocat", "hello-world", "abc", "def", "src/main.py")
-        assert diff == target_patch
+        assert diff == (
+            "diff --git a/src/main.py b/src/main.py\n"
+            "--- a/src/main.py\n"
+            "+++ b/src/main.py\n"
+            f"{target_patch}\n"
+        )
 
         # Non-matching file returns empty string
         diff = await provider.get_file_diff(
             "octocat", "hello-world", "abc", "def", "nonexistent.py"
         )
         assert diff == ""
+
+    async def test_reconstructs_added_removed_and_rename_headers(
+        self, provider: GitHubProvider, mock_github
+    ) -> None:
+        added_patch = "@@ -0,0 +1,2 @@\n+line one\n+line two"
+        removed_patch = "@@ -1,2 +0,0 @@\n-gone one\n-gone two"
+        rename_patch = "@@ -1 +1 @@\n-old\n+new"
+        compare_json = {
+            "ahead_by": 1,
+            "behind_by": 0,
+            "files": [
+                _file_change_json(filename="new.py", status="added", patch=added_patch),
+                _file_change_json(filename="dead.py", status="removed", patch=removed_patch),
+                {
+                    "filename": "renamed.py",
+                    "status": "renamed",
+                    "previous_filename": "orig.py",
+                    "additions": 1,
+                    "deletions": 1,
+                    "patch": rename_patch,
+                },
+                # Binary / pure-rename files arrive with no patch field.
+                {"filename": "logo.png", "status": "modified", "additions": 0, "deletions": 0},
+            ],
+            "commits": [],
+        }
+        mock_github.get("/repos/octocat/hello-world/compare/abc...def").mock(
+            return_value=Response(200, json=compare_json),
+        )
+
+        added = await provider.get_file_diff("octocat", "hello-world", "abc", "def", "new.py")
+        assert added == (
+            "diff --git a/new.py b/new.py\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            "+++ b/new.py\n"
+            f"{added_patch}\n"
+        )
+
+        removed = await provider.get_file_diff("octocat", "hello-world", "abc", "def", "dead.py")
+        assert removed == (
+            "diff --git a/dead.py b/dead.py\n"
+            "deleted file mode 100644\n"
+            "--- a/dead.py\n"
+            "+++ /dev/null\n"
+            f"{removed_patch}\n"
+        )
+
+        renamed = await provider.get_file_diff("octocat", "hello-world", "abc", "def", "renamed.py")
+        assert renamed == (
+            f"diff --git a/orig.py b/renamed.py\n--- a/orig.py\n+++ b/renamed.py\n{rename_patch}\n"
+        )
+
+        # File with no patch (binary) yields an empty string, not a header-only diff.
+        binary = await provider.get_file_diff("octocat", "hello-world", "abc", "def", "logo.png")
+        assert binary == ""
+
+    async def test_reconstructed_diff_applies_with_git(
+        self, provider: GitHubProvider, mock_github, tmp_path
+    ) -> None:
+        """The reconstructed diff must satisfy ``git apply`` on a real repo.
+
+        Guards against regressions where GitHub's header-less ``patch`` field
+        is returned verbatim (which ``git apply`` rejects).
+        """
+        import subprocess
+
+        def _run(*args: str, **kw):
+            return subprocess.run(args, cwd=tmp_path, check=True, capture_output=True, **kw)
+
+        _run("git", "init")
+        _run("git", "config", "user.email", "test@test.com")
+        _run("git", "config", "user.name", "Test")
+        _run("git", "config", "commit.gpgsign", "false")
+        (tmp_path / "cache.py").write_text("old line\nkeep\n")
+        _run("git", "add", ".")
+        _run("git", "commit", "-m", "init")
+
+        # Hunk-only body, exactly as the compare API returns it.
+        patch = "@@ -1,2 +1,2 @@\n-old line\n+new line\n keep"
+        compare_json = {
+            "ahead_by": 1,
+            "behind_by": 0,
+            "files": [_file_change_json(filename="cache.py", patch=patch)],
+            "commits": [],
+        }
+        mock_github.get("/repos/octocat/hello-world/compare/abc...def").mock(
+            return_value=Response(200, json=compare_json),
+        )
+
+        diff = await provider.get_file_diff("octocat", "hello-world", "abc", "def", "cache.py")
+
+        check = subprocess.run(
+            ["git", "apply", "--check", "-"],
+            cwd=tmp_path,
+            input=diff.encode(),
+            capture_output=True,
+        )
+        assert check.returncode == 0, check.stderr.decode()
 
 
 # ===========================================================================
