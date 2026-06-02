@@ -417,13 +417,22 @@ class TestAttemptTestFixOSError:
         db: Database,
         provider: StubGitProvider,
         caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """OSError reading a test file is caught; test_file_contents stays empty."""
+        from pathlib import Path as _Path
+
         (tmp_path / "tests").mkdir()
         test_file = tmp_path / "tests" / "test_oserror.py"
         test_file.write_text("content")
-        # Make the file unreadable
-        test_file.chmod(0o000)
+
+        # The file exists (passes is_file()), but reading it raises OSError.
+        # Patching read_text triggers the error path deterministically, unlike
+        # chmod(0o000), which root bypasses.
+        def _raise_oserror(self: _Path, *args: object, **kwargs: object) -> str:
+            raise OSError("simulated unreadable file")
+
+        monkeypatch.setattr(_Path, "read_text", _raise_oserror)
 
         fixer = StubTestFixer()
         service = BackfillService(
@@ -441,14 +450,11 @@ class TestAttemptTestFixOSError:
         )
         failing_result = _make_failing_result("tests/test_oserror.py:1: AssertionError\n")
 
-        try:
-            with caplog.at_level(logging.WARNING, logger="forkhub.services.backfill"):
-                result = await service._attempt_test_fix(attempt, failing_result)
-            # File unreadable → test_file_contents empty → returns False
-            assert result is False
-            assert any("Could not read test file" in r.message for r in caplog.records)
-        finally:
-            test_file.chmod(0o644)
+        with caplog.at_level(logging.WARNING, logger="forkhub.services.backfill"):
+            result = await service._attempt_test_fix(attempt, failing_result)
+        # File unreadable → test_file_contents empty → returns False
+        assert result is False
+        assert any("Could not read test file" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -775,23 +781,33 @@ class TestCleanupAttemptOnBranch:
 
 class TestReadFailingTestFilesOSError:
     async def test_oserror_reading_file_is_swallowed(
-        self, tmp_path: Path, db: Database, provider: StubGitProvider
+        self,
+        tmp_path: Path,
+        db: Database,
+        provider: StubGitProvider,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """OSError reading a failing test file is caught; files list stays empty."""
+        from pathlib import Path as _Path
+
         (tmp_path / "tests").mkdir()
         unreadable = tmp_path / "tests" / "test_unreadable.py"
         unreadable.write_text("content")
-        unreadable.chmod(0o000)
+
+        # The file exists (passes is_file()), but reading it raises OSError.
+        # Patching read_text triggers the error path deterministically, unlike
+        # chmod(0o000), which root bypasses.
+        def _raise_oserror(self: _Path, *args: object, **kwargs: object) -> str:
+            raise OSError("simulated unreadable file")
+
+        monkeypatch.setattr(_Path, "read_text", _raise_oserror)
 
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        try:
-            result = await service.read_failing_test_files(
-                test_output="tests/test_unreadable.py:1: AssertionError\n",
-                returncode=1,
-            )
-            assert result["files"] == []
-        finally:
-            unreadable.chmod(0o644)
+        result = await service.read_failing_test_files(
+            test_output="tests/test_unreadable.py:1: AssertionError\n",
+            returncode=1,
+        )
+        assert result["files"] == []
 
 
 # ---------------------------------------------------------------------------
