@@ -1,3 +1,4 @@
+issue-prefix: "forkhub"
 # Beads Configuration File
 # This file configures default behavior for all bd commands in this repository
 # All settings can also be set via environment variables (BD_* prefix)
@@ -53,3 +54,5 @@
 # - linear.api-key
 # - github.org
 # - github.repo
+
+sync.remote: "git+http://local_proxy@127.0.0.1:37101/git/JoshuaOliphant/forkhub"

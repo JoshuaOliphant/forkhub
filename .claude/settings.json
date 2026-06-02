@@ -1,29 +1,40 @@
 {
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "jq -r '.tool_input.command' | grep -q 'git commit' && { uv run ruff format --check src/ tests/ 2>&1 && uv run ruff check src/ tests/ 2>&1; } || true",
-            "timeout": 30,
-            "statusMessage": "Checking ruff format + lint..."
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
         "hooks": [
           {
-            "type": "command",
-            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; echo \"$f\" | grep -qE '\\.py$' && uv run ruff format \"$f\" || true; } 2>/dev/null || true",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; echo \"$f\" | grep -qE '\\.py$' \u0026\u0026 uv run ruff format \"$f\" || true; } 2\u003e/dev/null || true",
+            "statusMessage": "Formatting Python file...",
             "timeout": 15,
-            "statusMessage": "Formatting Python file..."
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Write|Edit"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "jq -r '.tool_input.command' | grep -q 'git commit' \u0026\u0026 { uv run ruff format --check src/ tests/ 2\u003e\u00261 \u0026\u0026 uv run ruff check src/ tests/ 2\u003e\u00261; } || true",
+            "statusMessage": "Checking ruff format + lint...",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bd prime --hook-json",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
       }
     ]
   }
