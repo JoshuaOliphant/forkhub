@@ -248,16 +248,70 @@ class GitHubProvider:
     async def get_file_diff(self, owner: str, repo: str, base: str, head: str, path: str) -> str:
         """Get the patch diff for a specific file between two refs.
 
-        Uses the compare endpoint and filters to the requested file.
-        Returns an empty string if the file is not in the diff.
+        Uses the compare endpoint and filters to the requested file. The
+        compare API only returns the hunk body (lines starting with ``@@``)
+        in each file's ``patch`` field — it omits the ``diff --git`` /
+        ``---`` / ``+++`` headers that ``git apply`` requires. We reconstruct
+        those headers so the returned diff is directly applyable.
+
+        Returns an empty string if the file is not in the diff, or if the
+        file has no textual patch (e.g. binary files or pure renames).
         """
         data = await self._get(f"/repos/{owner}/{repo}/compare/{base}...{head}")
 
         for file_data in data.get("files", []):
             if file_data["filename"] == path:
-                return file_data.get("patch", "")
+                return self._reconstruct_diff(file_data)
 
         return ""
+
+    @staticmethod
+    def _reconstruct_diff(file_data: dict[str, Any]) -> str:
+        """Wrap a compare-API file's hunk body in ``git apply``-able headers.
+
+        GitHub's compare endpoint returns ``patch`` as hunks only. Prepend a
+        ``diff --git`` header plus the ``---``/``+++`` file lines (with
+        ``/dev/null`` for added/removed files) so ``git apply`` accepts it.
+        Renames and copies also get explicit ``rename``/``copy`` ``from``/``to``
+        directives so ``git apply`` moves (or duplicates) the file rather than
+        guessing from the path pair.
+
+        The compare API does not expose the file mode, so added/removed files
+        use a hardcoded ``100644``. As a result the executable bit and symlink
+        type are not preserved: an added executable becomes a regular file, and
+        an added symlink becomes a regular file containing the link target.
+        Backfill consumers should not rely on mode being carried over.
+        """
+        patch = file_data.get("patch")
+        if not patch:
+            # Binary files and pure renames carry no hunks — nothing to apply.
+            return ""
+
+        filename = file_data["filename"]
+        status = file_data.get("status", "modified")
+        # Renames/copies expose the original path; everything else maps to itself.
+        previous = file_data.get("previous_filename", filename)
+
+        if status == "added":
+            header = [f"diff --git a/{filename} b/{filename}", "new file mode 100644"]
+            old_line, new_line = "--- /dev/null", f"+++ b/{filename}"
+        elif status == "removed":
+            header = [f"diff --git a/{filename} b/{filename}", "deleted file mode 100644"]
+            old_line, new_line = f"--- a/{filename}", "+++ /dev/null"
+        else:
+            # modified, renamed, copied, changed: use previous path on the a/ side.
+            header = [f"diff --git a/{previous} b/{filename}"]
+            if status == "renamed":
+                # Without these, git apply leaves the source file in place.
+                header += [f"rename from {previous}", f"rename to {filename}"]
+            elif status == "copied":
+                # Without these, git apply deletes the source instead of copying.
+                header += [f"copy from {previous}", f"copy to {filename}"]
+            old_line, new_line = f"--- a/{previous}", f"+++ b/{filename}"
+
+        lines = [*header, old_line, new_line]
+        body = patch if patch.endswith("\n") else patch + "\n"
+        return "\n".join(lines) + "\n" + body
 
     async def get_rate_limit(self) -> RateLimitInfo:
         """Fetch current GitHub API rate limit status."""
