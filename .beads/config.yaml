@@ -53,3 +53,5 @@
 # - linear.api-key
 # - github.org
 # - github.repo
+
+sync.remote: "git+http://local_proxy@127.0.0.1:37101/git/JoshuaOliphant/forkhub"

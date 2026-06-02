@@ -49,3 +49,7 @@ forkhub.toml
 # Autoloop
 results.tsv
 run.log
+
+# Beads / Dolt files (added by bd init)
+.beads-credential-key
+.beads/proxieddb/
