@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         EmbeddingProvider,
         GitProvider,
         NotificationBackend,
+        TestFixer,
     )
     from forkhub.models import (
         BackfillAttempt as BackfillAttempt,
@@ -83,6 +84,30 @@ def _build_default_analyzer(
         logger.info(
             "Analyzer skipped: [claude] extra not installed. "
             "Discovery will still run but no signals will be generated."
+        )
+        return None
+
+
+def _build_default_test_fixer(settings: ForkHubSettings) -> TestFixer | None:
+    """Construct the default `ClaudeTestFixer`, or return None when the
+    `[claude]` optional extra is not installed.
+
+    Single source of truth so both `ForkHub.backfill` and the CLI share
+    the same construction and graceful-degradation behavior. Mirrors
+    `_build_default_analyzer`: the test fixer runs on the cheaper digest
+    model with a fraction of the analysis budget.
+    """
+    try:
+        from forkhub.agent.test_fixer import ClaudeTestFixer
+
+        return ClaudeTestFixer(
+            model=settings.anthropic.digest_model,
+            budget_usd=settings.anthropic.analysis_budget_usd / 5,
+        )
+    except ImportError:
+        logger.info(
+            "Test fixer skipped: [claude] extra not installed. "
+            "Backfill will still run but failing tests won't be auto-fixed."
         )
         return None
 
@@ -291,14 +316,10 @@ class ForkHub:
         """
         from forkhub.services.backfill import BackfillService
 
-        test_fixer = None
-        if auto_fix_tests:
-            from forkhub.agent.test_fixer import ClaudeTestFixer
-
-            test_fixer = ClaudeTestFixer(
-                model=self._settings.anthropic.digest_model,
-                budget_usd=self._settings.anthropic.analysis_budget_usd / 5,
-            )
+        # Build the test fixer via the shared factory when the caller opted
+        # in. The factory owns graceful degradation for a missing [claude]
+        # extra; BackfillService tolerates a None fixer (logs and skips).
+        test_fixer = _build_default_test_fixer(self._settings) if auto_fix_tests else None
 
         backfill_service = BackfillService(
             db=self._db,
