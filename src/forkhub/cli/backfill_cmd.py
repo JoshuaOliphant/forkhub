@@ -169,8 +169,9 @@ async def _backfill_impl(
     from forkhub.services.backfill import BackfillService
 
     owns_db = False
+    settings = None
     if db is None or provider is None:
-        _settings, db, provider = await get_services()
+        settings, db, provider = await get_services()
         owns_db = True
 
     try:
@@ -203,7 +204,8 @@ async def _backfill_impl(
             from forkhub import _build_default_test_fixer
             from forkhub.config import load_settings
 
-            test_fixer = _build_default_test_fixer(load_settings())
+            fixer_settings = settings if settings is not None else load_settings()
+            test_fixer = _build_default_test_fixer(fixer_settings)
             if test_fixer is None:
                 _output(
                     "Test fixer skipped: [claude] extra not installed",
