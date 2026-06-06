@@ -275,6 +275,34 @@ class TestBackfillRunImpl:
         )
         assert len(constructed) == 1
 
+    async def test_auto_fix_tests_skipped_without_claude_extra(self, db: Database, monkeypatch):
+        """When auto_fix_tests=True but the factory returns None (no [claude]
+        extra), the CLI emits the skip message and continues."""
+        await _seed_tracked_repo(db)
+
+        import forkhub
+
+        # The factory is imported inside _backfill_impl from `forkhub`,
+        # so patch the source attribute (mirrors the analyzer skip test).
+        monkeypatch.setattr(forkhub, "_build_default_test_fixer", lambda _settings: None)
+
+        from forkhub.services.backfill import BackfillService
+
+        async def fake_run_backfill_all(self, **_kw):
+            return BackfillResult()
+
+        monkeypatch.setattr(BackfillService, "run_backfill_all", fake_run_backfill_all)
+
+        output: list[str] = []
+        await _backfill_impl(
+            repo="upstream/proj",
+            db=db,
+            provider=StubGitProvider(),
+            capture_output=output,
+            auto_fix_tests=True,
+        )
+        assert "Test fixer skipped" in "\n".join(output)
+
     async def test_db_none_uses_get_services(self, patched_get_services, db: Database):
         """When db is None, the get_services branch runs."""
         await _seed_tracked_repo(db)

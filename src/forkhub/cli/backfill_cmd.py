@@ -18,7 +18,7 @@ from forkhub.cli.helpers import async_command
 
 if TYPE_CHECKING:
     from forkhub.database import Database
-    from forkhub.interfaces import GitProvider
+    from forkhub.interfaces import GitProvider, TestFixer
     from forkhub.models import BackfillAttempt, BackfillResult
 
 console = Console()
@@ -161,14 +161,17 @@ async def _backfill_impl(
     db: Database | None = None,
     provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
+    *,
+    test_fixer: TestFixer | None = None,
 ) -> BackfillResult | None:
     """Core autonomous backfill logic (the `run` subcommand)."""
     from forkhub.cli.helpers import get_services
     from forkhub.services.backfill import BackfillService
 
     owns_db = False
+    settings = None
     if db is None or provider is None:
-        _settings, db, provider = await get_services()
+        settings, db, provider = await get_services()
         owns_db = True
 
     try:
@@ -194,17 +197,20 @@ async def _backfill_impl(
         effective_test_cmd = test_command or "uv run pytest -x --tb=short -q"
         effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
 
-        # Wire up the test fixer when auto_fix_tests is enabled
-        test_fixer = None
-        if auto_fix_tests:
-            from forkhub.agent.test_fixer import ClaudeTestFixer
-            from forkhub.config import ForkHubSettings
+        # Wire up the test fixer via the shared factory when the caller
+        # opted in and didn't inject one. The factory owns graceful
+        # degradation for a missing [claude] extra so the CLI stays thin.
+        if auto_fix_tests and test_fixer is None:
+            from forkhub import _build_default_test_fixer
+            from forkhub.config import load_settings
 
-            fh_settings = ForkHubSettings()
-            test_fixer = ClaudeTestFixer(
-                model=fh_settings.anthropic.digest_model,
-                budget_usd=fh_settings.anthropic.analysis_budget_usd / 5,
-            )
+            fixer_settings = settings if settings is not None else load_settings()
+            test_fixer = _build_default_test_fixer(fixer_settings)
+            if test_fixer is None:
+                _output(
+                    "Test fixer skipped: [claude] extra not installed",
+                    capture_output,
+                )
 
         backfill = BackfillService(
             db=db,
