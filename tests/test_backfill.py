@@ -16,7 +16,14 @@ from forkhub.models import (
 )
 from forkhub.services.backfill import BackfillService
 
-from .stubs import StubGitProvider, make_fork, make_signal, make_tracked_repo
+from .stubs import (
+    StubGitProvider,
+    make_cluster,
+    make_cluster_member,
+    make_fork,
+    make_signal,
+    make_tracked_repo,
+)
 
 if TYPE_CHECKING:
     from forkhub.database import Database
@@ -175,6 +182,168 @@ class TestGatherCandidates:
         service = BackfillService(db=db, provider=provider, min_significance=5)
         candidates = await service._gather_candidates(repo["id"])
         assert candidates == []
+
+
+# ---------------------------------------------------------------------------
+# Cluster-aware ranking and dedup
+# ---------------------------------------------------------------------------
+
+
+async def _insert_signal_in_cluster(
+    db: Database,
+    cluster_id: str,
+    tracked_repo_id: str,
+    fork_id: str,
+    **signal_overrides: object,
+) -> dict:
+    """Insert a signal and register it as a member of an existing cluster."""
+    sig = make_signal(fork_id, tracked_repo_id, **signal_overrides)
+    await db.insert_signal(sig)
+    await db.add_cluster_member(make_cluster_member(cluster_id, sig["id"], fork_id))
+    return sig
+
+
+class TestClusterRanking:
+    async def test_significance_outranks_cluster_membership(
+        self, db: Database, provider: StubGitProvider
+    ):
+        """A higher-significance non-clustered signal outranks a clustered one.
+
+        Significance is primary; cluster membership only breaks ties.
+        """
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster = make_cluster(repo["id"])
+        await db.insert_cluster(cluster)
+
+        await _insert_signal_in_cluster(
+            db, cluster["id"], repo["id"], fork["id"], significance=7, summary="Clustered"
+        )
+        await _insert_signal(db, repo["id"], fork["id"], significance=9, summary="Higher solo")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service._gather_candidates(repo["id"])
+        assert candidates[0].significance == 9
+        assert candidates[0].summary == "Higher solo"
+
+    async def test_cluster_breaks_tie_above_recency(self, db: Database, provider: StubGitProvider):
+        """At equal significance, cluster membership ranks a signal above a solo one.
+
+        The clustered signal is the *more recent* one so that, under a pure
+        (-significance, created_at) earliest-first sort, it would lose to the
+        older solo signal. Cluster membership must be what pulls it above.
+        """
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster = make_cluster(repo["id"])
+        await db.insert_cluster(cluster)
+
+        older = "2025-01-01T00:00:00+00:00"
+        newer = "2025-02-01T00:00:00+00:00"
+        await _insert_signal_in_cluster(
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=7,
+            summary="Clustered newer",
+            created_at=newer,
+        )
+        sig_solo = make_signal(
+            fork["id"], repo["id"], significance=7, summary="Solo older", created_at=older
+        )
+        await db.insert_signal(sig_solo)
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service._gather_candidates(repo["id"])
+        assert candidates[0].summary == "Clustered newer"
+        assert candidates[1].summary == "Solo older"
+
+
+class TestClusterDedup:
+    async def test_same_cluster_keeps_highest_significance(
+        self, db: Database, provider: StubGitProvider
+    ):
+        """Two signals in one cluster collapse to the highest-significance member."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster = make_cluster(repo["id"])
+        await db.insert_cluster(cluster)
+
+        await _insert_signal_in_cluster(
+            db, cluster["id"], repo["id"], fork["id"], significance=6, summary="Weaker member"
+        )
+        await _insert_signal_in_cluster(
+            db, cluster["id"], repo["id"], fork["id"], significance=9, summary="Stronger member"
+        )
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service._gather_candidates(repo["id"])
+        assert len(candidates) == 1
+        assert candidates[0].summary == "Stronger member"
+
+    async def test_same_cluster_tie_keeps_earliest(self, db: Database, provider: StubGitProvider):
+        """A significance tie within a cluster keeps the earliest-created member."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster = make_cluster(repo["id"])
+        await db.insert_cluster(cluster)
+
+        await _insert_signal_in_cluster(
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=8,
+            summary="Earliest",
+            created_at="2025-01-01T00:00:00+00:00",
+        )
+        await _insert_signal_in_cluster(
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=8,
+            summary="Later",
+            created_at="2025-03-01T00:00:00+00:00",
+        )
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service._gather_candidates(repo["id"])
+        assert len(candidates) == 1
+        assert candidates[0].summary == "Earliest"
+
+    async def test_different_clusters_both_kept(self, db: Database, provider: StubGitProvider):
+        """Signals in different clusters are distinct changes — both survive dedup."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster_a = make_cluster(repo["id"], label="Cluster A")
+        cluster_b = make_cluster(repo["id"], label="Cluster B")
+        await db.insert_cluster(cluster_a)
+        await db.insert_cluster(cluster_b)
+
+        await _insert_signal_in_cluster(
+            db, cluster_a["id"], repo["id"], fork["id"], significance=8, summary="In A"
+        )
+        await _insert_signal_in_cluster(
+            db, cluster_b["id"], repo["id"], fork["id"], significance=7, summary="In B"
+        )
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service._gather_candidates(repo["id"])
+        summaries = {c.summary for c in candidates}
+        assert summaries == {"In A", "In B"}
+
+    async def test_non_clustered_signals_all_kept(self, db: Database, provider: StubGitProvider):
+        """Non-clustered signals are never deduped, even at equal significance."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        await _insert_signal(db, repo["id"], fork["id"], significance=7, summary="Solo one")
+        await _insert_signal(db, repo["id"], fork["id"], significance=7, summary="Solo two")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service._gather_candidates(repo["id"])
+        assert len(candidates) == 2
 
 
 # ---------------------------------------------------------------------------

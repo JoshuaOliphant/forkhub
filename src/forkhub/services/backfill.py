@@ -163,6 +163,7 @@ class BackfillService:
             embedding=row["embedding"],
             is_upstream=bool(row["is_upstream"]),
             release_tag=row["release_tag"],
+            created_at=row["created_at"],
         )
 
     async def gather_candidates(
@@ -170,15 +171,26 @@ class BackfillService:
         repo_id: str,
         since: datetime | None = None,
     ) -> list[Signal]:
-        """Query signals and rank by backfill potential.
+        """Query signals and rank by backfill potential, deduped by cluster.
 
-        Prioritizes by: significance (desc), cluster membership, recency.
         Filters out signals below min_significance, upstream signals, and
         signals with no associated fork. Does NOT filter out already-attempted
         signals — callers can check that via db.has_backfill_for_signal.
+
+        Ranking key: ``(-significance, not_clustered, created_at)``. Significance
+        is primary — it is the agent's value judgment. Cluster membership
+        (independent forks making the same change) breaks ties *above* recency:
+        corroboration strengthens confidence at equal value, but a trivial change
+        common to many forks should never outrank a more significant lone one.
+        Earliest created_at is the final, deterministic tie-break.
+
+        Dedup: signals in the same cluster are one change made by N forks, so
+        only the best member per cluster survives (highest significance, then
+        earliest created_at). Non-clustered signals are all kept.
         """
         since_dt = since or datetime(2000, 1, 1, tzinfo=UTC)
         signal_rows = await self._db.list_signals(repo_id, since=since_dt)
+        cluster_map = await self._db.get_signal_cluster_map(repo_id)
 
         candidates: list[Signal] = []
         for row in signal_rows:
@@ -192,9 +204,26 @@ class BackfillService:
                 continue
             candidates.append(self._row_to_signal(row))
 
-        # Sort by significance descending, then by recency
-        candidates.sort(key=lambda s: (-s.significance, s.created_at))
-        return candidates
+        # Rank: significance first, cluster corroboration as tie-break above
+        # recency, then earliest created_at for determinism.
+        candidates.sort(
+            key=lambda s: (-s.significance, cluster_map.get(s.id) is None, s.created_at)
+        )
+
+        # Dedup: keep only the best member per cluster. Because not_clustered is
+        # constant within a cluster, first-seen in the sorted order is already
+        # the highest-significance, earliest member. Non-clustered signals (no
+        # cluster id) are never collapsed.
+        deduped: list[Signal] = []
+        seen_clusters: set[str] = set()
+        for signal in candidates:
+            cluster_id = cluster_map.get(signal.id)
+            if cluster_id is not None:
+                if cluster_id in seen_clusters:
+                    continue
+                seen_clusters.add(cluster_id)
+            deduped.append(signal)
+        return deduped
 
     # Private alias for back-compat with existing tests
     _gather_candidates = gather_candidates

@@ -495,6 +495,27 @@ class Database:
         )
         return await self._fetchall(cursor)
 
+    async def get_signal_cluster_map(self, repo_id: str) -> dict[str, str]:
+        """Map each clustered signal in a repo to its cluster id.
+
+        Joins cluster_members to clusters filtered by tracked_repo_id. Signals
+        with no cluster membership are simply absent from the returned dict.
+        Cluster membership is plain relational data — this path does not depend
+        on sqlite-vec.
+        """
+        cursor = await self._db.execute(
+            """
+            SELECT cm.signal_id, cm.cluster_id
+            FROM cluster_members cm
+            JOIN clusters c ON cm.cluster_id = c.id
+            WHERE c.tracked_repo_id = ?
+            ORDER BY cm.signal_id, cm.cluster_id
+            """,
+            (repo_id,),
+        )
+        rows = await self._fetchall(cursor)
+        return {row["signal_id"]: row["cluster_id"] for row in rows}
+
     # ------------------------------------------------------------------
     # DigestConfig & Digest CRUD
     # ------------------------------------------------------------------
