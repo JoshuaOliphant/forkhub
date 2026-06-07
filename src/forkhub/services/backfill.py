@@ -1,5 +1,5 @@
-# ABOUTME: Agentic backfill service that cherry-picks valuable fork changes.
-# ABOUTME: Applies patches, runs tests, and uses an agent to fix test failures.
+# ABOUTME: Deterministic backfill service that cherry-picks valuable fork changes.
+# ABOUTME: Applies patches and gates acceptance on tests; optional AI fixer behind auto_fix_tests.
 
 from __future__ import annotations
 
@@ -33,12 +33,14 @@ logger = logging.getLogger(__name__)
 class BackfillService:
     """Evaluates fork signals and attempts to backfill valuable changes.
 
-    The agentic loop:
+    The deterministic loop (no AI on this path):
     1. Rank signals by significance and cluster membership.
     2. For each candidate: fetch the diff, attempt to apply it.
-    3. Run the project test suite to score the result.
-    4. If tests fail but the feature looks valuable, attempt test fixes.
-    5. Record every attempt as a BackfillAttempt trace for future iterations.
+    3. Run the project test suite to gate acceptance.
+    4. Record every attempt as a BackfillAttempt trace for future iterations.
+
+    The only AI involvement is the optional test-fixer, isolated behind
+    auto_fix_tests (off by default) and injected via the TestFixer protocol.
     """
 
     def __init__(
