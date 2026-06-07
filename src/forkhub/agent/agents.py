@@ -19,18 +19,22 @@ SubagentModel = Literal["sonnet", "opus", "haiku", "inherit"]
 _SUBAGENT_MODEL_ALIASES = get_args(SubagentModel)
 
 
-def _subagent_model(configured: str) -> SubagentModel:
+def _subagent_model(configured: str, subagent: str) -> SubagentModel:
     """Narrow a configured model name to a valid subagent model alias.
 
-    Falls back to "inherit" (subagent uses the session model) when the
-    configured value isn't one of the SDK's accepted aliases, e.g. when
-    config specifies a full model ID like "claude-sonnet-4-6".
+    Falls back to "inherit" (the subagent runs on the session model) when
+    the configured value isn't one of the SDK's accepted aliases, e.g. when
+    config specifies a full model ID like "claude-sonnet-4-6". The warning
+    names the affected subagent so the user can map it back to the config
+    field that set it.
     """
     if configured in _SUBAGENT_MODEL_ALIASES:
         return cast("SubagentModel", configured)
     logger.warning(
-        "Model %r is not a valid subagent alias %s; falling back to 'inherit'",
+        "Configured model %r for the %s subagent is not one of the SDK aliases %s; "
+        "the subagent will inherit the session model instead",
         configured,
+        subagent,
         _SUBAGENT_MODEL_ALIASES,
     )
     return "inherit"
@@ -41,7 +45,7 @@ def _build_subagents(settings: ForkHubSettings) -> tuple[Any, Any]:
 
     Models come from settings (anthropic.model for the diff-analyst,
     anthropic.digest_model for the digest-writer) so config and env var
-    overrides propagate instead of baking in string literals.
+    overrides apply.
     """
     from claude_agent_sdk import AgentDefinition
 
@@ -56,11 +60,11 @@ def _build_subagents(settings: ForkHubSettings) -> tuple[Any, Any]:
             "mcp__forkhub__store_signal",
             "mcp__forkhub__search_similar_signals",
         ],
-        model=_subagent_model(settings.anthropic.model),
+        model=_subagent_model(settings.anthropic.model, "diff-analyst"),
     )
     digest_writer = AgentDefinition(
         description="Composes notification digests from accumulated signals",
         prompt=DIGEST_WRITER_PROMPT,
-        model=_subagent_model(settings.anthropic.digest_model),
+        model=_subagent_model(settings.anthropic.digest_model, "digest-writer"),
     )
     return diff_analyst, digest_writer

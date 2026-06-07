@@ -117,7 +117,7 @@ class TestAgentSubagents:
     @pytest.mark.parametrize(
         ("model", "digest_model", "expected_analyst", "expected_writer", "warning_fragment"),
         [
-            # Non-default aliases prove config propagates (fails if literals return)
+            # Non-default aliases prove the configured model reaches each subagent
             pytest.param("opus", "sonnet", "opus", "sonnet", None, id="valid-aliases-propagate"),
             # Full model IDs are valid for the coordinator but not subagents:
             # they degrade to 'inherit' with a warning
@@ -134,7 +134,7 @@ class TestAgentSubagents:
     def test_build_subagents_models_come_from_settings(
         self, caplog, model, digest_model, expected_analyst, expected_writer, warning_fragment
     ):
-        """_build_subagents should propagate configured models, not hardcode literals."""
+        """_build_subagents should use the models from settings for each subagent."""
         pytest.importorskip("claude_agent_sdk")
 
         from forkhub.agent.agents import _build_subagents
@@ -148,12 +148,15 @@ class TestAgentSubagents:
 
         assert getattr(diff_analyst, "model", None) == expected_analyst
         assert getattr(digest_writer, "model", None) == expected_writer
+        agents_records = [r for r in caplog.records if r.name == "forkhub.agent.agents"]
         if warning_fragment is None:
             # Valid aliases must pass through silently — pristine log
-            assert caplog.text == ""
+            assert agents_records == []
         else:
             assert warning_fragment in caplog.text
-            assert "inherit" in caplog.text
+            # The warning names the affected subagent and what the fallback does
+            assert "diff-analyst" in caplog.text
+            assert "inherit the session model" in caplog.text
 
 
 # ---------------------------------------------------------------------------
