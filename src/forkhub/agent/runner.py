@@ -271,10 +271,3 @@ class ClaudeAnalyzer:
             permission_mode="bypassPermissions",
             max_turns=50,
         )
-
-    # Alias: `analyze_repo` is an accepted name for `analyze`.
-    analyze_repo = analyze
-
-
-# Alias: `AnalysisRunner` is an accepted name for `ClaudeAnalyzer`.
-AnalysisRunner = ClaudeAnalyzer
