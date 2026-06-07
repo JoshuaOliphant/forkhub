@@ -284,8 +284,13 @@ class BackfillService:
                 attempt.error = (attempt.error or "") + f" [attempt not persisted: {exc}]"
             return attempt
 
-        # Fetch the diffs for files involved in this signal
+        # Fetch the diffs for files involved in this signal. Backfill is
+        # all-or-nothing: if any expected file's diff can't be fetched, fail the
+        # whole attempt rather than committing a half-applied change set. An
+        # empty diff (binary/pure-rename) means "no patch needed" — skip it.
         patches: list[str] = []
+        patched_files: list[str] = []
+        failed_files: list[str] = []
         for filepath in signal.files_involved:
             try:
                 diff = await self._provider.get_file_diff(
@@ -295,10 +300,19 @@ class BackfillService:
                     f"{fork_row['owner']}:{fork_row['default_branch']}",
                     filepath,
                 )
-                if diff:
-                    patches.append(diff)
             except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
                 logger.warning("Failed to fetch diff for %s: %s", filepath, exc)
+                failed_files.append(filepath)
+                continue
+            if diff:
+                patches.append(diff)
+                patched_files.append(filepath)
+
+        if failed_files:
+            attempt.status = BackfillStatus.PATCH_FAILED
+            attempt.error = f"Partial fetch: could not fetch diffs for: {', '.join(failed_files)}"
+            await self._record_attempt(attempt)
+            return attempt
 
         if not patches:
             attempt.status = BackfillStatus.PATCH_FAILED
@@ -306,7 +320,7 @@ class BackfillService:
             await self._record_attempt(attempt)
             return attempt
 
-        attempt.files_patched = signal.files_involved
+        attempt.files_patched = patched_files
 
         if dry_run:
             attempt.status = BackfillStatus.PENDING
@@ -401,30 +415,27 @@ class BackfillService:
         combined_patch = "\n".join(patches)
         patch_bytes = combined_patch.encode()
 
-        apply_check = await self._run_safe_cmd(
-            ["git", "apply", "--check", "-"],
-            cwd=self._repo_path,
-            stdin_data=patch_bytes,
-        )
-
-        if apply_check.returncode != 0:
-            # Patch doesn't apply cleanly — outer finally handles branch cleanup
-            attempt.status = BackfillStatus.CONFLICT
-            attempt.error = f"Patch conflict: {apply_check.stderr}"
-            return
-
-        # Actually apply the patch
+        # Apply with a 3-way merge so context drift between the fork's diff base
+        # and the local tree resolves where possible. The reconstructed diffs
+        # carry index blob ids, so git can merge against the recorded base; when
+        # the merge can't resolve, git writes conflict markers and exits non-zero.
         apply_result = await self._run_safe_cmd(
-            ["git", "apply", "-"],
+            ["git", "apply", "--3way", "-"],
             cwd=self._repo_path,
             stdin_data=patch_bytes,
         )
 
-        if (
-            apply_result.returncode != 0
-        ):  # pragma: no cover — hard to reproduce without process injection
-            attempt.status = BackfillStatus.PATCH_FAILED
-            attempt.error = f"Patch apply failed: {apply_result.stderr}"
+        if apply_result.returncode != 0:
+            # A failed 3-way leaves conflict markers and unmerged index entries
+            # behind. Reset the tree before returning so the outer finally's
+            # branch switch is clean. Set status first so a reset failure cannot
+            # reclassify this CONFLICT via the outer except.
+            attempt.status = BackfillStatus.CONFLICT
+            attempt.error = f"Patch conflict: {apply_result.stderr}"
+            await self._run_safe_cmd(
+                ["git", "reset", "--hard"],
+                cwd=self._repo_path,
+            )
             return
 
         # Stage only the files touched by this patch (not all working-tree changes)

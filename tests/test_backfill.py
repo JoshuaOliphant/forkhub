@@ -860,10 +860,10 @@ class TestApplySignal:
     async def test_keeps_branch_on_failure_by_default(self, tmp_path, db, provider):
         """apply_signal preserves the candidate branch on patch failure.
 
-        The bad diff triggers `git apply --check` failure inside
-        `_apply_and_test`, which creates the candidate branch first and
-        then sets CONFLICT status. With keep_branch_on_failure=True the
-        branch must survive the finally-block cleanup.
+        A patch targeting a file absent from the index cannot be merged,
+        so `_apply_and_test` creates the candidate branch first and then
+        sets CONFLICT status. With keep_branch_on_failure=True the branch
+        must survive the finally-block cleanup.
         """
         import subprocess as sp
 
@@ -874,7 +874,7 @@ class TestApplySignal:
         signal = await _insert_signal(
             db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
         )
-        # Bad diff → patch will fail to apply
+        # Patch targets a file that does not exist in the tree → cannot apply
         provider.set_file_diff(
             "forker1",
             "src/cache.py",
@@ -885,7 +885,7 @@ class TestApplySignal:
         attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=True)
 
         # The apply path must have been reached (branch_name set), and the
-        # patch must have been rejected at git apply --check (CONFLICT).
+        # patch must have been rejected as a CONFLICT.
         assert attempt.branch_name is not None
         assert attempt.status == BackfillStatus.CONFLICT
         # The branch must still exist under keep_branch_on_failure=True.
@@ -1029,6 +1029,194 @@ class TestApplySignal:
             capture_output=True,
         )
         assert target_file.read_text() == "new\n"
+
+
+def _make_git_diff_with_drift(tmp_path, *, conflict: bool):
+    """Build a committed file, a real `git diff` against it, then drift the tree.
+
+    Returns the captured diff string (with `diff --git` + `index` headers, so
+    `git apply --3way` can use the index blob). The local tree is mutated and
+    committed so plain `git apply` would fail; whether `--3way` resolves it
+    depends on whether the drift overlaps the patched lines.
+
+    - conflict=False: drift lands on a different line → 3way resolves cleanly.
+    - conflict=True:  drift lands on the same line   → 3way leaves markers.
+    """
+    import subprocess as sp
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    target = src_dir / "cache.py"
+    target.write_text("line1\nline2\nline3\nline4\nline5\n")
+    sp.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+    sp.run(["git", "commit", "-m", "add cache"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    # Fork's change: rewrite line3.
+    target.write_text("line1\nline2\nline3-FORK\nline4\nline5\n")
+    diff = sp.run(
+        ["git", "diff"], cwd=str(tmp_path), check=True, capture_output=True, text=True
+    ).stdout
+
+    # Reset, then introduce local drift and commit so the tree differs from the
+    # patch base.
+    sp.run(["git", "checkout", "--", "."], cwd=str(tmp_path), check=True, capture_output=True)
+    if conflict:
+        # Drift on the same line the patch edits → 3way conflict.
+        target.write_text("line1\nline2\nline3-LOCAL\nline4\nline5\n")
+    else:
+        # Drift on a different line → 3way resolves.
+        target.write_text("line1\nline2\nline3\nline4\nline5-LOCAL\n")
+    sp.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+    sp.run(
+        ["git", "commit", "-m", "local drift"], cwd=str(tmp_path), check=True, capture_output=True
+    )
+    return diff
+
+
+class TestApplyThreeWayDrift:
+    async def test_drift_in_other_region_resolves_and_accepts(self, tmp_path, db, provider):
+        """Context drift away from the patched lines resolves via 3-way merge,
+        so the attempt proceeds to ACCEPTED rather than failing as a conflict.
+        """
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+        diff = _make_git_diff_with_drift(tmp_path, conflict=False)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        provider.set_file_diff("forker1", "src/cache.py", diff)
+
+        service = BackfillService(
+            db=db,
+            provider=provider,
+            repo_path=tmp_path,
+            min_significance=5,
+            test_command="true",
+        )
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.ACCEPTED
+        assert attempt.branch_name is not None
+        # The merged content carries both the fork change and the local drift.
+        sp.run(
+            ["git", "checkout", attempt.branch_name],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+        content = (tmp_path / "src" / "cache.py").read_text()
+        assert "line3-FORK" in content
+        assert "line5-LOCAL" in content
+
+    async def test_overlapping_drift_conflicts_and_resets_tree(self, tmp_path, db, provider):
+        """Drift on the patched lines cannot be merged: the attempt is a
+        CONFLICT and the working tree is reset so no markers linger.
+        """
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+        diff = _make_git_diff_with_drift(tmp_path, conflict=True)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        provider.set_file_diff("forker1", "src/cache.py", diff)
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=True)
+
+        assert attempt.status == BackfillStatus.CONFLICT
+        assert attempt.error is not None
+        assert attempt.branch_name is not None
+        # The candidate branch's tree must be clean — no conflict markers, no
+        # unmerged index entries left behind by the failed 3-way apply.
+        sp.run(
+            ["git", "checkout", attempt.branch_name],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+        )
+        status = sp.run(
+            ["git", "status", "--porcelain"], cwd=str(tmp_path), capture_output=True, text=True
+        )
+        assert status.stdout.strip() == "", (
+            f"working tree not clean after CONFLICT reset: {status.stdout!r}"
+        )
+        content = (tmp_path / "src" / "cache.py").read_text()
+        assert "<<<<<<<" not in content
+        assert "line3-LOCAL" in content
+
+
+class TestPartialFetch:
+    async def test_one_file_fetch_error_fails_whole_attempt(self, tmp_path, db, provider):
+        """If any expected file's diff fetch raises, the attempt fails as a
+        partial fetch rather than committing a half-applied change set.
+        """
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/a.py", "src/b.py"]
+        )
+        provider.set_file_diff(
+            "forker1",
+            "src/a.py",
+            "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        provider._error_files.add("src/b.py")
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.PATCH_FAILED
+        assert attempt.error is not None
+        assert "Partial fetch" in attempt.error
+        assert "src/b.py" in attempt.error
+
+    async def test_empty_diff_is_not_a_failure(self, tmp_path, db, provider):
+        """A file whose diff is empty (binary/pure-rename) is skipped, not a
+        failure — the attempt proceeds with the files that do have patches.
+        """
+        _init_git_repo_sync(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "a.py").write_text("old\n")
+        import subprocess as sp
+
+        sp.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+        sp.run(["git", "commit", "-m", "add a"], cwd=str(tmp_path), check=True, capture_output=True)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/a.py", "src/b.py"]
+        )
+        provider.set_file_diff(
+            "forker1",
+            "src/a.py",
+            "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        # src/b.py returns "" (no diff registered) → treated as no-patch-needed.
+
+        service = BackfillService(
+            db=db,
+            provider=provider,
+            repo_path=tmp_path,
+            min_significance=5,
+            test_command="true",
+        )
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.ACCEPTED
+        # Only the file that produced a patch is staged; the empty-diff file is
+        # skipped rather than staged (which would fail when it's absent locally).
+        assert attempt.files_patched == ["src/a.py"]
 
 
 # ---------------------------------------------------------------------------
