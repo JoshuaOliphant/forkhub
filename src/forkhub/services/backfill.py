@@ -315,8 +315,14 @@ class BackfillService:
             return attempt
 
         if not patches:
+            # Every file's fetch succeeded but produced an empty diff: the
+            # signal is unpatchable as text (binary, pure rename, or unchanged),
+            # not a fetch failure. Distinguishing this lets the CLI map it to a
+            # terminal patch_failed rather than a retriable fetch_error.
             attempt.status = BackfillStatus.PATCH_FAILED
-            attempt.error = "No diffs could be fetched for signal files"
+            attempt.error = (
+                "No applicable diffs (all involved files are binary, pure renames, or unchanged)"
+            )
             await self._record_attempt(attempt)
             return attempt
 
@@ -432,10 +438,16 @@ class BackfillService:
             # reclassify this CONFLICT via the outer except.
             attempt.status = BackfillStatus.CONFLICT
             attempt.error = f"Patch conflict: {apply_result.stderr}"
-            await self._run_safe_cmd(
+            reset_result = await self._run_safe_cmd(
                 ["git", "reset", "--hard"],
                 cwd=self._repo_path,
             )
+            if reset_result.returncode != 0:
+                # The tree could not be reset; conflict markers / unmerged
+                # entries may linger. Surface it so the dirty state is visible.
+                attempt.error += (
+                    f" [tree reset failed: {reset_result.stderr}; working tree may be dirty]"
+                )
             return
 
         # Stage only the files touched by this patch (not all working-tree changes)

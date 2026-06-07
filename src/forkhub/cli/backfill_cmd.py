@@ -527,7 +527,10 @@ def _apply_exit_code_and_reason(attempt: BackfillAttempt) -> tuple[int, str]:
     if status == BackfillStatus.CONFLICT:
         return 2, "conflict"
     if status == BackfillStatus.PATCH_FAILED:
-        if attempt.error and "No diffs" in attempt.error:
+        # Both "No diffs" and "Partial fetch" are genuine, retriable fetch
+        # failures. "No applicable diffs" (binary/pure-rename/unchanged) is a
+        # terminal patch failure and must NOT match here.
+        if attempt.error and ("No diffs" in attempt.error or "Partial fetch" in attempt.error):
             return 3, "fetch_error"
         return 2, "patch_failed"
     if status == BackfillStatus.PENDING:
