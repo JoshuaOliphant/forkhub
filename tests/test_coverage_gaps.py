@@ -114,47 +114,46 @@ class TestAppRoot:
 
 
 class TestAgentSubagents:
-    def test_build_subagents_models_come_from_settings(self):
-        """_build_subagents should propagate configured models, not hardcode literals.
-
-        Uses non-default model names so the test fails if string literals
-        sneak back into the AgentDefinitions.
-        """
-        pytest.importorskip("claude_agent_sdk")
-
-        from forkhub.agent.agents import _build_subagents
-        from forkhub.config import AnthropicSettings, ForkHubSettings
-
-        settings = ForkHubSettings(anthropic=AnthropicSettings(model="opus", digest_model="sonnet"))
-        diff_analyst, digest_writer = _build_subagents(settings)
-        assert diff_analyst is not None
-        assert digest_writer is not None
-        # AgentDefinitions carry a model attribute fed from config
-        assert getattr(diff_analyst, "model", None) == "opus"
-        assert getattr(digest_writer, "model", None) == "sonnet"
-
-    def test_build_subagents_invalid_model_falls_back_to_inherit(self, caplog):
-        """Non-alias model names fall back to 'inherit' with a warning.
-
-        AgentDefinition only accepts the SDK's alias literals
-        (sonnet/opus/haiku/inherit). Full model IDs are valid for the
-        coordinator but not for subagents, so they degrade gracefully.
-        """
+    @pytest.mark.parametrize(
+        ("model", "digest_model", "expected_analyst", "expected_writer", "warning_fragment"),
+        [
+            # Non-default aliases prove config propagates (fails if literals return)
+            pytest.param("opus", "sonnet", "opus", "sonnet", None, id="valid-aliases-propagate"),
+            # Full model IDs are valid for the coordinator but not subagents:
+            # they degrade to 'inherit' with a warning
+            pytest.param(
+                "claude-sonnet-4-6",
+                "haiku",
+                "inherit",
+                "haiku",
+                "claude-sonnet-4-6",
+                id="invalid-alias-falls-back-to-inherit",
+            ),
+        ],
+    )
+    def test_build_subagents_models_come_from_settings(
+        self, caplog, model, digest_model, expected_analyst, expected_writer, warning_fragment
+    ):
+        """_build_subagents should propagate configured models, not hardcode literals."""
         pytest.importorskip("claude_agent_sdk")
 
         from forkhub.agent.agents import _build_subagents
         from forkhub.config import AnthropicSettings, ForkHubSettings
 
         settings = ForkHubSettings(
-            anthropic=AnthropicSettings(model="claude-sonnet-4-6", digest_model="haiku")
+            anthropic=AnthropicSettings(model=model, digest_model=digest_model)
         )
         with caplog.at_level("WARNING", logger="forkhub.agent.agents"):
             diff_analyst, digest_writer = _build_subagents(settings)
 
-        assert getattr(diff_analyst, "model", None) == "inherit"
-        assert getattr(digest_writer, "model", None) == "haiku"
-        assert "claude-sonnet-4-6" in caplog.text
-        assert "inherit" in caplog.text
+        assert getattr(diff_analyst, "model", None) == expected_analyst
+        assert getattr(digest_writer, "model", None) == expected_writer
+        if warning_fragment is None:
+            # Valid aliases must pass through silently — pristine log
+            assert caplog.text == ""
+        else:
+            assert warning_fragment in caplog.text
+            assert "inherit" in caplog.text
 
 
 # ---------------------------------------------------------------------------

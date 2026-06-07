@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 # The SDK's AgentDefinition only accepts these model aliases for subagents.
 # Full model IDs are valid for the coordinator (ClaudeAgentOptions) but not here.
 SubagentModel = Literal["sonnet", "opus", "haiku", "inherit"]
+_SUBAGENT_MODEL_ALIASES = get_args(SubagentModel)
 
 
 def _subagent_model(configured: str) -> SubagentModel:
@@ -25,12 +26,12 @@ def _subagent_model(configured: str) -> SubagentModel:
     configured value isn't one of the SDK's accepted aliases, e.g. when
     config specifies a full model ID like "claude-sonnet-4-6".
     """
-    if configured in get_args(SubagentModel):
+    if configured in _SUBAGENT_MODEL_ALIASES:
         return cast("SubagentModel", configured)
     logger.warning(
         "Model %r is not a valid subagent alias %s; falling back to 'inherit'",
         configured,
-        get_args(SubagentModel),
+        _SUBAGENT_MODEL_ALIASES,
     )
     return "inherit"
 
