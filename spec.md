@@ -1292,8 +1292,11 @@ surface for an external agent to drive test fixes autonomously:
 attempt = await service.apply_signal(signal_id)  # keeps branch on test failure
 
 if attempt.status == BackfillStatus.TESTS_FAILED:
-    # Work on the candidate branch apply_signal left behind
-    # (CLI equivalent: git checkout <branch>, then the primitives below)
+    # apply_signal returns with the ORIGINAL branch checked out and the
+    # patch on the candidate branch. The primitives below act on the
+    # currently checked-out branch, so switch first (there is no service
+    # method for this — it is a deliberate raw-git step).
+    subprocess.run(["git", "checkout", attempt.branch_name], check=True)
 
     # 1. Read failures: runs tests, parses failing test files, returns contents
     failures = await service.read_failing_test_files()
