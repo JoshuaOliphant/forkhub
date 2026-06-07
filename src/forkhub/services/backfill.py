@@ -79,7 +79,7 @@ class BackfillService:
         result = BackfillResult()
 
         # Gather candidate signals
-        candidates = await self._gather_candidates(repo_id, since=since)
+        candidates = await self.gather_candidates(repo_id, since=since)
         result.total_evaluated = len(candidates)
 
         if not candidates:
@@ -92,7 +92,10 @@ class BackfillService:
             if await self._db.has_backfill_for_signal(signal.id):
                 continue
 
-            attempt = await self._try_backfill(signal, dry_run=dry_run)
+            # Autonomous loop: candidate branches are deleted on failure
+            attempt = await self.apply_signal(
+                signal.id, dry_run=dry_run, keep_branch_on_failure=False
+            )
             result.attempted += 1
 
             if attempt.status == BackfillStatus.ACCEPTED:
@@ -232,9 +235,6 @@ class BackfillService:
                 seen_clusters.add(cluster_id)
             deduped.append(signal)
         return deduped
-
-    # Private alias for back-compat with existing tests
-    _gather_candidates = gather_candidates
 
     async def get_signal_by_id(self, signal_id: str) -> Signal | None:
         """Fetch and hydrate a Signal by id. Returns None if not found."""
@@ -452,19 +452,6 @@ class BackfillService:
         except Exception as db_exc:  # pragma: no cover — DB failure after successful apply
             logger.error("Failed to record backfill attempt for signal %s: %s", signal.id, db_exc)
         return attempt
-
-    async def _try_backfill(
-        self,
-        signal: Signal,
-        *,
-        dry_run: bool = False,
-    ) -> BackfillAttempt:
-        """Legacy path used by run_backfill — delete candidate branch on failure."""
-        return await self.apply_signal(
-            signal.id,
-            dry_run=dry_run,
-            keep_branch_on_failure=False,
-        )
 
     async def _apply_and_test(
         self,
@@ -689,20 +676,6 @@ class BackfillService:
                 stderr=result.stderr,
             )
         return result.stdout or ""
-
-    async def _run_exec(
-        self,
-        args: list[str],
-        *,
-        cwd: Path | None = None,
-        stdin_data: bytes | None = None,
-        timeout: int = 120,
-    ) -> subprocess.CompletedProcess:
-        """Run a command as an argument list (no shell interpolation).
-
-        Public alias kept for testability; delegates to _run_safe_cmd.
-        """
-        return await self._run_safe_cmd(args, cwd=cwd, stdin_data=stdin_data, timeout=timeout)
 
     async def _run_safe_cmd(
         self,

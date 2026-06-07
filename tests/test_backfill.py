@@ -115,7 +115,7 @@ class TestGatherCandidates:
         await _insert_signal(db, repo["id"], fork["id"], significance=7)  # Above threshold
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert len(candidates) == 1
         assert candidates[0].significance == 7
 
@@ -127,7 +127,7 @@ class TestGatherCandidates:
         await _insert_signal(db, repo["id"], fork["id"], significance=7, is_upstream=False)
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert len(candidates) == 1
         assert not candidates[0].is_upstream
 
@@ -140,7 +140,7 @@ class TestGatherCandidates:
         await _insert_signal(db, repo["id"], fork["id"], significance=7, summary="Notable")
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert len(candidates) == 3
         assert candidates[0].significance == 9
         assert candidates[1].significance == 7
@@ -150,7 +150,7 @@ class TestGatherCandidates:
         """No signals means no candidates."""
         repo = await _insert_tracked_repo(db)
         service = BackfillService(db=db, provider=provider)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert candidates == []
 
     async def test_since_filter_applied(self, db: Database, provider: StubGitProvider):
@@ -163,7 +163,7 @@ class TestGatherCandidates:
         service = BackfillService(db=db, provider=provider, min_significance=5)
         # Ask for signals from the future — should get none
         future = datetime.now(UTC) + timedelta(days=1)
-        candidates = await service._gather_candidates(repo["id"], since=future)
+        candidates = await service.gather_candidates(repo["id"], since=future)
         assert candidates == []
 
     async def test_excludes_signals_with_no_fork_id(self, db: Database, provider: StubGitProvider):
@@ -180,7 +180,7 @@ class TestGatherCandidates:
         await db.insert_signal(sig)
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert candidates == []
 
 
@@ -222,7 +222,7 @@ class TestClusterRanking:
         await _insert_signal(db, repo["id"], fork["id"], significance=9, summary="Higher solo")
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert candidates[0].significance == 9
         assert candidates[0].summary == "Higher solo"
 
@@ -255,7 +255,7 @@ class TestClusterRanking:
         await db.insert_signal(sig_solo)
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert candidates[0].summary == "Clustered newer"
         assert candidates[1].summary == "Solo older"
 
@@ -295,7 +295,7 @@ class TestClusterDedup:
         )
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert len(candidates) == 1
         assert candidates[0].summary == "Stronger member"
 
@@ -326,7 +326,7 @@ class TestClusterDedup:
         )
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert len(candidates) == 1
         assert candidates[0].summary == "Earliest"
 
@@ -347,7 +347,7 @@ class TestClusterDedup:
         )
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         summaries = {c.summary for c in candidates}
         assert summaries == {"In A", "In B"}
 
@@ -359,7 +359,7 @@ class TestClusterDedup:
         await _insert_signal(db, repo["id"], fork["id"], significance=7, summary="Solo two")
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert len(candidates) == 2
 
 
@@ -774,33 +774,33 @@ class TestBackfillModels:
 # ---------------------------------------------------------------------------
 
 
-class TestRunExec:
-    async def test_run_exec_runs_command_and_returns_stdout(self, tmp_path, db, provider):
-        """_run_exec should run a command and capture stdout without shell."""
+class TestRunSafeCmd:
+    async def test_run_safe_cmd_runs_command_and_returns_stdout(self, tmp_path, db, provider):
+        """_run_safe_cmd should run a command and capture stdout without shell."""
         import subprocess
 
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_exec(["echo", "hello"], cwd=tmp_path)
+        result = await service._run_safe_cmd(["echo", "hello"], cwd=tmp_path)
         assert isinstance(result, subprocess.CompletedProcess)
         assert result.stdout.strip() == "hello"
         assert result.returncode == 0
 
-    async def test_run_exec_does_not_expand_shell_metacharacters(self, tmp_path, db, provider):
-        """_run_exec must not expand shell metacharacters — args are literal."""
+    async def test_run_safe_cmd_does_not_expand_shell_metacharacters(self, tmp_path, db, provider):
+        """_run_safe_cmd must not expand shell metacharacters — args are literal."""
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_exec(["echo", "$HOME"], cwd=tmp_path)
+        result = await service._run_safe_cmd(["echo", "$HOME"], cwd=tmp_path)
         assert result.stdout.strip() == "$HOME"
 
-    async def test_run_exec_passes_stdin_data(self, tmp_path, db, provider):
-        """_run_exec should pass stdin_data bytes to the process stdin."""
+    async def test_run_safe_cmd_passes_stdin_data(self, tmp_path, db, provider):
+        """_run_safe_cmd should pass stdin_data bytes to the process stdin."""
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_exec(["cat"], cwd=tmp_path, stdin_data=b"patch content")
+        result = await service._run_safe_cmd(["cat"], cwd=tmp_path, stdin_data=b"patch content")
         assert result.stdout == "patch content"
 
-    async def test_run_exec_times_out_and_returns_error(self, tmp_path, db, provider):
-        """_run_exec should return returncode -1 when command times out."""
+    async def test_run_safe_cmd_times_out_and_returns_error(self, tmp_path, db, provider):
+        """_run_safe_cmd should return returncode -1 when command times out."""
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_exec(["sleep", "10"], cwd=tmp_path, timeout=1)
+        result = await service._run_safe_cmd(["sleep", "10"], cwd=tmp_path, timeout=1)
         assert result.returncode == -1
         assert "timed out" in result.stderr.lower()
 
@@ -808,7 +808,7 @@ class TestRunExec:
         """_run_shell must be removed — exec-based approach replaces it."""
         service = BackfillService(db=db, provider=provider)
         assert not hasattr(service, "_run_shell"), (
-            "_run_shell must be deleted; use _run_exec instead"
+            "_run_shell must be deleted; use _run_safe_cmd instead"
         )
 
     async def test_shell_quote_no_longer_exists(self, db, provider):
@@ -1939,11 +1939,10 @@ class TestRunTestCommand:
 
 class TestRunBackfillRegressions:
     async def test_run_backfill_still_deletes_branch_on_failure(self, tmp_path, db, provider):
-        """The autonomous run_backfill loop must still delete candidate branches on failure.
+        """The autonomous run_backfill loop must delete candidate branches on failure.
 
-        This is the regression test for the service refactor: _try_backfill now
-        delegates to apply_signal(keep_branch_on_failure=False), preserving the
-        old autonomous-loop behavior.
+        run_backfill applies each candidate with keep_branch_on_failure=False,
+        so failed attempts never accumulate stale branches.
         """
         import subprocess as sp
 

@@ -368,12 +368,6 @@ class TestApplyExitCodeMapping:
             (BackfillStatus.PATCH_FAILED, "patch did not apply cleanly", 2, "patch_failed"),
             (
                 BackfillStatus.PATCH_FAILED,
-                "No diffs could be fetched for signal files",
-                3,
-                "fetch_error",
-            ),
-            (
-                BackfillStatus.PATCH_FAILED,
                 "Partial fetch: could not fetch diffs for: src/b.py",
                 3,
                 "fetch_error",
