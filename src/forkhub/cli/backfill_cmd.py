@@ -245,6 +245,7 @@ async def _backfill_impl(
         _output(f"  Signals evaluated: {combined.total_evaluated}", capture_output)
         _output(f"  Attempts made:     {combined.attempted}", capture_output)
         _output(f"  Accepted:          [green]{combined.accepted}[/green]", capture_output)
+        _output(f"  Needs review:      [magenta]{combined.needs_review}[/magenta]", capture_output)
         _output(f"  Patch failed:      [red]{combined.patch_failed}[/red]", capture_output)
         _output(f"  Tests failed:      [yellow]{combined.tests_failed}[/yellow]", capture_output)
         _output(f"  Conflicts:         [red]{combined.conflicts}[/red]", capture_output)
@@ -282,7 +283,12 @@ async def run_command(
     auto_fix_tests: bool = typer.Option(
         False,
         "--auto-fix-tests/--no-auto-fix-tests",
-        help="Attempt to fix failing tests after patch application (requires [claude] extra)",
+        help=(
+            "EXPERIMENTAL: lets an AI agent rewrite this project's own tests to "
+            "accommodate the imported change (requires [claude] extra). Green tests "
+            "after such edits do NOT mean acceptance — attempts are marked "
+            "needs_review for human inspection, never auto-accepted."
+        ),
     ),
     repo_path: str | None = typer.Option(
         None, "--repo-path", help="Path to the local repository to patch"
@@ -361,6 +367,7 @@ async def _backfill_list_impl(
 
         status_colors = {
             "accepted": "green",
+            "needs_review": "magenta",
             "pending": "dim",
             "patch_failed": "red",
             "tests_failed": "yellow",
@@ -522,6 +529,10 @@ def _apply_exit_code_and_reason(attempt: BackfillAttempt) -> tuple[int, str]:
     status = attempt.status
     if status == BackfillStatus.ACCEPTED:
         return 0, "accepted"
+    if status == BackfillStatus.NEEDS_REVIEW:
+        # Distinct from accepted: the suite only went green after the auto-fixer
+        # rewrote the project's own tests. A human must inspect the branch.
+        return 5, "needs_review"
     if status == BackfillStatus.TESTS_FAILED:
         return 1, "tests_failed"
     if status == BackfillStatus.CONFLICT:
@@ -612,7 +623,8 @@ async def apply_command(
     """Apply a signal's patches to a candidate branch and run tests.
 
     Exit codes: 0=tests passed (or dry-run pending), 1=tests failed,
-    2=conflict/patch failed, 3=fetch error, 4=signal not found.
+    2=conflict/patch failed, 3=fetch error, 4=signal not found,
+    5=needs_review (auto-fixer edited the project's tests to reach green).
     Branch preserved on failure.
     """
     exit_code = await _apply_impl(

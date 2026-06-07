@@ -56,6 +56,9 @@ class BackfillStatus(StrEnum):
     TESTS_FAILED = "tests_failed"
     CONFLICT = "conflict"
     ACCEPTED = "accepted"
+    # Patch applied but the suite only went green after the AI fixer rewrote the
+    # project's own tests. Never auto-accepted — a human inspects the branch.
+    NEEDS_REVIEW = "needs_review"
     REJECTED = "rejected"
 
 
@@ -217,6 +220,7 @@ class BackfillResult(BaseModel):
     total_evaluated: int = 0
     attempted: int = 0
     accepted: int = 0
+    needs_review: int = 0
     patch_failed: int = 0
     tests_failed: int = 0
     conflicts: int = 0

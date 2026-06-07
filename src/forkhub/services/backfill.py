@@ -99,6 +99,13 @@ class BackfillService:
                 result.accepted += 1
                 if attempt.branch_name:
                     result.branches_created.append(attempt.branch_name)
+            elif attempt.status == BackfillStatus.NEEDS_REVIEW:
+                # The branch carries the patch + the auto-fixer's test edits and
+                # is the deliverable a human reviews, so surface it exactly like
+                # an accepted branch.
+                result.needs_review += 1
+                if attempt.branch_name:
+                    result.branches_created.append(attempt.branch_name)
             elif attempt.status == BackfillStatus.PATCH_FAILED:
                 result.patch_failed += 1
             elif attempt.status == BackfillStatus.TESTS_FAILED:
@@ -140,6 +147,7 @@ class BackfillService:
             combined.total_evaluated += result.total_evaluated
             combined.attempted += result.attempted
             combined.accepted += result.accepted
+            combined.needs_review += result.needs_review
             combined.patch_failed += result.patch_failed
             combined.tests_failed += result.tests_failed
             combined.conflicts += result.conflicts
@@ -390,7 +398,11 @@ class BackfillService:
             logger.exception("Backfill attempt failed for signal %s", signal.id)
         finally:
             # Always return to original branch for safety.
-            # Delete the candidate branch only if NOT accepted AND cleanup requested.
+            # Delete the candidate branch only for non-kept outcomes AND when
+            # cleanup was requested. ACCEPTED and NEEDS_REVIEW are both
+            # kept-branch outcomes: ACCEPTED is the deliverable, and NEEDS_REVIEW
+            # exists precisely so a human can inspect the patch + test edits, so
+            # its branch is never deleted even under keep_branch_on_failure=False.
             try:
                 current = (
                     await self._run_safe_cmd(
@@ -400,7 +412,8 @@ class BackfillService:
                 ).stdout.strip()
                 if current == branch_name:
                     await self._run_git("checkout", "-")
-                if attempt.status != BackfillStatus.ACCEPTED and not keep_branch_on_failure:
+                kept_statuses = (BackfillStatus.ACCEPTED, BackfillStatus.NEEDS_REVIEW)
+                if attempt.status not in kept_statuses and not keep_branch_on_failure:
                     check = await self._run_safe_cmd(
                         ["git", "rev-parse", "--verify", branch_name],
                         cwd=self._repo_path,
@@ -500,8 +513,16 @@ class BackfillService:
             if self._auto_fix_tests:
                 fixed = await self._attempt_test_fix(attempt, test_result)
                 if fixed:
-                    attempt.status = BackfillStatus.ACCEPTED
-                    attempt.score = 0.8  # Slightly lower score since tests needed fixing
+                    # Green ONLY because the AI fixer rewrote the project's own
+                    # tests to accommodate the imported change — that edits the
+                    # oracle rather than proving the change correct. Never
+                    # auto-accept: flag for human review with no auto-assigned
+                    # score (a human assigns the outcome via record_outcome).
+                    attempt.status = BackfillStatus.NEEDS_REVIEW
+                    attempt.score = None
+                    attempt.patch_summary = (
+                        attempt.patch_summary or ""
+                    ) + "\n[needs-review] tests were edited by the auto-fixer to reach green"
                 else:
                     attempt.status = BackfillStatus.TESTS_FAILED
                     attempt.score = 0.0

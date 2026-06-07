@@ -158,6 +158,72 @@ class TestRunBackfillStatusAggregation:
 
         assert result.tests_failed == 1
 
+    async def test_needs_review_increments_result_and_records_branch(
+        self, tmp_path: Path, db: Database, provider: StubGitProvider
+    ) -> None:
+        """run_backfill must count NEEDS_REVIEW and surface its candidate branch.
+
+        A NEEDS_REVIEW outcome (auto-fixer rewrote the project's tests to reach
+        green) is the deliverable for a human reviewer, so its branch joins
+        branches_created exactly as an ACCEPTED branch would — and is never
+        deleted even though run_backfill uses keep_branch_on_failure=False.
+        """
+        _init_git_repo(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "cache.py").write_text("old\n")
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add file"], cwd=str(tmp_path), check=True, capture_output=True
+        )
+
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_cache.py").write_text("def test_cache(): assert False\n")
+
+        # State file: first run fails (parseable failure), second passes.
+        state_file = tmp_path / ".run_count"
+        state_file.write_text("0")
+        runner_script = tmp_path / "_run_tests.py"
+        runner_script.write_text(
+            f"import sys; from pathlib import Path\n"
+            f"p = Path(r'{state_file}')\n"
+            f"n = int(p.read_text()) + 1; p.write_text(str(n))\n"
+            f"if n == 1:\n"
+            f"    print('tests/test_cache.py:1: AssertionError', flush=True); sys.exit(1)\n"
+            f"sys.exit(0)\n"
+        )
+
+        fixer = StubTestFixer(
+            suggestions=[
+                FixSuggestion(
+                    reasoning="Fixed assertion",
+                    edits=[FixEdit(path="tests/test_cache.py", content="def test_cache(): pass\n")],
+                )
+            ]
+        )
+
+        repo = await _insert_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        await _insert_signal(db, repo["id"], fork["id"], files=["src/cache.py"])
+
+        valid_diff = "--- a/src/cache.py\n+++ b/src/cache.py\n@@ -1 +1 @@\n-old\n+new\n"
+        provider.set_file_diff("forker1", "src/cache.py", valid_diff)
+
+        service = BackfillService(
+            db=db,
+            provider=provider,
+            repo_path=tmp_path,
+            min_significance=5,
+            auto_fix_tests=True,
+            test_fixer=fixer,
+            test_command=f"{shlex.quote(sys.executable)} {shlex.quote(str(runner_script))}",
+        )
+        result = await service.run_backfill(repo["id"])
+
+        assert result.needs_review == 1
+        assert result.accepted == 0
+        assert result.tests_failed == 0
+        assert len(result.branches_created) == 1
+
 
 # ---------------------------------------------------------------------------
 # apply_signal — line 235 (signal has no fork_id)
@@ -312,10 +378,17 @@ class TestApplySignalOuterExcept:
 
 
 class TestApplyAndTestAutoFix:
-    async def test_auto_fix_accepted_when_fixer_succeeds(
+    async def test_auto_fix_needs_review_when_fixer_succeeds(
         self, tmp_path: Path, db: Database, provider: StubGitProvider
     ) -> None:
-        """When auto_fix_tests=True and _attempt_test_fix returns True, status is ACCEPTED (0.8)."""
+        """When auto_fix_tests=True and _attempt_test_fix returns True, status is NEEDS_REVIEW.
+
+        Rewriting the project's own tests to reach green is NOT acceptance — it
+        edits the oracle. The attempt is flagged for human inspection: status
+        NEEDS_REVIEW, no auto-assigned score, and the candidate branch (carrying
+        both the patch and the test edits) must be retained even when the
+        autonomous loop requested deletion on failure.
+        """
         _init_git_repo(tmp_path)
         (tmp_path / "src").mkdir()
         (tmp_path / "src" / "cache.py").write_text("old\n")
@@ -370,10 +443,27 @@ class TestApplyAndTestAutoFix:
             test_command=f"{shlex.quote(sys.executable)} {shlex.quote(str(runner_script))}",
         )
         sig_id = (await db.list_signals(repo["id"]))[0]["id"]
-        attempt = await service.apply_signal(sig_id)
+        # keep_branch_on_failure=False mirrors the autonomous loop; the branch
+        # must survive anyway because NEEDS_REVIEW is a kept-branch outcome.
+        attempt = await service.apply_signal(sig_id, keep_branch_on_failure=False)
 
-        assert attempt.status == BackfillStatus.ACCEPTED
-        assert attempt.score == 0.8
+        assert attempt.status == BackfillStatus.NEEDS_REVIEW
+        assert attempt.branch_name is not None
+        assert attempt.score is None
+        assert "[needs-review]" in (attempt.patch_summary or "")
+
+        # The candidate branch carrying the patch + test edits is retained.
+        branches = subprocess.run(
+            ["git", "branch"],
+            cwd=str(tmp_path),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert attempt.branch_name in branches.stdout, (
+            f"NEEDS_REVIEW branch {attempt.branch_name!r} was deleted; "
+            f"git branch: {branches.stdout!r}"
+        )
 
     async def test_auto_fix_tests_failed_when_fixer_returns_false(
         self, tmp_path: Path, db: Database, provider: StubGitProvider

@@ -361,6 +361,7 @@ class TestApplyExitCodeMapping:
         ("status", "error", "expected_code", "expected_reason"),
         [
             (BackfillStatus.ACCEPTED, None, 0, "accepted"),
+            (BackfillStatus.NEEDS_REVIEW, None, 5, "needs_review"),
             (BackfillStatus.PENDING, None, 0, "pending"),
             (BackfillStatus.TESTS_FAILED, None, 1, "tests_failed"),
             (BackfillStatus.CONFLICT, "branch already exists", 2, "conflict"),
