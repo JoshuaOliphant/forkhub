@@ -1111,3 +1111,219 @@ With weekly syncs instead of 6-hourly: **~$3/month**
    If ForkHub becomes a community tool, annotations would need to be shared — possibly
    as a special file in the fork repo itself (`.forkhub/annotation.md`), or via a
    central service. For MVP, local-only is fine.
+
+---
+
+## 16. Backfill
+
+### 16.1 Purpose & Deterministic Philosophy
+
+**Backfill** is a deterministic service that cherry-picks valuable fork changes into
+the local repository. Unlike the agent-driven analysis loop (which uses AI to classify
+what changed), backfill is a **non-AI core** — it takes existing signals and attempts
+to apply them as patches via `git apply`. The only AI involvement is an optional
+test-fixer, isolated behind the `auto_fix_tests` flag and injected via the `TestFixer`
+protocol.
+
+The philosophy: most of the work is mechanical (fetch diff, apply patch, run tests).
+AI is quarantined to a narrow, optional role: fixing the project's own test suite when
+a patch's logic is sound but tests fail due to context drift. This keeps the core
+deterministic and auditable while leaving room for intelligence at the edges.
+
+### 16.2 Data Model
+
+Three Pydantic models track backfill state:
+
+**BackfillStatus** — Seven-value enum for patch application outcomes:
+- `pending` — Backfill not yet attempted for this signal
+- `accepted` — Patch applied and tests passed
+- `needs_review` — Patch applied; tests only green after AI rewrote test files. Requires human inspection.
+- `patch_failed` — Patch failed to apply (conflict, binary file, or no applicable diffs)
+- `tests_failed` — Patch applied but test suite failed (and auto-fixer is off)
+- `conflict` — Patch conflict during `git apply --3way`
+- `rejected` — Backfill manually rejected by user
+
+**BackfillAttempt** — Records every attempt:
+
+```sql
+CREATE TABLE backfill_attempts (
+    id TEXT PRIMARY KEY,
+    signal_id TEXT NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+    fork_id TEXT NOT NULL REFERENCES forks(id) ON DELETE CASCADE,
+    tracked_repo_id TEXT NOT NULL REFERENCES tracked_repos(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    branch_name TEXT,                    -- e.g., "backfill/fix/alice-8a3f5c2b"
+    patch_summary TEXT,                  -- Signal's summary for commit message
+    test_output TEXT,                    -- Last 2000 chars of test run
+    error TEXT,                          -- Machine-readable failure reason
+    files_patched LIST[str],             -- Files touched by the patch
+    score REAL,                          -- 1.0 = passed, 0.0 = failed, NULL = needs_review
+    created_at TEXT NOT NULL
+);
+```
+
+**BackfillResult** — Summary of a backfill run:
+
+```python
+class BackfillResult:
+    total_evaluated: int         # Candidates passed to backfill
+    attempted: int               # Candidates actually attempted
+    accepted: int                # Successful patches
+    needs_review: int            # Auto-fixer rewrote tests
+    patch_failed: int            # Patch application failed
+    tests_failed: int            # Tests failed
+    conflicts: int               # Merge conflicts
+    branches_created: list[str]  # Created branches for accepted + needs_review
+```
+
+**FixSuggestion** (from optional test-fixer):
+
+```python
+class FixSuggestion:
+    reasoning: str               # Why these edits are necessary
+    edits: list[FixEdit]        # File edits (path + content)
+    should_reject: bool          # AI recommends rejecting the patch
+```
+
+### 16.3 Candidate Selection
+
+The `gather_candidates()` method filters and ranks signals by backfill potential.
+
+**Filters:**
+- Significance threshold (default: 5/10) — skip low-value signals
+- Skip upstream signals — only backfill fork changes into the local repo
+- Skip signals with no associated fork — cannot be patched
+
+**Ranking key:** `(-significance, not_clustered, created_at)`
+
+| Term | Rationale |
+|------|-----------|
+| **-significance** | Primary: agent's value judgment. More significant changes first. |
+| **not_clustered** | Cluster membership = corroboration. Equal-significance clustered signals rank above unclustered ones (independent corroboration strengthens confidence). But a trivial change common to many forks never outranks a more significant lone one. |
+| **created_at** | Deterministic tie-break. Earliest first (most established signal). |
+
+**Dedup by cluster:** Signals in the same cluster represent the same change made by
+N forks. Only the highest-significance member per cluster survives. Non-clustered signals
+are all kept. This avoids attempting N similar patches when one representative would suffice.
+
+### 16.4 Apply Pipeline
+
+`apply_signal(signal_id, dry_run=False, keep_branch_on_failure=True)` is the core primitive.
+Steps:
+
+1. **Load signal** — Fetch signal record. Fail if not found.
+2. **Fetch diffs** — All-or-nothing: fetch diffs for all `files_involved`. If any fails, abort (don't commit a half-applied change set). Empty diffs (binary, pure rename, unchanged) are skipped; if all diffs are empty, fail with "no applicable diffs" (terminal; not retriable as a fetch error).
+3. **Create candidate branch** — Branch name: `backfill/{category}/{fork_owner}-{signal_id[:8]}`. Fail if already exists (caller must cleanup).
+4. **Pin diff to fork head SHA** — The diff is compared against the tracked repo's default branch, but uses the **fork's recorded head SHA** (from sync time) as the head ref. Older rows without head_sha fall back to the fork's default branch. This ensures the fetched diff matches the snapshot the signal was derived from.
+5. **Apply with 3-way merge** — `git apply --3way` allows conflict resolution where possible. If conflicts, reset tree and return status `conflict`.
+6. **Commit** — Commit message includes signal summary, signal ID, and fork ID for traceability.
+7. **Run test suite** — Configurable command (default: `uv run pytest -x --tb=short -q`). Capture last 2000 chars of output.
+8. **Record result** — Persist attempt to DB. Return status and branch name.
+
+**Failure semantics:**
+- If `keep_branch_on_failure=True`, branch is retained even on test failure. External agents (e.g., test-fixer loop) can work on it.
+- If `keep_branch_on_failure=False`, branch is deleted unless status is `accepted` or `needs_review` (kept branches, never auto-deleted).
+
+### 16.5 CLI Command Tree & Exit Code Contract
+
+The `forkhub backfill` subapp provides both an autonomous loop and per-step primitives
+for external agents:
+
+```
+forkhub backfill
+├── run [--repo <id>] [--since <date>] [--dry-run]
+│   └── Autonomous loop: gather candidates, apply, accept/cleanup
+│
+├── candidates <tracked_repo_id> [--json]
+│   └── List candidate signals ranked by backfill potential
+│
+├── apply <signal_id> [--dry-run] [--json]
+│   └── Apply a signal's diffs, run tests, record result. Exit code indicates outcome.
+│
+├── status <attempt_id> [--json]
+│   └── Query backfill attempt by id
+│
+├── record <attempt_id> <outcome> [--score <1-10>] [--json]
+│   └── Human records the final outcome (accept/reject/needs_review). Sets score.
+│
+├── cleanup <attempt_id>
+│   └── Delete the branch for this attempt
+│
+├── read-failures <attempt_id>
+│   └── Emit test output for an agent to analyze
+│
+├── write-test <attempt_id> <path> <content>
+│   └── Agent writes a test file to the branch
+│
+├── run-tests <attempt_id> [--command ...]
+│   └── Re-run test suite and return exit code
+```
+
+**Exit code contract for `apply` command:**
+
+| Exit | Reason | Status | Retriable? |
+|------|--------|--------|-----------|
+| 0 | Patch applied, tests passed | `accepted` | N/A — done |
+| 1 | Patch applied, tests failed | `tests_failed` | Yes (fix tests, retry) |
+| 2 | Conflict OR terminal patch failure | `conflict` or `patch_failed` | No (conflict needs manual resolve; no-diffs is terminal) |
+| 3 | Transient fetch error | `patch_failed` (fetch subset) | Yes (retry later; network may recover) |
+| 4 | Signal not found | N/A | No (signal should exist) |
+| 5 | Patch applied, tests green after AI fix | `needs_review` | Manual (human inspects branch) |
+
+Exit 0 also covers `pending` (dry-run).
+
+Exit 2 covers both `conflict` and terminal `patch_failed` (no applicable diffs).
+Transient `patch_failed` (partial fetch) is exit 3.
+
+### 16.6 External-Agent Fix Loop
+
+Commands `apply`, `read-failures`, `write-test`, `run-tests`, and `record` form a
+surface for an external agent to drive test fixes autonomously:
+
+```python
+# External agent session example:
+attempt = await backfill_service.apply_signal(signal_id)
+exit_code = _apply_exit_code_and_reason(attempt)[0]
+
+if exit_code == 1:  # tests_failed
+    test_output = await db.get_attempt(attempt.id)["test_output"]
+    
+    # Agent reads failures
+    suggestion = await ai_test_fixer.suggest_fixes(test_output, repo_path)
+    
+    # Agent writes fixes to the branch
+    for edit in suggestion.edits:
+        await run_cmd(["git", "checkout", attempt.branch_name])
+        Path(edit.path).write_text(edit.content)
+        await run_cmd(["git", "add", edit.path])
+    
+    # Re-run tests
+    result = await backfill_service.run_tests(attempt.id)
+    if result.returncode == 0:
+        # Tests green — agent can record as needs_review
+        await backfill_service.record_outcome(
+            attempt.id,
+            outcome="needs_review",
+            score=None  # Human assigns outcome
+        )
+```
+
+Commands are scoped per-attempt, allowing multiple attempts in parallel.
+
+### 16.7 Key Points & Future Work
+
+**Current behavior:**
+- Non-AI core: patch application and test gating are deterministic
+- Optional AI behind `auto_fix_tests` flag: never auto-accepts patches that need test fixes
+- All-or-nothing fetch: don't commit half-applied changes
+- Head SHA pinning: diffs are locked to the fork state when the signal was analyzed
+- Cluster dedup: prioritize independent corroboration over recency
+- External-agent primitives: designed for future AI-driven test-fixing
+
+**Pointers to future work:**
+- **forkhub-7k1** (true per-commit scoping): Signal model carries commit SHAs so backfill
+  can diff against exact commits, not just HEAD.
+- **specs/backfill-ai-decision.md** & **forkhub-dvi** (AI layer go/no-go): Evaluate
+  when to pursue AI-driven test fixing vs. surfacing failures to the user.
+
+---
