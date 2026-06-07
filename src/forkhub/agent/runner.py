@@ -232,7 +232,7 @@ class ClaudeAnalyzer:
         """Build ClaudeAgentOptions with hooks, budget, model, and agents."""
         from forkhub.agent.agents import _build_subagents
 
-        diff_analyst, _digest_writer = _build_subagents()
+        diff_analyst, _digest_writer = _build_subagents(self._settings)
 
         # Build hooks
         cost_tracker = create_cost_tracker_hook(self._db)

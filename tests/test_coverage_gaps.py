@@ -114,18 +114,47 @@ class TestAppRoot:
 
 
 class TestAgentSubagents:
-    def test_build_subagents_returns_pair(self):
-        """_build_subagents should return (diff_analyst, digest_writer) tuple."""
+    def test_build_subagents_models_come_from_settings(self):
+        """_build_subagents should propagate configured models, not hardcode literals.
+
+        Uses non-default model names so the test fails if string literals
+        sneak back into the AgentDefinitions.
+        """
         pytest.importorskip("claude_agent_sdk")
 
         from forkhub.agent.agents import _build_subagents
+        from forkhub.config import AnthropicSettings, ForkHubSettings
 
-        diff_analyst, digest_writer = _build_subagents()
+        settings = ForkHubSettings(anthropic=AnthropicSettings(model="opus", digest_model="sonnet"))
+        diff_analyst, digest_writer = _build_subagents(settings)
         assert diff_analyst is not None
         assert digest_writer is not None
-        # AgentDefinitions carry a model attribute
-        assert getattr(diff_analyst, "model", None) == "sonnet"
+        # AgentDefinitions carry a model attribute fed from config
+        assert getattr(diff_analyst, "model", None) == "opus"
+        assert getattr(digest_writer, "model", None) == "sonnet"
+
+    def test_build_subagents_invalid_model_falls_back_to_inherit(self, caplog):
+        """Non-alias model names fall back to 'inherit' with a warning.
+
+        AgentDefinition only accepts the SDK's alias literals
+        (sonnet/opus/haiku/inherit). Full model IDs are valid for the
+        coordinator but not for subagents, so they degrade gracefully.
+        """
+        pytest.importorskip("claude_agent_sdk")
+
+        from forkhub.agent.agents import _build_subagents
+        from forkhub.config import AnthropicSettings, ForkHubSettings
+
+        settings = ForkHubSettings(
+            anthropic=AnthropicSettings(model="claude-sonnet-4-6", digest_model="haiku")
+        )
+        with caplog.at_level("WARNING", logger="forkhub.agent.agents"):
+            diff_analyst, digest_writer = _build_subagents(settings)
+
+        assert getattr(diff_analyst, "model", None) == "inherit"
         assert getattr(digest_writer, "model", None) == "haiku"
+        assert "claude-sonnet-4-6" in caplog.text
+        assert "inherit" in caplog.text
 
 
 # ---------------------------------------------------------------------------
