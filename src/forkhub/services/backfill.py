@@ -321,6 +321,26 @@ class BackfillService:
                 attempt.error = (attempt.error or "") + f" [attempt not persisted: {exc}]"
             return attempt
 
+        # Pin the diff's head ref to the fork's head SHA recorded at sync time,
+        # when available. A fork's branch keeps moving after analysis; comparing
+        # against the floating branch name would fetch whatever the fork looks
+        # like at backfill time, which may include changes the signal never
+        # classified. Pinning to the recorded head_sha makes the fetched diff
+        # match the snapshot the signal was derived from. A full SHA is a valid
+        # ref for the cross-repo compare API, so the "owner:sha" form is
+        # accepted exactly like "owner:branch". (Scoping further to the signal's
+        # exact commits needs commit data the Signal model does not carry — that
+        # is forkhub-7k1.) Older rows and providers that do not populate head_sha
+        # fall back to the default branch.
+        base_ref = f"{tracked['owner']}:{tracked['default_branch']}"
+        head_sha = fork_row.get("head_sha")
+        if head_sha:
+            head_ref = f"{fork_row['owner']}:{head_sha}"
+            logger.debug("Backfill diff pinned to fork head_sha: %s", head_ref)
+        else:
+            head_ref = f"{fork_row['owner']}:{fork_row['default_branch']}"
+            logger.debug("Backfill diff using fork default branch (no head_sha): %s", head_ref)
+
         # Fetch the diffs for files involved in this signal. Backfill is
         # all-or-nothing: if any expected file's diff can't be fetched, fail the
         # whole attempt rather than committing a half-applied change set. An
@@ -333,8 +353,8 @@ class BackfillService:
                 diff = await self._provider.get_file_diff(
                     tracked["owner"],
                     tracked["name"],
-                    f"{tracked['owner']}:{tracked['default_branch']}",
-                    f"{fork_row['owner']}:{fork_row['default_branch']}",
+                    base_ref,
+                    head_ref,
                     filepath,
                 )
             except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:

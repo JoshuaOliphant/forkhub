@@ -1030,6 +1030,57 @@ class TestApplySignal:
         attempts = await db.list_backfill_attempts(repo_id=repo["id"])
         assert len(attempts) == 1
 
+    async def test_diff_head_pinned_to_fork_head_sha(self, db, provider):
+        """apply_signal pins the diff head ref to the fork's recorded head_sha.
+
+        make_fork populates head_sha, so the diff fetch must request
+        ``owner:head_sha`` rather than the floating ``owner:default_branch``.
+        """
+        repo = await _insert_tracked_repo(db)
+        fork = make_fork(
+            repo["id"],
+            owner="forker1",
+            full_name="forker1/project",
+            github_id=5001,
+            vitality="active",
+            stars=10,
+            last_pushed_at=_ACTIVE_DATE.isoformat(),
+            head_sha="deadbeefcafe",
+        )
+        await db.insert_fork(fork)
+        signal = await _insert_signal(db, repo["id"], fork["id"], significance=8)
+        provider.set_file_diff("forker1", "src/cache.py", "some diff")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        await service.apply_signal(signal["id"], dry_run=True)
+
+        assert provider.diff_calls
+        assert provider.diff_calls[0]["head"] == "forker1:deadbeefcafe"
+
+    async def test_diff_head_falls_back_to_default_branch(self, db, provider):
+        """When head_sha is empty, the diff head ref falls back to the branch."""
+        repo = await _insert_tracked_repo(db)
+        fork = make_fork(
+            repo["id"],
+            owner="forker1",
+            full_name="forker1/project",
+            github_id=5001,
+            vitality="active",
+            stars=10,
+            last_pushed_at=_ACTIVE_DATE.isoformat(),
+            head_sha=None,
+            default_branch="main",
+        )
+        await db.insert_fork(fork)
+        signal = await _insert_signal(db, repo["id"], fork["id"], significance=8)
+        provider.set_file_diff("forker1", "src/cache.py", "some diff")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        await service.apply_signal(signal["id"], dry_run=True)
+
+        assert provider.diff_calls
+        assert provider.diff_calls[0]["head"] == "forker1:main"
+
     async def test_no_patches_records_patch_failed(self, db, provider):
         """If no diffs can be fetched, apply_signal returns PATCH_FAILED."""
         repo = await _insert_tracked_repo(db)

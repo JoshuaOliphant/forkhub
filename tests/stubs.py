@@ -265,6 +265,7 @@ class StubGitProvider:
         self._head_shas: dict[str, str] = head_shas or {}
         self._file_diffs: dict[str, str] = {}
         self._error_files: set[str] = set()
+        self.diff_calls: list[dict[str, str]] = []
         self._rate_limit = RateLimitInfo(
             limit=5000,
             remaining=rate_limit_remaining,
@@ -356,7 +357,9 @@ class StubGitProvider:
         head: str,
         path: str,
     ) -> str:
-        # Extract fork owner from head param (format: "fork_owner:branch")
+        # Record every call so tests can assert which refs were requested.
+        self.diff_calls.append({"base": base, "head": head, "path": path})
+        # Extract fork owner from head param (format: "fork_owner:ref")
         fork_owner = head.split(":")[0]
         key = f"{fork_owner}:{path}"
         if path in self._error_files:
