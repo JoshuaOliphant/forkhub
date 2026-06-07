@@ -297,7 +297,7 @@ async def run_command(
         None, "--test-command", help="Custom test command to run after patching"
     ),
 ) -> None:
-    """Run the agentic backfill loop to cherry-pick valuable fork changes."""
+    """Run the deterministic backfill loop to cherry-pick valuable fork changes."""
     await _backfill_impl(
         repo=repo,
         since_days=since_days,
@@ -538,9 +538,10 @@ def _apply_exit_code_and_reason(attempt: BackfillAttempt) -> tuple[int, str]:
     if status == BackfillStatus.CONFLICT:
         return 2, "conflict"
     if status == BackfillStatus.PATCH_FAILED:
-        # Both "No diffs" and "Partial fetch" are genuine, retriable fetch
-        # failures. "No applicable diffs" (binary/pure-rename/unchanged) is a
-        # terminal patch failure and must NOT match here.
+        # "Partial fetch" is the retriable fetch failure the service emits;
+        # "No diffs" is kept defensively for stored attempts that predate the
+        # partial-fetch message. "No applicable diffs" (binary/pure-rename/
+        # unchanged) is a terminal patch failure and must NOT match here.
         if attempt.error and ("No diffs" in attempt.error or "Partial fetch" in attempt.error):
             return 3, "fetch_error"
         return 2, "patch_failed"

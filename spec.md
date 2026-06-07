@@ -1156,9 +1156,9 @@ CREATE TABLE backfill_attempts (
     patch_summary TEXT,                  -- Signal's summary for commit message
     test_output TEXT,                    -- Last 2000 chars of test run
     error TEXT,                          -- Machine-readable failure reason
-    files_patched LIST[str],             -- Files touched by the patch
+    files_patched TEXT NOT NULL DEFAULT '[]',  -- JSON array as TEXT (project convention)
     score REAL,                          -- 1.0 = passed, 0.0 = failed, NULL = needs_review
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 ```
 
@@ -1212,9 +1212,9 @@ are all kept. This avoids attempting N similar patches when one representative w
 Steps:
 
 1. **Load signal** — Fetch signal record. Fail if not found.
-2. **Fetch diffs** — All-or-nothing: fetch diffs for all `files_involved`. If any fails, abort (don't commit a half-applied change set). Empty diffs (binary, pure rename, unchanged) are skipped; if all diffs are empty, fail with "no applicable diffs" (terminal; not retriable as a fetch error).
-3. **Create candidate branch** — Branch name: `backfill/{category}/{fork_owner}-{signal_id[:8]}`. Fail if already exists (caller must cleanup).
-4. **Pin diff to fork head SHA** — The diff is compared against the tracked repo's default branch, but uses the **fork's recorded head SHA** (from sync time) as the head ref. Older rows without head_sha fall back to the fork's default branch. This ensures the fetched diff matches the snapshot the signal was derived from.
+2. **Pin head ref to fork head SHA** — The diff is compared against the tracked repo's default branch, using the **fork's recorded head SHA** (from sync time) as the head ref. Older rows without head_sha fall back to the fork's default branch. This ensures the fetched diff matches the snapshot the signal was derived from.
+3. **Fetch diffs** — All-or-nothing: fetch diffs for all `files_involved` against the pinned head ref. If any fetch fails, abort (don't commit a half-applied change set). Empty diffs (binary, pure rename, unchanged) are skipped; if all diffs are empty, fail with "no applicable diffs" (terminal; not retriable as a fetch error).
+4. **Create candidate branch** — Branch name: `backfill/{category}/{fork_owner}-{signal_id[:8]}`. Fail if already exists (caller must cleanup).
 5. **Apply with 3-way merge** — `git apply --3way` allows conflict resolution where possible. If conflicts, reset tree and return status `conflict`.
 6. **Commit** — Commit message includes signal summary, signal ID, and fork ID for traceability.
 7. **Run test suite** — Configurable command (default: `uv run pytest -x --tb=short -q`). Capture last 2000 chars of output.
@@ -1231,33 +1231,40 @@ for external agents:
 
 ```
 forkhub backfill
-├── run [--repo <id>] [--since <date>] [--dry-run]
+├── run [--repo <owner/repo>] [--since-days <n>] [--dry-run] [--auto-fix-tests]
 │   └── Autonomous loop: gather candidates, apply, accept/cleanup
 │
-├── candidates <tracked_repo_id> [--json]
+├── candidates --repo <owner/repo> [--since-days <n>] [--min-significance <n>] [--max <n>]
 │   └── List candidate signals ranked by backfill potential
 │
 ├── apply <signal_id> [--dry-run] [--json]
 │   └── Apply a signal's diffs, run tests, record result. Exit code indicates outcome.
 │
+├── list [--repo <owner/repo>] [--status <status>] [--json]
+│   └── List backfill attempts, optionally filtered
+│
 ├── status <attempt_id> [--json]
 │   └── Query backfill attempt by id
 │
-├── record <attempt_id> <outcome> [--score <1-10>] [--json]
-│   └── Human records the final outcome (accept/reject/needs_review). Sets score.
+├── record <attempt_id> --status <status> [--score <0.0-1.0>] [--notes <text>]
+│   └── Caller records the final outcome (e.g. accepted/rejected/needs_review). Sets score.
 │
-├── cleanup <attempt_id>
-│   └── Delete the branch for this attempt
+├── cleanup <attempt_id> [--keep-branch]
+│   └── Return to original branch; delete the candidate branch unless kept
 │
-├── read-failures <attempt_id>
-│   └── Emit test output for an agent to analyze
+├── read-failures [--repo-path <path>] [--test-command <cmd>] [--json]
+│   └── Run tests, parse failing test files, emit their contents for an agent
 │
-├── write-test <attempt_id> <path> <content>
-│   └── Agent writes a test file to the branch
+├── write-test <path> [--content <text>] (or content via stdin)
+│   └── Write a test file (safety-validated: test paths only) in the working tree
 │
-├── run-tests <attempt_id> [--command ...]
-│   └── Re-run test suite and return exit code
+├── run-tests [--test-command <cmd>]
+│   └── Re-run the test suite and return its exit code
 ```
+
+The per-step primitives (`read-failures`, `write-test`, `run-tests`) operate on the
+**currently checked-out branch** of the working tree — the caller checks out the
+attempt's candidate branch first.
 
 **Exit code contract for `apply` command:**
 
@@ -1281,34 +1288,44 @@ Commands `apply`, `read-failures`, `write-test`, `run-tests`, and `record` form 
 surface for an external agent to drive test fixes autonomously:
 
 ```python
-# External agent session example:
-attempt = await backfill_service.apply_signal(signal_id)
-exit_code = _apply_exit_code_and_reason(attempt)[0]
+# External agent session example (library API):
+attempt = await service.apply_signal(signal_id)  # keeps branch on test failure
 
-if exit_code == 1:  # tests_failed
-    test_output = await db.get_attempt(attempt.id)["test_output"]
-    
-    # Agent reads failures
-    suggestion = await ai_test_fixer.suggest_fixes(test_output, repo_path)
-    
-    # Agent writes fixes to the branch
+if attempt.status == BackfillStatus.TESTS_FAILED:
+    # Work on the candidate branch apply_signal left behind
+    # (CLI equivalent: git checkout <branch>, then the primitives below)
+
+    # 1. Read failures: runs tests, parses failing test files, returns contents
+    failures = await service.read_failing_test_files()
+
+    # 2. Agent (any TestFixer implementation) suggests edits
+    suggestion = await fixer.suggest_fixes(
+        test_output=failures["test_output"],
+        patch_summary=attempt.patch_summary or "",
+        files_patched=attempt.files_patched,
+        test_file_contents={f["path"]: f["content"] for f in failures["files"]},
+    )
+
+    # 3. Write fixes (safety-validated: test files only)
     for edit in suggestion.edits:
-        await run_cmd(["git", "checkout", attempt.branch_name])
-        Path(edit.path).write_text(edit.content)
-        await run_cmd(["git", "add", edit.path])
-    
-    # Re-run tests
-    result = await backfill_service.run_tests(attempt.id)
+        service.write_test_file(edit.path, edit.content)
+
+    # 4. Re-run the suite
+    result = await service.run_test_command()
     if result.returncode == 0:
-        # Tests green — agent can record as needs_review
-        await backfill_service.record_outcome(
+        # Tests green only after test edits — record for human review,
+        # never auto-accept
+        await service.record_outcome(
             attempt.id,
-            outcome="needs_review",
-            score=None  # Human assigns outcome
+            status=BackfillStatus.NEEDS_REVIEW,
+            notes="tests edited by external fixer",
         )
 ```
 
-Commands are scoped per-attempt, allowing multiple attempts in parallel.
+Attempts are serial per signal: the candidate branch name is deterministic
+(`backfill/{category}/{owner}-{signal_id[:8]}`), `apply_signal` returns `conflict`
+if it already exists, and the per-step primitives act on one shared working tree.
+Parallelism requires the caller to manage separate checkouts via `--repo-path`.
 
 ### 16.7 Key Points & Future Work
 
