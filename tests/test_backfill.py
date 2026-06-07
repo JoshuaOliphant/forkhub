@@ -264,17 +264,34 @@ class TestClusterDedup:
     async def test_same_cluster_keeps_highest_significance(
         self, db: Database, provider: StubGitProvider
     ):
-        """Two signals in one cluster collapse to the highest-significance member."""
+        """Two signals in one cluster collapse to the highest-significance member.
+
+        The stronger member is deliberately the OLDER one, so raw DB order
+        (created_at DESC) would surface the weaker member first — significance
+        must be the sole reason the stronger one survives.
+        """
         repo = await _insert_tracked_repo(db)
         fork = await _insert_fork(db, repo["id"])
         cluster = make_cluster(repo["id"])
         await db.insert_cluster(cluster)
 
         await _insert_signal_in_cluster(
-            db, cluster["id"], repo["id"], fork["id"], significance=6, summary="Weaker member"
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=6,
+            summary="Weaker member",
+            created_at="2025-02-01T00:00:00+00:00",
         )
         await _insert_signal_in_cluster(
-            db, cluster["id"], repo["id"], fork["id"], significance=9, summary="Stronger member"
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=9,
+            summary="Stronger member",
+            created_at="2025-01-01T00:00:00+00:00",
         )
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
@@ -1512,11 +1529,15 @@ class TestGetSignalAndAttempt:
         repo = await _insert_tracked_repo(db)
         fork = await _insert_fork(db, repo["id"])
         signal = await _insert_signal(db, repo["id"], fork["id"])
+        # Explicit historic timestamp: hydration must return the STORED
+        # creation time, not the time the row was read back.
+        stored_at = datetime(2025, 3, 1, 12, 0, 0, tzinfo=UTC)
         attempt = BackfillAttempt(
             signal_id=signal["id"],
             fork_id=fork["id"],
             tracked_repo_id=repo["id"],
             status=BackfillStatus.PENDING,
+            created_at=stored_at,
         )
         d = attempt.model_dump()
         d["created_at"] = attempt.created_at.isoformat()
@@ -1529,6 +1550,7 @@ class TestGetSignalAndAttempt:
         assert loaded is not None
         assert loaded.id == attempt.id
         assert loaded.status == BackfillStatus.PENDING
+        assert loaded.created_at == stored_at
 
     async def test_get_attempt_missing_returns_none(self, db, provider):
         service = BackfillService(db=db, provider=provider)

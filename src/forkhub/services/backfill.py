@@ -738,6 +738,7 @@ class BackfillService:
             error=row["error"],
             files_patched=files,
             score=row["score"],
+            created_at=row["created_at"],
         )
 
     async def list_attempts(

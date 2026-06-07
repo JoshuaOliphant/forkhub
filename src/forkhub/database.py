@@ -514,6 +514,9 @@ class Database:
             (repo_id,),
         )
         rows = await self._fetchall(cursor)
+        # A signal in multiple clusters (schema-permitted, never produced by
+        # ClusterService) collapses to one entry; the ORDER BY makes the
+        # last-write-wins outcome deterministic.
         return {row["signal_id"]: row["cluster_id"] for row in rows}
 
     # ------------------------------------------------------------------
