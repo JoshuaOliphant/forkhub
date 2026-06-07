@@ -237,7 +237,7 @@ forkhub backfill apply "$SIG" --dry-run --json
 # 2. Apply — preserves candidate branch on test failure
 forkhub backfill apply "$SIG" --json
 # Exit codes: 0=passed, 1=tests failed, 2=conflict/patch failed,
-#             3=fetch error, 4=signal not found
+#             3=fetch error, 4=signal not found, 5=needs_review
 
 # 3. Inspect failing tests (runs the test command fresh each call)
 forkhub backfill read-failures --json
