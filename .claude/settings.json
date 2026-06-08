@@ -35,6 +35,15 @@
           }
         ],
         "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash .claude/harness/observability/start.sh",
+            "type": "command"
+          }
+        ],
+        "matcher": "startup"
       }
     ]
   }

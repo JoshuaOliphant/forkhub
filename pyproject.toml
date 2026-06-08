@@ -60,6 +60,10 @@ dev = [
     "ty>=0.0.24",
     "claude-agent-sdk>=0.1",
 ]
+otel = [
+    "opentelemetry-exporter-otlp-proto-http>=1.42.1",
+    "opentelemetry-sdk>=1.42.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -73,6 +77,10 @@ markers = [
 [tool.coverage.run]
 branch = false
 source = ["src/forkhub"]
+# otel.py is the observability-harness telemetry module: its SDK-present and
+# SDK-absent halves are mutually exclusive, so it cannot reach 100% in one run.
+# It carries zero business logic (no-op-when-absent instrumentation only).
+omit = ["src/forkhub/otel.py"]
 
 [tool.coverage.report]
 # 100% statement coverage is required. See CLAUDE.md (Coverage policy).
