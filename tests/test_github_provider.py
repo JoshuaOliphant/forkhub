@@ -2,6 +2,7 @@
 # ABOUTME: Uses respx to mock httpx calls made by githubkit under the hood.
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -597,19 +598,20 @@ class TestAuthentication:
         await GitHubProvider(token=token).get_repo("octocat", "hello-world")
         return captured["auth"]
 
-    async def test_empty_token_sends_no_authorization_header(
-        self, mock_github: respx.MockRouter
+    @pytest.mark.parametrize("token", ["", "   ", "\t\n"])
+    async def test_blank_token_sends_no_authorization_header(
+        self, mock_github: respx.MockRouter, token: str
     ) -> None:
-        """An empty token must degrade to unauthenticated, not send 'token '.
+        """A blank or whitespace-only token degrades to unauthenticated access.
 
-        With no GITHUB_TOKEN configured, githubkit's TokenAuthStrategy('')
-        emits a malformed 'Authorization: token ' header that the API rejects
-        with 'Illegal header value'. The provider should instead make
-        unauthenticated requests (no Authorization header at all).
+        Such a token would otherwise make githubkit's TokenAuthStrategy emit a
+        malformed 'Authorization: token <ws>' header that the local HTTP layer
+        (h11 via httpx) refuses to send, raising LocalProtocolError: Illegal
+        header value. The provider should instead make unauthenticated requests
+        (no Authorization header at all).
         """
-        auth = await self._captured_auth_header(mock_github, "")
+        auth = await self._captured_auth_header(mock_github, token)
 
-        assert auth != "token "
         assert auth is None
 
     async def test_real_token_still_sends_token_header(self, mock_github: respx.MockRouter) -> None:
@@ -617,3 +619,31 @@ class TestAuthentication:
         auth = await self._captured_auth_header(mock_github, "abc123")
 
         assert auth == "token abc123"
+
+    async def test_token_with_surrounding_whitespace_is_stripped(
+        self, mock_github: respx.MockRouter
+    ) -> None:
+        """A token wrapped in whitespace (e.g. a trailing newline from an env
+        var) is normalized so it still authenticates instead of producing a
+        malformed header."""
+        auth = await self._captured_auth_header(mock_github, "  abc123\n")
+
+        assert auth == "token abc123"
+
+    def test_blank_token_logs_unauthenticated_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Degrading to unauthenticated emits one clear warning at construction
+        time, so a missing/mistyped GITHUB_TOKEN is visible at the root cause
+        rather than as opaque rate-limit errors later."""
+        with caplog.at_level(logging.WARNING, logger="forkhub.providers.github"):
+            GitHubProvider(token="")
+
+        assert any("unauthenticated" in record.message.lower() for record in caplog.records)
+
+    def test_real_token_logs_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A configured token must not trigger the unauthenticated warning."""
+        with caplog.at_level(logging.WARNING, logger="forkhub.providers.github"):
+            GitHubProvider(token="abc123")
+
+        assert caplog.records == []
