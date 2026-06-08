@@ -34,6 +34,39 @@ def runner(db, provider, embedding_provider, settings):
 
 
 # ---------------------------------------------------------------------------
+# _build_options — coordinator vs subagent model wiring
+# ---------------------------------------------------------------------------
+
+
+class TestBuildOptionsModelWiring:
+    def test_coordinator_gets_raw_model_while_subagent_narrows(
+        self, db, provider, embedding_provider, caplog
+    ):
+        """The coordinator accepts full model IDs; subagents narrow to SDK aliases.
+
+        Pins the asymmetry: ClaudeAgentOptions.model receives the configured
+        value verbatim, while the diff-analyst AgentDefinition degrades a
+        non-alias value to 'inherit' (running on that same session model).
+        """
+        from forkhub.agent.runner import ClaudeAnalyzer
+        from forkhub.config import AnthropicSettings, ForkHubSettings
+
+        settings = ForkHubSettings(anthropic=AnthropicSettings(model="claude-sonnet-4-6"))
+        runner = ClaudeAnalyzer(
+            db=db,
+            provider=provider,
+            embedding_provider=embedding_provider,
+            settings=settings,
+        )
+        with caplog.at_level("WARNING", logger="forkhub.agent.agents"):
+            options = runner._build_options(system_prompt="sys", mcp_server=None)
+
+        assert options.model == "claude-sonnet-4-6"
+        assert options.agents is not None
+        assert options.agents["diff-analyst"].model == "inherit"
+
+
+# ---------------------------------------------------------------------------
 # Integration test placeholder (requires ANTHROPIC_API_KEY)
 # ---------------------------------------------------------------------------
 
