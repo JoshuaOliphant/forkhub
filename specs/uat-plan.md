@@ -171,9 +171,31 @@ Lite harness installed (Vector→JSONL) to make agent-path debugging cheap
 (see forkhub-r1d for call-site wiring). Transport verified end-to-end;
 ports reassigned to 4418/4417/8688 to coexist with another project's harness.
 
-### Tier 3 completion — BLOCKED on forkhub-flk
-clusters/digest/backfill-run and the dvi baseline all need stored signals.
-Fix flk, then a single re-sync completes Tier 3 and seeds the baseline.
+### Tier 3 completion — 2026-06-08 (after forkhub-flk fix, ec42e5a)
+The full pipeline works end-to-end on live data.
+| # | Observed | Verdict |
+|---|----------|---------|
+| 3.1 | sync → agent classified + **stored 8 signals** (Windows support, BulletPrompt rebrand, test suite, nav keys, CI/CD, prompt_color, Ctrl+C fix, ruff reformat) with sensible significance scores | PASS |
+| 3.2 | clusters → graceful empty (only 2 forks, dissimilar changes → nothing to cluster) | PASS |
+| 3.3 | digest --dry-run → composed a real digest from 7 above-threshold signals via the digest-writer agent | PASS (cosmetic: repo UUID not full_name → forkhub-dom) |
+| 3.4 | backfill run --dry-run → evaluated all 7 candidates (PENDING, dry-run) | PASS |
+
+**Net**: GitHub → agent classification → stored signals → digest + backfill
+candidate evaluation, all proven on a real fork constellation.
+
+### dvi baseline — next deliberate step
+A real (non-dry-run) `backfill run --repo bchao1/bullet --repo-path <clone>
+--test-command "python3 -c 'import bullet'"` over these 7 agent signals would
+produce the first measured deterministic hit-rate for forkhub-dvi. Deferred
+with the dvi decision itself (La Boeuf's call). Tier 2 already gave one data
+point: 1 signal → ACCEPTED.
+
+## UAT outcome summary
+Deterministic core (the epic) validated live; full agent pipeline validated
+live after fixing one P1 blocker. Bugs surfaced — flk, p18, 9ey, cml (fixed);
+zaa, sqw, 9mv, 3pj, dom (open); r1d, a8p (follow-up tasks). One false finding
+(m1m) retracted. The recurring theme across every bug: **stubs/test doubles
+hid the real-provider path** — exactly what a live UAT exists to catch.
 
 ## Decisions (resolved 2026-06-07)
 
