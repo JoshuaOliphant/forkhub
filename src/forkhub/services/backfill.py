@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from forkhub.interfaces import ProviderError
 from forkhub.models import (
     BackfillAttempt,
     BackfillResult,
@@ -357,7 +358,7 @@ class BackfillService:
                     head_ref,
                     filepath,
                 )
-            except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
+            except (OSError, ConnectionError, TimeoutError, RuntimeError, ProviderError) as exc:
                 logger.warning("Failed to fetch diff for %s: %s", filepath, exc)
                 failed_files.append(filepath)
                 continue

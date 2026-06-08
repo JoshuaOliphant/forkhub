@@ -1494,6 +1494,38 @@ class TestPartialFetch:
         assert "src/a.py" in attempt.error
         assert "src/b.py" in attempt.error
 
+    async def test_provider_error_fetch_fails_whole_attempt(self, tmp_path, db, provider):
+        """A file whose diff fetch raises a ProviderError (e.g. a deleted
+        fork's 404) is counted as a failed fetch — PATCH_FAILED with a
+        "Partial fetch" error naming the file — instead of crashing apply_signal
+        with an unhandled traceback. Regression for forkhub-cml.
+        """
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/a.py", "src/b.py"]
+        )
+        provider.set_file_diff(
+            "forker1",
+            "src/a.py",
+            "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        provider.set_provider_error_file("src/b.py")
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.PATCH_FAILED
+        assert attempt.error is not None
+        assert "Partial fetch" in attempt.error
+        assert "src/b.py" in attempt.error
+        # The attempt trace is persisted (the bug lost it to an unhandled crash).
+        persisted = await service.get_attempt(attempt.id)
+        assert persisted is not None
+        assert persisted.status == BackfillStatus.PATCH_FAILED
+
     async def test_all_files_empty_reports_no_applicable_diffs(self, tmp_path, db, provider):
         """When every involved file's fetch succeeds but returns an empty diff
         (binary/pure-rename/unchanged), fetching did not fail — so the error

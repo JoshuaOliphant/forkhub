@@ -8,6 +8,7 @@ from typing import Any
 from githubkit import GitHub, TokenAuthStrategy
 from githubkit.exception import RequestError, RequestFailed
 
+from forkhub.interfaces import ProviderError
 from forkhub.models import (
     CommitInfo,
     CompareResult,
@@ -20,7 +21,7 @@ from forkhub.models import (
 )
 
 
-class GitHubProviderError(Exception):
+class GitHubProviderError(ProviderError):
     """Raised when the GitHub API returns an error response."""
 
     def __init__(self, status_code: int, message: str) -> None:

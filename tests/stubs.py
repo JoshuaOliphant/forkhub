@@ -266,6 +266,9 @@ class StubGitProvider:
         self._head_shas: dict[str, str] = head_shas or {}
         self._file_diffs: dict[str, str] = {}
         self._error_files: set[str] = set()
+        # Files whose diff fetch raises a provider-level error (e.g. a deleted
+        # fork's 404), distinct from _error_files which raises RuntimeError.
+        self._provider_error_files: set[str] = set()
         self.diff_calls: list[dict[str, str]] = []
         # Call recording so tests can assert the API-budget property:
         # an unchanged, already-baselined fork must trigger zero extra calls.
@@ -355,6 +358,15 @@ class StubGitProvider:
         key = f"{fork_owner}:{filepath}"
         self._file_diffs[key] = diff
 
+    def set_provider_error_file(self, filepath: str) -> None:
+        """Make get_file_diff raise GitHubProviderError for ``filepath``.
+
+        Simulates the real provider's primary failure mode (e.g. a deleted
+        fork's repo returning 404), which is a ProviderError rather than the
+        RuntimeError that ``_error_files`` raises.
+        """
+        self._provider_error_files.add(filepath)
+
     async def get_file_diff(
         self,
         owner: str,
@@ -370,6 +382,8 @@ class StubGitProvider:
         key = f"{fork_owner}:{path}"
         if path in self._error_files:
             raise RuntimeError(f"Simulated error fetching {path}")
+        if path in self._provider_error_files:
+            raise GitHubProviderError(404, f"Not Found: {path}")
         return self._file_diffs.get(key, "")
 
     async def get_rate_limit(self) -> RateLimitInfo:

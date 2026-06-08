@@ -23,6 +23,15 @@ if TYPE_CHECKING:
     )
 
 
+class ProviderError(Exception):
+    """Provider-agnostic error for Git hosting API/network failures.
+
+    Implementations of :class:`GitProvider` should raise this (or a subclass)
+    for provider or API failures — e.g. a deleted fork's repo returning 404 —
+    so callers can catch failures without importing a concrete provider module.
+    """
+
+
 @runtime_checkable
 class GitProvider(Protocol):
     """Interface for fetching repository and fork data from a Git hosting service."""
