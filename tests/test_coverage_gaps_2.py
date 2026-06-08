@@ -351,25 +351,6 @@ class TestDatabaseGaps:
         result = await db.search_similar_signals([0.1, 0.2, 0.3], "any-repo")
         assert result == []
 
-    async def test_migrate_schema_re_raises_unknown_errors(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ):
-        """_migrate_schema must re-raise non-'duplicate column' errors."""
-        from forkhub.database import Database
-
-        db = Database(":memory:")
-        await db.connect()
-
-        async def boom(_sql, *args, **kwargs):
-            raise RuntimeError("disk is full")
-
-        # Patch execute so the next ALTER raises an unrelated error.
-        monkeypatch.setattr(db._conn, "execute", boom)
-        with pytest.raises(RuntimeError, match="disk is full"):
-            await db._migrate_schema()
-
-        await db.close()
-
     async def test_load_sqlite_vec_handles_failure(self, monkeypatch: pytest.MonkeyPatch):
         """_load_sqlite_vec must catch any exception and set vec_enabled=False."""
         import sys

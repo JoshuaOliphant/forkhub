@@ -281,16 +281,16 @@ class SyncService:
                 # Existing fork: check for changes.
                 # NB: Read last_pushed_at / head_sha BEFORE overwriting below.
                 changed = self._has_fork_changed(fork_info, existing_row)
-                # A NULL stored head_sha means this row predates head_sha
-                # baselining (or its earlier fetch failed). Compare once to
-                # catch it up. A row whose SHA fetch SUCCEEDS is populated and
-                # never re-triggers this branch — zero extra calls on later
-                # syncs (the /forks listing stays the only bulk call). A row
-                # whose SHA fetch PERSISTENTLY FAILS stays NULL and keeps
-                # re-comparing every sync (an accepted residual, see
-                # forkhub-lgh) — but it no longer re-triggers the analyzer:
-                # the compare-success path below only reports the fork as
-                # changed when there is real divergence evidence.
+                # A NULL stored head_sha means this fork has no baseline yet
+                # (an earlier SHA fetch failed). Compare once to catch it up. A
+                # row whose SHA fetch SUCCEEDS is populated and never
+                # re-triggers this branch — zero extra calls on later syncs
+                # (the /forks listing stays the only bulk call). A row whose
+                # SHA fetch PERSISTENTLY FAILS stays NULL and keeps re-comparing
+                # every sync (an accepted residual, see forkhub-lgh) — but it no
+                # longer re-triggers the analyzer: the compare-success path
+                # below only reports the fork as changed when there is real
+                # divergence evidence.
                 needs_baseline = existing_row.get("head_sha") is None
 
                 # Update stars (always)

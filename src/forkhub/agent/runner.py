@@ -152,15 +152,16 @@ class ClaudeAnalyzer:
     def _create_tools(self) -> list[Any]:
         """Create the MCP tools for the analysis session.
 
-        Tries to import from the tools module. Returns an empty list
-        if the tools module is not yet implemented.
+        Returns an empty list when the optional `[claude]` extra
+        (claude-agent-sdk) is unavailable, so analysis degrades to an
+        empty tool set instead of failing.
         """
         try:
             from forkhub.agent.tools import create_tools
 
             return create_tools(self._db, self._provider, self._embedding_provider)
         except (ImportError, AttributeError):
-            logger.warning("Agent tools not yet implemented, running with empty tool set")
+            logger.warning("Agent tools unavailable ([claude] extra not installed); empty tool set")
             return []
 
     def _build_coordinator_prompt(

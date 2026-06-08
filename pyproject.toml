@@ -56,7 +56,6 @@ dev = [
     "pytest-cov>=6.0,<7",
     "respx>=0.22,<1",
     "ruff>=0.9,<1",
-    "mypy>=1.14,<2",
     "ty>=0.0.24",
     "claude-agent-sdk>=0.1",
 ]
@@ -100,19 +99,6 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM", "TCH"]
-
-[tool.mypy]
-python_version = "3.12"
-strict = true
-warn_return_any = true
-warn_unused_configs = true
-
-[[tool.mypy.overrides]]
-module = [
-    "sqlite_vec",
-    "sentence_transformers",
-]
-ignore_missing_imports = true
 
 [tool.ty.environment]
 python-version = "3.12"
