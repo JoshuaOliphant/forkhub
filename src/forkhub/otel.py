@@ -108,10 +108,11 @@ def configure(endpoint: str | None = None) -> bool:
     """
     global tracer, meter, _configured  # noqa: PLW0603
     if not _OTEL_AVAILABLE:
-        # warning, not debug: a forgotten `uv sync --group otel` otherwise produces total
-        # silence about why no telemetry ever appears. The False return is the real signal;
-        # this is the human breadcrumb.
-        _logger.warning(
+        # debug, not warning: configure() runs on every CLI command, and the OTel
+        # SDK is a dev-only dependency group — so a default install would otherwise
+        # print this on every invocation. The False return is the real signal; this
+        # is a quiet breadcrumb for anyone who enabled debug logging while wiring it.
+        _logger.debug(
             "OTel SDK not installed — instrumentation is no-op. Install with: uv sync --group otel"
         )
         return False
