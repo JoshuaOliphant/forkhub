@@ -120,6 +120,15 @@ class SyncStubGitProvider:
                     ),
                 ],
             ),
+            # forker2 is DORMANT yet diverged (the bullet regression: a
+            # quiet fork that still carries real changes). It must be
+            # compared on first discovery despite its vitality.
+            "forker2/repo-a": CompareResult(
+                ahead_by=2,
+                behind_by=0,
+                files=[],
+                commits=[],
+            ),
         }
         self._releases: dict[str, list[Release]] = {
             "owner/repo-a": [
@@ -152,6 +161,9 @@ class SyncStubGitProvider:
         self._error_repos: dict[str, int] = {}
         # Extra user repos for discovery testing
         self._user_repos: dict[str, list[RepoInfo]] = {}
+        # Call recording so tests can assert the API-budget property.
+        self.compare_calls: list[str] = []
+        self.head_sha_calls: list[str] = []
 
     async def get_user_repos(self, username: str) -> list[RepoInfo]:
         return self._user_repos.get(username, [])
@@ -194,6 +206,7 @@ class SyncStubGitProvider:
         # The head parameter encodes the fork owner: "forker1:main"
         fork_owner = head.split(":")[0]
         fork_full = f"{fork_owner}/{repo}"
+        self.compare_calls.append(fork_full)
 
         if fork_full in self._error_forks:
             raise RuntimeError(f"Simulated API error for {fork_full}")
@@ -222,9 +235,20 @@ class SyncStubGitProvider:
     async def get_rate_limit(self) -> RateLimitInfo:
         return RateLimitInfo(limit=5000, remaining=4999, reset_at=_NOW)
 
-    def get_head_sha(self, fork_full_name: str) -> str | None:
-        """Helper for tests to look up the SHA a fork should have."""
-        return self._head_shas.get(fork_full_name)
+    async def get_head_sha(self, owner: str, repo: str, branch: str) -> str:
+        """Return the canned HEAD SHA for ``{owner}/{repo}``.
+
+        Keyed by full_name so existing canned data stays valid. Raises when
+        no SHA is configured so the sync loop's graceful-degradation path
+        (return None, log a warning) is exercised.
+        """
+        fork_full_name = f"{owner}/{repo}"
+        self.head_sha_calls.append(fork_full_name)
+        if fork_full_name not in self._head_shas:
+            from forkhub.providers.github import GitHubProviderError
+
+            raise GitHubProviderError(404, f"No head SHA for {fork_full_name}")
+        return self._head_shas[fork_full_name]
 
 
 # ---------------------------------------------------------------------------
@@ -620,9 +644,9 @@ class TestSyncAnalyzerIntegration:
 
         assert len(analyzer.calls) == 1
         fork_models = analyzer.calls[0]["changed_forks"]
-        assert len(fork_models) == 1
-        f = fork_models[0]
-        assert f.full_name == "forker1/repo-a"
+        # forker1 (existing, changed) plus forker2 (new dormant, ahead_by=2)
+        # both diverge, so isolate forker1 for the hydration assertions.
+        f = next(m for m in fork_models if m.full_name == "forker1/repo-a")
         assert f.head_sha == "new-sha-forker1"  # updated by sync
         assert f.commits_ahead == 5  # from canned CompareResult
         assert f.stars == 15
@@ -692,14 +716,17 @@ class TestSyncAnalyzerIntegration:
 
 
 class TestSyncNewForkCompare:
-    """First-sync discovery must compare active forks so `changed_forks`
-    isn't always empty when a repo is freshly tracked."""
+    """First-sync discovery compares EVERY newly discovered fork — regardless
+    of vitality — so `changed_forks` reflects divergence immediately and quiet
+    dormant/dead forks (the canonical dormant-upstream scenario) aren't
+    invisible. Each new fork is also baselined with a head_sha."""
 
     async def test_new_active_fork_gets_compared_on_first_sync(
         self, sync_service: SyncService, db: Database
     ):
         """forker1 is brand-new + active + diverged (ahead_by=5) → must
-        land in changed_forks and have commits_ahead persisted."""
+        land in changed_forks, have commits_ahead persisted, and be
+        baselined with a head_sha."""
         repo = await _insert_tracked_repo(db)
         result = await sync_service.sync_repo(repo.id)
 
@@ -709,17 +736,40 @@ class TestSyncNewForkCompare:
         assert row is not None
         assert row["commits_ahead"] == 5
         assert row["commits_behind"] == 2
+        assert row["head_sha"] == "new-sha-forker1"
 
-    async def test_new_dormant_fork_not_compared(self, sync_service: SyncService, db: Database):
-        """Dormant forks must skip compare() on first discovery to save
-        API budget. forker2 is dormant, so commits_ahead stays 0."""
+    async def test_new_dormant_fork_is_compared(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """The bullet regression: a DORMANT fork that still carries divergence
+        must be compared on first discovery (it used to be gated out by
+        vitality). forker2 is dormant but ahead_by=2 → it must land in
+        changed_forks with commits_ahead persisted."""
         repo = await _insert_tracked_repo(db)
-        await sync_service.sync_repo(repo.id)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert "forker2/repo-a" in provider.compare_calls
+        assert "forker2/repo-a" in result.changed_forks
 
         row = await db.get_fork_by_name("forker2/repo-a")
         assert row is not None
-        assert row["commits_ahead"] == 0
+        assert row["commits_ahead"] == 2
         assert row["vitality"] == "dormant"
+
+    async def test_new_dead_fork_is_compared(
+        self, sync_service: SyncService, db: Database, provider: SyncStubGitProvider
+    ):
+        """A DEAD fork is also compared on first discovery. forker3 is dead
+        with no canned divergence (ahead_by=0) → compared but not changed."""
+        repo = await _insert_tracked_repo(db)
+        result = await sync_service.sync_repo(repo.id)
+
+        assert "forker3/repo-a" in provider.compare_calls
+        assert "forker3/repo-a" not in result.changed_forks
+
+        row = await db.get_fork_by_name("forker3/repo-a")
+        assert row is not None
+        assert row["vitality"] == "dead"
 
     async def test_new_active_fork_with_zero_ahead_not_marked_changed(
         self, db: Database, settings: SyncSettings
@@ -761,11 +811,12 @@ class TestSyncNewForkCompare:
 
 
 class TestLastPushedAtChangeDetection:
-    """Verify last_pushed_at drives change detection when no real HEAD SHA exists.
+    """Verify last_pushed_at is the cheap pre-filter for existing baselined forks.
 
-    The GitHub /forks endpoint does not return a commit SHA, so the production
-    GitHubProvider has no get_head_sha() — _has_fork_changed() must fall back to
-    comparing last_pushed_at timestamps, which /forks always provides.
+    `_has_fork_changed` compares last_pushed_at (free — the /forks listing always
+    returns it) to decide whether to compare. The HEAD SHA is fetched only after
+    that decision and confirms divergence. An already-baselined fork (head_sha set)
+    whose pushed_at is unchanged costs ZERO extra calls — the API-budget property.
     """
 
     _OWNER = "testowner"
@@ -773,6 +824,7 @@ class TestLastPushedAtChangeDetection:
     _FORK_GITHUB_ID = 8001
     _FORK_OWNER = "test-forker"
     _FORK_FULL = "test-forker/repo-c"
+    _BASELINE_SHA = "baseline-sha-000"
 
     def _make_provider(
         self,
@@ -800,80 +852,58 @@ class TestLastPushedAtChangeDetection:
     async def _insert_repo(self, db: Database) -> TrackedRepo:
         return await _insert_tracked_repo(db, owner=self._OWNER, name=self._REPO, github_id=9001)
 
-    async def test_same_pushed_at_skips_compare(self, db: Database, settings: SyncSettings):
-        """When pushed_at is unchanged, existing fork must not be compared."""
-        repo = await self._insert_repo(db)
+    async def _insert_baselined_fork(
+        self, db: Database, repo: TrackedRepo, last_pushed_at: datetime | None
+    ) -> None:
+        """Insert an already-baselined fork (head_sha populated)."""
         await _insert_fork_in_db(
             db,
             tracked_repo_id=repo.id,
             github_id=self._FORK_GITHUB_ID,
             owner=self._FORK_OWNER,
             full_name=self._FORK_FULL,
-            last_pushed_at=_ACTIVE_DATE,
+            head_sha=self._BASELINE_SHA,
+            last_pushed_at=last_pushed_at,
         )
+
+    async def test_same_pushed_at_skips_compare_and_costs_zero_calls(
+        self, db: Database, settings: SyncSettings
+    ):
+        """An unchanged, already-baselined fork must not be compared and must
+        not trigger a head_sha fetch — the API-budget property."""
+        repo = await self._insert_repo(db)
+        await self._insert_baselined_fork(db, repo, last_pushed_at=_ACTIVE_DATE)
         provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
         sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
         result = await sync_service.sync_repo(repo.id)
 
         assert result.changed_forks == []
+        assert provider.compare_calls == []
+        assert provider.head_sha_calls == []
 
     async def test_advanced_pushed_at_fires_compare(self, db: Database, settings: SyncSettings):
-        """When pushed_at advances, the fork must be compared and land in changed_forks.
-
-        Provider has get_head_sha but returns None for this fork (not in head_shas),
-        so the pushed_at fallback path drives change detection.
-        head_sha must remain None in DB — no SHA should be written when provider
-        returns None, which also guards against the if-new_sha-is-not-None check.
-        """
+        """When pushed_at advances on a baselined fork, the fork is compared,
+        the head_sha refreshes, and a new SHA marks it changed."""
         repo = await self._insert_repo(db)
-        await _insert_fork_in_db(
-            db,
-            tracked_repo_id=repo.id,
-            github_id=self._FORK_GITHUB_ID,
-            owner=self._FORK_OWNER,
-            full_name=self._FORK_FULL,
-            last_pushed_at=_ACTIVE_DATE - timedelta(days=7),
+        await self._insert_baselined_fork(db, repo, last_pushed_at=_ACTIVE_DATE - timedelta(days=7))
+        provider = self._make_provider(
+            last_pushed_at=_ACTIVE_DATE,
+            head_shas={self._FORK_FULL: "advanced-sha-111"},
         )
-        provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
         sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
         result = await sync_service.sync_repo(repo.id)
 
         assert self._FORK_FULL in result.changed_forks
         row = await db.get_fork_by_name(self._FORK_FULL)
         assert row is not None
-        assert row["head_sha"] is None  # no SHA written when provider returns None
+        assert row["head_sha"] == "advanced-sha-111"
 
-    async def test_no_get_head_sha_method_uses_pushed_at(
+    async def test_null_head_sha_triggers_baseline_catchup(
         self, db: Database, settings: SyncSettings
     ):
-        """Provider with no get_head_sha attribute at all must fall back to pushed_at.
-
-        This tests the production GitHubProvider scenario — the attribute does not
-        exist, not just returns None.
-        """
-        fork_info = ForkInfo(
-            github_id=self._FORK_GITHUB_ID,
-            owner=self._FORK_OWNER,
-            full_name=self._FORK_FULL,
-            default_branch="main",
-            description=None,
-            stars=0,
-            last_pushed_at=_ACTIVE_DATE,
-            has_diverged=True,
-            created_at=_NOW - timedelta(days=90),
-        )
-
-        # Minimal provider with no get_head_sha — mirrors real GitHubProvider
-        class _NoShaProvider:
-            async def get_forks(self, owner: str, repo: str, *, page: int = 1) -> ForkPage:
-                return ForkPage(forks=[fork_info], total_count=1, page=1, has_next=False)
-
-            async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
-                return CompareResult(ahead_by=0, behind_by=0, files=[], commits=[])
-
-            async def get_releases(self, owner: str, repo: str, **_: object) -> list:
-                return []
-
+        """A pre-existing fork with NULL head_sha (created before baselining)
+        is compared once even though pushed_at is unchanged — the one-time
+        baseline catch-up. The SHA gets populated."""
         repo = await self._insert_repo(db)
         await _insert_fork_in_db(
             db,
@@ -881,34 +911,69 @@ class TestLastPushedAtChangeDetection:
             github_id=self._FORK_GITHUB_ID,
             owner=self._FORK_OWNER,
             full_name=self._FORK_FULL,
-            last_pushed_at=_ACTIVE_DATE - timedelta(days=7),  # stale
+            head_sha=None,  # legacy row, never baselined
+            last_pushed_at=_ACTIVE_DATE,
         )
-        sync_service = SyncService(db=db, provider=_NoShaProvider(), settings=settings, clock=_NOW)
+        provider = self._make_provider(
+            last_pushed_at=_ACTIVE_DATE,  # unchanged
+            head_shas={self._FORK_FULL: "catchup-sha-222"},
+        )
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
         result = await sync_service.sync_repo(repo.id)
 
+        # Compare fired despite unchanged pushed_at, because head_sha was NULL.
+        assert [c["head"] for c in provider.compare_calls] == [f"{self._FORK_OWNER}:main"]
+        row = await db.get_fork_by_name(self._FORK_FULL)
+        assert row is not None
+        assert row["head_sha"] == "catchup-sha-222"
+        # The SHA differs from the (NULL) prior, so it counts as changed.
+        assert self._FORK_FULL in result.changed_forks
+
+    async def test_head_sha_fetch_error_keeps_fork_and_continues(
+        self, db: Database, settings: SyncSettings
+    ):
+        """When get_head_sha raises during the baseline-catchup compare, the
+        fork is still saved (head_sha stays None) and the sync continues."""
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=None,
+            last_pushed_at=_ACTIVE_DATE,
+        )
+        # No head_shas configured → StubGitProvider.get_head_sha raises.
+        provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        result = await sync_service.sync_repo(repo.id)
+
+        # Provider error during SHA fetch must not abort the sync.
+        row = await db.get_fork_by_name(self._FORK_FULL)
+        assert row is not None
+        assert row["head_sha"] is None  # fetch failed → no SHA written
+        # SHA was None, so the catch-up still reports the fork as changed.
         assert self._FORK_FULL in result.changed_forks
 
     async def test_none_pushed_at_both_sides_skips_compare(
         self, db: Database, settings: SyncSettings
     ):
-        """When both old and new pushed_at are None, no compare fires (conserves budget)."""
+        """When both old and new pushed_at are None on a baselined fork, no
+        compare fires (conserves budget)."""
         repo = await self._insert_repo(db)
-        await _insert_fork_in_db(
-            db,
-            tracked_repo_id=repo.id,
-            github_id=self._FORK_GITHUB_ID,
-            owner=self._FORK_OWNER,
-            full_name=self._FORK_FULL,
-            last_pushed_at=None,
-        )
+        await self._insert_baselined_fork(db, repo, last_pushed_at=None)
         provider = self._make_provider(last_pushed_at=None)
         sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
         result = await sync_service.sync_repo(repo.id)
 
         assert result.changed_forks == []
+        assert provider.compare_calls == []
 
     async def test_sha_provider_uses_sha_not_pushed_at(self, db: Database, settings: SyncSettings):
-        """When provider has get_head_sha and SHA matches, pushed_at change is ignored."""
+        """When pushed_at advances but the refreshed SHA matches the stored one,
+        the compare fires (pushed_at advanced) but the fork is NOT reported as
+        changed — the SHA is authoritative for divergence."""
         matching_sha = "sha-abc123"
         repo = await self._insert_repo(db)
         await _insert_fork_in_db(
@@ -920,7 +985,7 @@ class TestLastPushedAtChangeDetection:
             head_sha=matching_sha,
             last_pushed_at=_ACTIVE_DATE - timedelta(days=7),  # stale, but SHA matches
         )
-        # Provider reports newer pushed_at but the same SHA → no change
+        # Provider reports newer pushed_at but the same SHA → no real change.
         provider = self._make_provider(
             last_pushed_at=_ACTIVE_DATE,
             head_shas={self._FORK_FULL: matching_sha},
@@ -929,3 +994,5 @@ class TestLastPushedAtChangeDetection:
         result = await sync_service.sync_repo(repo.id)
 
         assert result.changed_forks == []
+        # Compare DID fire (pushed_at advanced) — suppression is post-fetch.
+        assert [c["head"] for c in provider.compare_calls] == [f"{self._FORK_OWNER}:main"]

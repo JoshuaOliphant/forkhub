@@ -1,5 +1,5 @@
-# ABOUTME: Agentic backfill service that cherry-picks valuable fork changes.
-# ABOUTME: Applies patches, runs tests, and uses an agent to fix test failures.
+# ABOUTME: Deterministic backfill service that cherry-picks valuable fork changes.
+# ABOUTME: Applies patches and gates acceptance on tests; optional AI fixer behind auto_fix_tests.
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from forkhub.interfaces import ProviderError
 from forkhub.models import (
     BackfillAttempt,
     BackfillResult,
@@ -33,12 +34,14 @@ logger = logging.getLogger(__name__)
 class BackfillService:
     """Evaluates fork signals and attempts to backfill valuable changes.
 
-    The agentic loop:
+    The deterministic loop (no AI on this path):
     1. Rank signals by significance and cluster membership.
     2. For each candidate: fetch the diff, attempt to apply it.
-    3. Run the project test suite to score the result.
-    4. If tests fail but the feature looks valuable, attempt test fixes.
-    5. Record every attempt as a BackfillAttempt trace for future iterations.
+    3. Run the project test suite to gate acceptance.
+    4. Record every attempt as a BackfillAttempt trace for future iterations.
+
+    The only AI involvement is the optional test-fixer, isolated behind
+    auto_fix_tests (off by default) and injected via the TestFixer protocol.
     """
 
     def __init__(
@@ -77,7 +80,7 @@ class BackfillService:
         result = BackfillResult()
 
         # Gather candidate signals
-        candidates = await self._gather_candidates(repo_id, since=since)
+        candidates = await self.gather_candidates(repo_id, since=since)
         result.total_evaluated = len(candidates)
 
         if not candidates:
@@ -90,11 +93,21 @@ class BackfillService:
             if await self._db.has_backfill_for_signal(signal.id):
                 continue
 
-            attempt = await self._try_backfill(signal, dry_run=dry_run)
+            # Autonomous loop: candidate branches are deleted on failure
+            attempt = await self.apply_signal(
+                signal.id, dry_run=dry_run, keep_branch_on_failure=False
+            )
             result.attempted += 1
 
             if attempt.status == BackfillStatus.ACCEPTED:
                 result.accepted += 1
+                if attempt.branch_name:
+                    result.branches_created.append(attempt.branch_name)
+            elif attempt.status == BackfillStatus.NEEDS_REVIEW:
+                # The branch carries the patch + the auto-fixer's test edits and
+                # is the deliverable a human reviews, so surface it exactly like
+                # an accepted branch.
+                result.needs_review += 1
                 if attempt.branch_name:
                     result.branches_created.append(attempt.branch_name)
             elif attempt.status == BackfillStatus.PATCH_FAILED:
@@ -138,6 +151,7 @@ class BackfillService:
             combined.total_evaluated += result.total_evaluated
             combined.attempted += result.attempted
             combined.accepted += result.accepted
+            combined.needs_review += result.needs_review
             combined.patch_failed += result.patch_failed
             combined.tests_failed += result.tests_failed
             combined.conflicts += result.conflicts
@@ -161,6 +175,7 @@ class BackfillService:
             embedding=row["embedding"],
             is_upstream=bool(row["is_upstream"]),
             release_tag=row["release_tag"],
+            created_at=row["created_at"],
         )
 
     async def gather_candidates(
@@ -168,15 +183,26 @@ class BackfillService:
         repo_id: str,
         since: datetime | None = None,
     ) -> list[Signal]:
-        """Query signals and rank by backfill potential.
+        """Query signals and rank by backfill potential, deduped by cluster.
 
-        Prioritizes by: significance (desc), cluster membership, recency.
         Filters out signals below min_significance, upstream signals, and
         signals with no associated fork. Does NOT filter out already-attempted
         signals — callers can check that via db.has_backfill_for_signal.
+
+        Ranking key: ``(-significance, not_clustered, created_at)``. Significance
+        is primary — it is the agent's value judgment. Cluster membership
+        (independent forks making the same change) breaks ties *above* recency:
+        corroboration strengthens confidence at equal value, but a trivial change
+        common to many forks should never outrank a more significant lone one.
+        Earliest created_at is the final, deterministic tie-break.
+
+        Dedup: signals in the same cluster are one change made by N forks, so
+        only the best member per cluster survives (highest significance, then
+        earliest created_at). Non-clustered signals are all kept.
         """
         since_dt = since or datetime(2000, 1, 1, tzinfo=UTC)
         signal_rows = await self._db.list_signals(repo_id, since=since_dt)
+        cluster_map = await self._db.get_signal_cluster_map(repo_id)
 
         candidates: list[Signal] = []
         for row in signal_rows:
@@ -190,12 +216,26 @@ class BackfillService:
                 continue
             candidates.append(self._row_to_signal(row))
 
-        # Sort by significance descending, then by recency
-        candidates.sort(key=lambda s: (-s.significance, s.created_at))
-        return candidates
+        # Rank: significance first, cluster corroboration as tie-break above
+        # recency, then earliest created_at for determinism.
+        candidates.sort(
+            key=lambda s: (-s.significance, cluster_map.get(s.id) is None, s.created_at)
+        )
 
-    # Private alias for back-compat with existing tests
-    _gather_candidates = gather_candidates
+        # Dedup: keep only the best member per cluster. Because not_clustered is
+        # constant within a cluster, first-seen in the sorted order is already
+        # the highest-significance, earliest member. Non-clustered signals (no
+        # cluster id) are never collapsed.
+        deduped: list[Signal] = []
+        seen_clusters: set[str] = set()
+        for signal in candidates:
+            cluster_id = cluster_map.get(signal.id)
+            if cluster_id is not None:
+                if cluster_id in seen_clusters:
+                    continue
+                seen_clusters.add(cluster_id)
+            deduped.append(signal)
+        return deduped
 
     async def get_signal_by_id(self, signal_id: str) -> Signal | None:
         """Fetch and hydrate a Signal by id. Returns None if not found."""
@@ -282,29 +322,69 @@ class BackfillService:
                 attempt.error = (attempt.error or "") + f" [attempt not persisted: {exc}]"
             return attempt
 
-        # Fetch the diffs for files involved in this signal
+        # Pin the diff's head ref to the fork's head SHA recorded at sync time,
+        # when available. A fork's branch keeps moving after analysis; comparing
+        # against the floating branch name would fetch whatever the fork looks
+        # like at backfill time, which may include changes the signal never
+        # classified. Pinning to the recorded head_sha makes the fetched diff
+        # match the snapshot the signal was derived from. A full SHA is a valid
+        # ref for the cross-repo compare API, so the "owner:sha" form is
+        # accepted exactly like "owner:branch". (Scoping further to the signal's
+        # exact commits needs commit data the Signal model does not carry — that
+        # is forkhub-7k1.) Older rows and providers that do not populate head_sha
+        # fall back to the default branch.
+        base_ref = f"{tracked['owner']}:{tracked['default_branch']}"
+        head_sha = fork_row.get("head_sha")
+        if head_sha:
+            head_ref = f"{fork_row['owner']}:{head_sha}"
+            logger.debug("Backfill diff pinned to fork head_sha: %s", head_ref)
+        else:
+            head_ref = f"{fork_row['owner']}:{fork_row['default_branch']}"
+            logger.debug("Backfill diff using fork default branch (no head_sha): %s", head_ref)
+
+        # Fetch the diffs for files involved in this signal. Backfill is
+        # all-or-nothing: if any expected file's diff can't be fetched, fail the
+        # whole attempt rather than committing a half-applied change set. An
+        # empty diff (binary/pure-rename) means "no patch needed" — skip it.
         patches: list[str] = []
+        patched_files: list[str] = []
+        failed_files: list[str] = []
         for filepath in signal.files_involved:
             try:
                 diff = await self._provider.get_file_diff(
                     tracked["owner"],
                     tracked["name"],
-                    f"{tracked['owner']}:{tracked['default_branch']}",
-                    f"{fork_row['owner']}:{fork_row['default_branch']}",
+                    base_ref,
+                    head_ref,
                     filepath,
                 )
-                if diff:
-                    patches.append(diff)
-            except (OSError, ConnectionError, TimeoutError, RuntimeError) as exc:
+            except (OSError, ConnectionError, TimeoutError, RuntimeError, ProviderError) as exc:
                 logger.warning("Failed to fetch diff for %s: %s", filepath, exc)
+                failed_files.append(filepath)
+                continue
+            if diff:
+                patches.append(diff)
+                patched_files.append(filepath)
 
-        if not patches:
+        if failed_files:
             attempt.status = BackfillStatus.PATCH_FAILED
-            attempt.error = "No diffs could be fetched for signal files"
+            attempt.error = f"Partial fetch: could not fetch diffs for: {', '.join(failed_files)}"
             await self._record_attempt(attempt)
             return attempt
 
-        attempt.files_patched = signal.files_involved
+        if not patches:
+            # Every file's fetch succeeded but produced an empty diff: the
+            # signal is unpatchable as text (binary, pure rename, or unchanged),
+            # not a fetch failure. Distinguishing this lets the CLI map it to a
+            # terminal patch_failed rather than a retriable fetch_error.
+            attempt.status = BackfillStatus.PATCH_FAILED
+            attempt.error = (
+                "No applicable diffs (all involved files are binary, pure renames, or unchanged)"
+            )
+            await self._record_attempt(attempt)
+            return attempt
+
+        attempt.files_patched = patched_files
 
         if dry_run:
             attempt.status = BackfillStatus.PENDING
@@ -339,7 +419,11 @@ class BackfillService:
             logger.exception("Backfill attempt failed for signal %s", signal.id)
         finally:
             # Always return to original branch for safety.
-            # Delete the candidate branch only if NOT accepted AND cleanup requested.
+            # Delete the candidate branch only for non-kept outcomes AND when
+            # cleanup was requested. ACCEPTED and NEEDS_REVIEW are both
+            # kept-branch outcomes: ACCEPTED is the deliverable, and NEEDS_REVIEW
+            # exists precisely so a human can inspect the patch + test edits, so
+            # its branch is never deleted even under keep_branch_on_failure=False.
             try:
                 current = (
                     await self._run_safe_cmd(
@@ -349,7 +433,8 @@ class BackfillService:
                 ).stdout.strip()
                 if current == branch_name:
                     await self._run_git("checkout", "-")
-                if attempt.status != BackfillStatus.ACCEPTED and not keep_branch_on_failure:
+                kept_statuses = (BackfillStatus.ACCEPTED, BackfillStatus.NEEDS_REVIEW)
+                if attempt.status not in kept_statuses and not keep_branch_on_failure:
                     check = await self._run_safe_cmd(
                         ["git", "rev-parse", "--verify", branch_name],
                         cwd=self._repo_path,
@@ -369,19 +454,6 @@ class BackfillService:
             logger.error("Failed to record backfill attempt for signal %s: %s", signal.id, db_exc)
         return attempt
 
-    async def _try_backfill(
-        self,
-        signal: Signal,
-        *,
-        dry_run: bool = False,
-    ) -> BackfillAttempt:
-        """Legacy path used by run_backfill — delete candidate branch on failure."""
-        return await self.apply_signal(
-            signal.id,
-            dry_run=dry_run,
-            keep_branch_on_failure=False,
-        )
-
     async def _apply_and_test(
         self,
         attempt: BackfillAttempt,
@@ -399,30 +471,33 @@ class BackfillService:
         combined_patch = "\n".join(patches)
         patch_bytes = combined_patch.encode()
 
-        apply_check = await self._run_safe_cmd(
-            ["git", "apply", "--check", "-"],
-            cwd=self._repo_path,
-            stdin_data=patch_bytes,
-        )
-
-        if apply_check.returncode != 0:
-            # Patch doesn't apply cleanly — outer finally handles branch cleanup
-            attempt.status = BackfillStatus.CONFLICT
-            attempt.error = f"Patch conflict: {apply_check.stderr}"
-            return
-
-        # Actually apply the patch
+        # Apply with a 3-way merge so context drift between the fork's diff base
+        # and the local tree resolves where possible. The reconstructed diffs
+        # carry index blob ids, so git can merge against the recorded base; when
+        # the merge can't resolve, git writes conflict markers and exits non-zero.
         apply_result = await self._run_safe_cmd(
-            ["git", "apply", "-"],
+            ["git", "apply", "--3way", "-"],
             cwd=self._repo_path,
             stdin_data=patch_bytes,
         )
 
-        if (
-            apply_result.returncode != 0
-        ):  # pragma: no cover — hard to reproduce without process injection
-            attempt.status = BackfillStatus.PATCH_FAILED
-            attempt.error = f"Patch apply failed: {apply_result.stderr}"
+        if apply_result.returncode != 0:
+            # A failed 3-way leaves conflict markers and unmerged index entries
+            # behind. Reset the tree before returning so the outer finally's
+            # branch switch is clean. Set status first so a reset failure cannot
+            # reclassify this CONFLICT via the outer except.
+            attempt.status = BackfillStatus.CONFLICT
+            attempt.error = f"Patch conflict: {apply_result.stderr}"
+            reset_result = await self._run_safe_cmd(
+                ["git", "reset", "--hard"],
+                cwd=self._repo_path,
+            )
+            if reset_result.returncode != 0:
+                # The tree could not be reset; conflict markers / unmerged
+                # entries may linger. Surface it so the dirty state is visible.
+                attempt.error += (
+                    f" [tree reset failed: {reset_result.stderr}; working tree may be dirty]"
+                )
             return
 
         # Stage only the files touched by this patch (not all working-tree changes)
@@ -446,8 +521,16 @@ class BackfillService:
             if self._auto_fix_tests:
                 fixed = await self._attempt_test_fix(attempt, test_result)
                 if fixed:
-                    attempt.status = BackfillStatus.ACCEPTED
-                    attempt.score = 0.8  # Slightly lower score since tests needed fixing
+                    # Green ONLY because the AI fixer rewrote the project's own
+                    # tests to accommodate the imported change — that edits the
+                    # oracle rather than proving the change correct. Never
+                    # auto-accept: flag for human review with no auto-assigned
+                    # score (a human assigns the outcome via record_outcome).
+                    attempt.status = BackfillStatus.NEEDS_REVIEW
+                    attempt.score = None
+                    attempt.patch_summary = (
+                        attempt.patch_summary or ""
+                    ) + "\n[needs-review] tests were edited by the auto-fixer to reach green"
                 else:
                     attempt.status = BackfillStatus.TESTS_FAILED
                     attempt.score = 0.0
@@ -595,20 +678,6 @@ class BackfillService:
             )
         return result.stdout or ""
 
-    async def _run_exec(
-        self,
-        args: list[str],
-        *,
-        cwd: Path | None = None,
-        stdin_data: bytes | None = None,
-        timeout: int = 120,
-    ) -> subprocess.CompletedProcess:
-        """Run a command as an argument list (no shell interpolation).
-
-        Public alias kept for testability; delegates to _run_safe_cmd.
-        """
-        return await self._run_safe_cmd(args, cwd=cwd, stdin_data=stdin_data, timeout=timeout)
-
     async def _run_safe_cmd(
         self,
         args: list[str],
@@ -684,6 +753,7 @@ class BackfillService:
             error=row["error"],
             files_patched=files,
             score=row["score"],
+            created_at=row["created_at"],
         )
 
     async def list_attempts(

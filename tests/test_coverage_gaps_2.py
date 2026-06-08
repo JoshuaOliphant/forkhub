@@ -98,6 +98,20 @@ class TestGitHubProviderError:
         assert "404" in str(err)
         assert "Not Found" in str(err)
 
+    def test_is_a_provider_error(self):
+        """GitHubProviderError must be a ProviderError subclass so the
+        provider-agnostic service catch (backfill fetch loop) catches it.
+        """
+        from forkhub.interfaces import ProviderError
+        from forkhub.providers.github import GitHubProviderError
+
+        assert issubclass(GitHubProviderError, ProviderError)
+        err = GitHubProviderError(404, "Not Found")
+        assert isinstance(err, ProviderError)
+        # The (status_code, message) API survives the base-class swap.
+        assert err.status_code == 404
+        assert err.message == "Not Found"
+
 
 class TestGitHubProviderGet:
     async def test_get_user_repos(self, gh_provider, gh_mock):

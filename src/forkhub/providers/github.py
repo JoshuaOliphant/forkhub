@@ -8,6 +8,7 @@ from typing import Any
 from githubkit import GitHub, TokenAuthStrategy
 from githubkit.exception import RequestError, RequestFailed
 
+from forkhub.interfaces import ProviderError
 from forkhub.models import (
     CommitInfo,
     CompareResult,
@@ -20,7 +21,7 @@ from forkhub.models import (
 )
 
 
-class GitHubProviderError(Exception):
+class GitHubProviderError(ProviderError):
     """Raised when the GitHub API returns an error response."""
 
     def __init__(self, status_code: int, message: str) -> None:
@@ -312,6 +313,17 @@ class GitHubProvider:
         lines = [*header, old_line, new_line]
         body = patch if patch.endswith("\n") else patch + "\n"
         return "\n".join(lines) + "\n" + body
+
+    async def get_head_sha(self, owner: str, repo: str, branch: str) -> str:
+        """Fetch the HEAD commit SHA for a branch.
+
+        Hits ``/repos/{owner}/{repo}/branches/{branch}`` (ETag-cached via the
+        shared ``_get`` helper) and returns ``commit.sha`` — the SHA the
+        branch currently points at. This is the authoritative change signal
+        the sync loop uses to detect fork divergence.
+        """
+        data = await self._get(f"/repos/{owner}/{repo}/branches/{branch}")
+        return data["commit"]["sha"]
 
     async def get_rate_limit(self) -> RateLimitInfo:
         """Fetch current GitHub API rate limit status."""

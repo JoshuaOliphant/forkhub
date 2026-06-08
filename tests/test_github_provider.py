@@ -531,6 +531,42 @@ class TestGetRateLimit:
 
 
 # ===========================================================================
+# Test: get_head_sha
+# ===========================================================================
+
+
+class TestGetHeadSha:
+    """Tests for GitHubProvider.get_head_sha."""
+
+    async def test_returns_branch_head_sha(self, provider: GitHubProvider, mock_github) -> None:
+        """get_head_sha hits /repos/{owner}/{repo}/branches/{branch} and
+        returns the branch's commit SHA from a real-shaped payload."""
+        mock_github.get("/repos/contributor/hello-world/branches/main").mock(
+            return_value=Response(
+                200,
+                json={
+                    "name": "main",
+                    "commit": {
+                        "sha": "deadbeefcafe1234567890abcdef1234567890ab",
+                        "commit": {
+                            "message": "Add feature",
+                            "author": {
+                                "name": "Contributor",
+                                "date": "2025-07-15T08:30:00Z",
+                            },
+                        },
+                    },
+                    "protected": False,
+                },
+            ),
+        )
+
+        sha = await provider.get_head_sha("contributor", "hello-world", "main")
+
+        assert sha == "deadbeefcafe1234567890abcdef1234567890ab"
+
+
+# ===========================================================================
 # Test: Error handling
 # ===========================================================================
 

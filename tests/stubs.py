@@ -22,6 +22,7 @@ from forkhub.models import (
     Signal,
     TrackedRepo,
 )
+from forkhub.providers.github import GitHubProviderError
 
 # ---------------------------------------------------------------------------
 # Time constants used across tests
@@ -265,6 +266,14 @@ class StubGitProvider:
         self._head_shas: dict[str, str] = head_shas or {}
         self._file_diffs: dict[str, str] = {}
         self._error_files: set[str] = set()
+        # Files whose diff fetch raises a provider-level error (e.g. a deleted
+        # fork's 404), distinct from _error_files which raises RuntimeError.
+        self._provider_error_files: set[str] = set()
+        self.diff_calls: list[dict[str, str]] = []
+        # Call recording so tests can assert the API-budget property:
+        # an unchanged, already-baselined fork must trigger zero extra calls.
+        self.compare_calls: list[dict[str, str]] = []
+        self.head_sha_calls: list[dict[str, str]] = []
         self._rate_limit = RateLimitInfo(
             limit=5000,
             remaining=rate_limit_remaining,
@@ -323,6 +332,7 @@ class StubGitProvider:
         return ForkPage(forks=forks, total_count=len(forks), page=1, has_next=False)
 
     async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
+        self.compare_calls.append({"base": base, "head": head})
         return CompareResult(ahead_by=0, behind_by=0, files=[], commits=[])
 
     async def get_releases(
@@ -348,6 +358,15 @@ class StubGitProvider:
         key = f"{fork_owner}:{filepath}"
         self._file_diffs[key] = diff
 
+    def set_provider_error_file(self, filepath: str) -> None:
+        """Make get_file_diff raise GitHubProviderError for ``filepath``.
+
+        Simulates the real provider's primary failure mode (e.g. a deleted
+        fork's repo returning 404), which is a ProviderError rather than the
+        RuntimeError that ``_error_files`` raises.
+        """
+        self._provider_error_files.add(filepath)
+
     async def get_file_diff(
         self,
         owner: str,
@@ -356,11 +375,15 @@ class StubGitProvider:
         head: str,
         path: str,
     ) -> str:
-        # Extract fork owner from head param (format: "fork_owner:branch")
+        # Record every call so tests can assert which refs were requested.
+        self.diff_calls.append({"base": base, "head": head, "path": path})
+        # Extract fork owner from head param (format: "fork_owner:ref")
         fork_owner = head.split(":")[0]
         key = f"{fork_owner}:{path}"
         if path in self._error_files:
             raise RuntimeError(f"Simulated error fetching {path}")
+        if path in self._provider_error_files:
+            raise GitHubProviderError(404, f"Not Found: {path}")
         return self._file_diffs.get(key, "")
 
     async def get_rate_limit(self) -> RateLimitInfo:
@@ -368,8 +391,20 @@ class StubGitProvider:
             raise ConnectionError("Rate limit check failed")
         return self._rate_limit
 
-    def get_head_sha(self, fork_full_name: str) -> str | None:
-        return self._head_shas.get(fork_full_name)
+    async def get_head_sha(self, owner: str, repo: str, branch: str) -> str:
+        """Return the canned HEAD SHA for ``{owner}/{repo}``.
+
+        The provider receives (owner, repo, branch) like the real GitHub
+        API, but the canned map stays keyed by ``full_name`` so existing
+        ``head_shas={"forker1/alpha": ...}`` test data remains valid.
+        Raises when no SHA is configured so the sync loop's error handling
+        (return None, log a warning) is exercised.
+        """
+        self.head_sha_calls.append({"owner": owner, "repo": repo, "branch": branch})
+        full_name = f"{owner}/{repo}"
+        if full_name not in self._head_shas:
+            raise GitHubProviderError(404, f"No head SHA for {full_name}")
+        return self._head_shas[full_name]
 
 
 # ---------------------------------------------------------------------------

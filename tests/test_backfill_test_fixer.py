@@ -446,14 +446,6 @@ class TestAnalyzerProtocolConformance:
         )
         assert isinstance(analyzer, Analyzer)
 
-    def test_analysis_runner_back_compat_alias(self):
-        """The old `AnalysisRunner` name must still point at ClaudeAnalyzer."""
-        pytest.importorskip("claude_agent_sdk")
-
-        from forkhub.agent.runner import AnalysisRunner, ClaudeAnalyzer
-
-        assert AnalysisRunner is ClaudeAnalyzer
-
 
 # ---------------------------------------------------------------------------
 # Optional claude extra — graceful degradation

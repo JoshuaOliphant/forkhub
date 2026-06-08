@@ -1,4 +1,4 @@
-# ABOUTME: Tests for the AnalysisRunner orchestration layer.
+# ABOUTME: Tests for the ClaudeAnalyzer orchestration layer.
 # ABOUTME: Covers prompt building, batching logic, and options configuration.
 
 from __future__ import annotations
@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 # Skip this whole module if the optional [claude] extra isn't installed —
-# AnalysisRunner requires claude-agent-sdk at runtime.
+# ClaudeAnalyzer requires claude-agent-sdk at runtime.
 pytest.importorskip("claude_agent_sdk")
 
 from forkhub.config import ForkHubSettings  # noqa: E402
@@ -23,9 +23,9 @@ def settings() -> ForkHubSettings:
 
 @pytest.fixture
 def runner(db, provider, embedding_provider, settings):
-    from forkhub.agent.runner import AnalysisRunner
+    from forkhub.agent.runner import ClaudeAnalyzer
 
-    return AnalysisRunner(
+    return ClaudeAnalyzer(
         db=db,
         provider=provider,
         embedding_provider=embedding_provider,
@@ -48,11 +48,11 @@ class TestBuildOptionsModelWiring:
         value verbatim, while the diff-analyst AgentDefinition degrades a
         non-alias value to 'inherit' (running on that same session model).
         """
-        from forkhub.agent.runner import AnalysisRunner
+        from forkhub.agent.runner import ClaudeAnalyzer
         from forkhub.config import AnthropicSettings, ForkHubSettings
 
         settings = ForkHubSettings(anthropic=AnthropicSettings(model="claude-sonnet-4-6"))
-        runner = AnalysisRunner(
+        runner = ClaudeAnalyzer(
             db=db,
             provider=provider,
             embedding_provider=embedding_provider,

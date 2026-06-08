@@ -324,12 +324,16 @@ class TestApplyCommand:
     async def test_fetch_error_returns_3(
         self, db: Database, provider: StubGitProvider, tmp_path: Path
     ):
-        """When no diffs can be fetched, exit code is 3 (fetch_error)."""
+        """When a file's diff fetch raises, exit code is 3 (fetch_error)."""
         _init_git_repo(tmp_path)
         repo = await _seed_tracked_repo(db)
         fork = await _seed_fork(db, repo["id"])
-        signal = await _seed_signal(db, repo["id"], fork["id"], significance=8)
-        # Don't register a diff with the provider → fetch returns empty
+        signal = await _seed_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        # Make the fetch raise for this file → partial-fetch fetch_error (exit 3),
+        # distinct from an empty diff (which is a terminal patch_failed).
+        provider._error_files.add("src/cache.py")
 
         output: list[str] = []
         exit_code = await _apply_impl(
@@ -357,15 +361,22 @@ class TestApplyExitCodeMapping:
         ("status", "error", "expected_code", "expected_reason"),
         [
             (BackfillStatus.ACCEPTED, None, 0, "accepted"),
+            (BackfillStatus.NEEDS_REVIEW, None, 5, "needs_review"),
             (BackfillStatus.PENDING, None, 0, "pending"),
             (BackfillStatus.TESTS_FAILED, None, 1, "tests_failed"),
             (BackfillStatus.CONFLICT, "branch already exists", 2, "conflict"),
             (BackfillStatus.PATCH_FAILED, "patch did not apply cleanly", 2, "patch_failed"),
             (
                 BackfillStatus.PATCH_FAILED,
-                "No diffs could be fetched for signal files",
+                "Partial fetch: could not fetch diffs for: src/b.py",
                 3,
                 "fetch_error",
+            ),
+            (
+                BackfillStatus.PATCH_FAILED,
+                "No applicable diffs (all involved files are binary, pure renames, or unchanged)",
+                2,
+                "patch_failed",
             ),
             (BackfillStatus.REJECTED, None, 1, "rejected"),
         ],

@@ -16,7 +16,14 @@ from forkhub.models import (
 )
 from forkhub.services.backfill import BackfillService
 
-from .stubs import StubGitProvider, make_fork, make_signal, make_tracked_repo
+from .stubs import (
+    StubGitProvider,
+    make_cluster,
+    make_cluster_member,
+    make_fork,
+    make_signal,
+    make_tracked_repo,
+)
 
 if TYPE_CHECKING:
     from forkhub.database import Database
@@ -108,7 +115,7 @@ class TestGatherCandidates:
         await _insert_signal(db, repo["id"], fork["id"], significance=7)  # Above threshold
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert len(candidates) == 1
         assert candidates[0].significance == 7
 
@@ -120,7 +127,7 @@ class TestGatherCandidates:
         await _insert_signal(db, repo["id"], fork["id"], significance=7, is_upstream=False)
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert len(candidates) == 1
         assert not candidates[0].is_upstream
 
@@ -133,7 +140,7 @@ class TestGatherCandidates:
         await _insert_signal(db, repo["id"], fork["id"], significance=7, summary="Notable")
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert len(candidates) == 3
         assert candidates[0].significance == 9
         assert candidates[1].significance == 7
@@ -143,7 +150,7 @@ class TestGatherCandidates:
         """No signals means no candidates."""
         repo = await _insert_tracked_repo(db)
         service = BackfillService(db=db, provider=provider)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert candidates == []
 
     async def test_since_filter_applied(self, db: Database, provider: StubGitProvider):
@@ -156,7 +163,7 @@ class TestGatherCandidates:
         service = BackfillService(db=db, provider=provider, min_significance=5)
         # Ask for signals from the future — should get none
         future = datetime.now(UTC) + timedelta(days=1)
-        candidates = await service._gather_candidates(repo["id"], since=future)
+        candidates = await service.gather_candidates(repo["id"], since=future)
         assert candidates == []
 
     async def test_excludes_signals_with_no_fork_id(self, db: Database, provider: StubGitProvider):
@@ -173,8 +180,187 @@ class TestGatherCandidates:
         await db.insert_signal(sig)
 
         service = BackfillService(db=db, provider=provider, min_significance=5)
-        candidates = await service._gather_candidates(repo["id"])
+        candidates = await service.gather_candidates(repo["id"])
         assert candidates == []
+
+
+# ---------------------------------------------------------------------------
+# Cluster-aware ranking and dedup
+# ---------------------------------------------------------------------------
+
+
+async def _insert_signal_in_cluster(
+    db: Database,
+    cluster_id: str,
+    tracked_repo_id: str,
+    fork_id: str,
+    **signal_overrides: object,
+) -> dict:
+    """Insert a signal and register it as a member of an existing cluster."""
+    sig = make_signal(fork_id, tracked_repo_id, **signal_overrides)
+    await db.insert_signal(sig)
+    await db.add_cluster_member(make_cluster_member(cluster_id, sig["id"], fork_id))
+    return sig
+
+
+class TestClusterRanking:
+    async def test_significance_outranks_cluster_membership(
+        self, db: Database, provider: StubGitProvider
+    ):
+        """A higher-significance non-clustered signal outranks a clustered one.
+
+        Significance is primary; cluster membership only breaks ties.
+        """
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster = make_cluster(repo["id"])
+        await db.insert_cluster(cluster)
+
+        await _insert_signal_in_cluster(
+            db, cluster["id"], repo["id"], fork["id"], significance=7, summary="Clustered"
+        )
+        await _insert_signal(db, repo["id"], fork["id"], significance=9, summary="Higher solo")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service.gather_candidates(repo["id"])
+        assert candidates[0].significance == 9
+        assert candidates[0].summary == "Higher solo"
+
+    async def test_cluster_breaks_tie_above_recency(self, db: Database, provider: StubGitProvider):
+        """At equal significance, cluster membership ranks a signal above a solo one.
+
+        The clustered signal is the *more recent* one so that, under a pure
+        (-significance, created_at) earliest-first sort, it would lose to the
+        older solo signal. Cluster membership must be what pulls it above.
+        """
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster = make_cluster(repo["id"])
+        await db.insert_cluster(cluster)
+
+        older = "2025-01-01T00:00:00+00:00"
+        newer = "2025-02-01T00:00:00+00:00"
+        await _insert_signal_in_cluster(
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=7,
+            summary="Clustered newer",
+            created_at=newer,
+        )
+        sig_solo = make_signal(
+            fork["id"], repo["id"], significance=7, summary="Solo older", created_at=older
+        )
+        await db.insert_signal(sig_solo)
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service.gather_candidates(repo["id"])
+        assert candidates[0].summary == "Clustered newer"
+        assert candidates[1].summary == "Solo older"
+
+
+class TestClusterDedup:
+    async def test_same_cluster_keeps_highest_significance(
+        self, db: Database, provider: StubGitProvider
+    ):
+        """Two signals in one cluster collapse to the highest-significance member.
+
+        The stronger member is deliberately the OLDER one, so raw DB order
+        (created_at DESC) would surface the weaker member first — significance
+        must be the sole reason the stronger one survives.
+        """
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster = make_cluster(repo["id"])
+        await db.insert_cluster(cluster)
+
+        await _insert_signal_in_cluster(
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=6,
+            summary="Weaker member",
+            created_at="2025-02-01T00:00:00+00:00",
+        )
+        await _insert_signal_in_cluster(
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=9,
+            summary="Stronger member",
+            created_at="2025-01-01T00:00:00+00:00",
+        )
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service.gather_candidates(repo["id"])
+        assert len(candidates) == 1
+        assert candidates[0].summary == "Stronger member"
+
+    async def test_same_cluster_tie_keeps_earliest(self, db: Database, provider: StubGitProvider):
+        """A significance tie within a cluster keeps the earliest-created member."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster = make_cluster(repo["id"])
+        await db.insert_cluster(cluster)
+
+        await _insert_signal_in_cluster(
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=8,
+            summary="Earliest",
+            created_at="2025-01-01T00:00:00+00:00",
+        )
+        await _insert_signal_in_cluster(
+            db,
+            cluster["id"],
+            repo["id"],
+            fork["id"],
+            significance=8,
+            summary="Later",
+            created_at="2025-03-01T00:00:00+00:00",
+        )
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service.gather_candidates(repo["id"])
+        assert len(candidates) == 1
+        assert candidates[0].summary == "Earliest"
+
+    async def test_different_clusters_both_kept(self, db: Database, provider: StubGitProvider):
+        """Signals in different clusters are distinct changes — both survive dedup."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        cluster_a = make_cluster(repo["id"], label="Cluster A")
+        cluster_b = make_cluster(repo["id"], label="Cluster B")
+        await db.insert_cluster(cluster_a)
+        await db.insert_cluster(cluster_b)
+
+        await _insert_signal_in_cluster(
+            db, cluster_a["id"], repo["id"], fork["id"], significance=8, summary="In A"
+        )
+        await _insert_signal_in_cluster(
+            db, cluster_b["id"], repo["id"], fork["id"], significance=7, summary="In B"
+        )
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service.gather_candidates(repo["id"])
+        summaries = {c.summary for c in candidates}
+        assert summaries == {"In A", "In B"}
+
+    async def test_non_clustered_signals_all_kept(self, db: Database, provider: StubGitProvider):
+        """Non-clustered signals are never deduped, even at equal significance."""
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        await _insert_signal(db, repo["id"], fork["id"], significance=7, summary="Solo one")
+        await _insert_signal(db, repo["id"], fork["id"], significance=7, summary="Solo two")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        candidates = await service.gather_candidates(repo["id"])
+        assert len(candidates) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -588,33 +774,33 @@ class TestBackfillModels:
 # ---------------------------------------------------------------------------
 
 
-class TestRunExec:
-    async def test_run_exec_runs_command_and_returns_stdout(self, tmp_path, db, provider):
-        """_run_exec should run a command and capture stdout without shell."""
+class TestRunSafeCmd:
+    async def test_run_safe_cmd_runs_command_and_returns_stdout(self, tmp_path, db, provider):
+        """_run_safe_cmd should run a command and capture stdout without shell."""
         import subprocess
 
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_exec(["echo", "hello"], cwd=tmp_path)
+        result = await service._run_safe_cmd(["echo", "hello"], cwd=tmp_path)
         assert isinstance(result, subprocess.CompletedProcess)
         assert result.stdout.strip() == "hello"
         assert result.returncode == 0
 
-    async def test_run_exec_does_not_expand_shell_metacharacters(self, tmp_path, db, provider):
-        """_run_exec must not expand shell metacharacters — args are literal."""
+    async def test_run_safe_cmd_does_not_expand_shell_metacharacters(self, tmp_path, db, provider):
+        """_run_safe_cmd must not expand shell metacharacters — args are literal."""
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_exec(["echo", "$HOME"], cwd=tmp_path)
+        result = await service._run_safe_cmd(["echo", "$HOME"], cwd=tmp_path)
         assert result.stdout.strip() == "$HOME"
 
-    async def test_run_exec_passes_stdin_data(self, tmp_path, db, provider):
-        """_run_exec should pass stdin_data bytes to the process stdin."""
+    async def test_run_safe_cmd_passes_stdin_data(self, tmp_path, db, provider):
+        """_run_safe_cmd should pass stdin_data bytes to the process stdin."""
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_exec(["cat"], cwd=tmp_path, stdin_data=b"patch content")
+        result = await service._run_safe_cmd(["cat"], cwd=tmp_path, stdin_data=b"patch content")
         assert result.stdout == "patch content"
 
-    async def test_run_exec_times_out_and_returns_error(self, tmp_path, db, provider):
-        """_run_exec should return returncode -1 when command times out."""
+    async def test_run_safe_cmd_times_out_and_returns_error(self, tmp_path, db, provider):
+        """_run_safe_cmd should return returncode -1 when command times out."""
         service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_exec(["sleep", "10"], cwd=tmp_path, timeout=1)
+        result = await service._run_safe_cmd(["sleep", "10"], cwd=tmp_path, timeout=1)
         assert result.returncode == -1
         assert "timed out" in result.stderr.lower()
 
@@ -622,7 +808,7 @@ class TestRunExec:
         """_run_shell must be removed — exec-based approach replaces it."""
         service = BackfillService(db=db, provider=provider)
         assert not hasattr(service, "_run_shell"), (
-            "_run_shell must be deleted; use _run_exec instead"
+            "_run_shell must be deleted; use _run_safe_cmd instead"
         )
 
     async def test_shell_quote_no_longer_exists(self, db, provider):
@@ -844,6 +1030,57 @@ class TestApplySignal:
         attempts = await db.list_backfill_attempts(repo_id=repo["id"])
         assert len(attempts) == 1
 
+    async def test_diff_head_pinned_to_fork_head_sha(self, db, provider):
+        """apply_signal pins the diff head ref to the fork's recorded head_sha.
+
+        make_fork populates head_sha, so the diff fetch must request
+        ``owner:head_sha`` rather than the floating ``owner:default_branch``.
+        """
+        repo = await _insert_tracked_repo(db)
+        fork = make_fork(
+            repo["id"],
+            owner="forker1",
+            full_name="forker1/project",
+            github_id=5001,
+            vitality="active",
+            stars=10,
+            last_pushed_at=_ACTIVE_DATE.isoformat(),
+            head_sha="deadbeefcafe",
+        )
+        await db.insert_fork(fork)
+        signal = await _insert_signal(db, repo["id"], fork["id"], significance=8)
+        provider.set_file_diff("forker1", "src/cache.py", "some diff")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        await service.apply_signal(signal["id"], dry_run=True)
+
+        assert provider.diff_calls
+        assert provider.diff_calls[0]["head"] == "forker1:deadbeefcafe"
+
+    async def test_diff_head_falls_back_to_default_branch(self, db, provider):
+        """When head_sha is empty, the diff head ref falls back to the branch."""
+        repo = await _insert_tracked_repo(db)
+        fork = make_fork(
+            repo["id"],
+            owner="forker1",
+            full_name="forker1/project",
+            github_id=5001,
+            vitality="active",
+            stars=10,
+            last_pushed_at=_ACTIVE_DATE.isoformat(),
+            head_sha=None,
+            default_branch="main",
+        )
+        await db.insert_fork(fork)
+        signal = await _insert_signal(db, repo["id"], fork["id"], significance=8)
+        provider.set_file_diff("forker1", "src/cache.py", "some diff")
+
+        service = BackfillService(db=db, provider=provider, min_significance=5)
+        await service.apply_signal(signal["id"], dry_run=True)
+
+        assert provider.diff_calls
+        assert provider.diff_calls[0]["head"] == "forker1:main"
+
     async def test_no_patches_records_patch_failed(self, db, provider):
         """If no diffs can be fetched, apply_signal returns PATCH_FAILED."""
         repo = await _insert_tracked_repo(db)
@@ -860,10 +1097,10 @@ class TestApplySignal:
     async def test_keeps_branch_on_failure_by_default(self, tmp_path, db, provider):
         """apply_signal preserves the candidate branch on patch failure.
 
-        The bad diff triggers `git apply --check` failure inside
-        `_apply_and_test`, which creates the candidate branch first and
-        then sets CONFLICT status. With keep_branch_on_failure=True the
-        branch must survive the finally-block cleanup.
+        A patch targeting a file absent from the index cannot be merged,
+        so `_apply_and_test` creates the candidate branch first and then
+        sets CONFLICT status. With keep_branch_on_failure=True the branch
+        must survive the finally-block cleanup.
         """
         import subprocess as sp
 
@@ -874,7 +1111,7 @@ class TestApplySignal:
         signal = await _insert_signal(
             db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
         )
-        # Bad diff → patch will fail to apply
+        # Patch targets a file that does not exist in the tree → cannot apply
         provider.set_file_diff(
             "forker1",
             "src/cache.py",
@@ -885,7 +1122,7 @@ class TestApplySignal:
         attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=True)
 
         # The apply path must have been reached (branch_name set), and the
-        # patch must have been rejected at git apply --check (CONFLICT).
+        # patch must have been rejected as a CONFLICT.
         assert attempt.branch_name is not None
         assert attempt.status == BackfillStatus.CONFLICT
         # The branch must still exist under keep_branch_on_failure=True.
@@ -1031,6 +1268,324 @@ class TestApplySignal:
         assert target_file.read_text() == "new\n"
 
 
+def _make_git_diff_with_drift(tmp_path, *, conflict: bool):
+    """Build a committed file, a real `git diff` against it, then drift the tree.
+
+    Returns the captured diff string (with `diff --git` + `index` headers, so
+    `git apply --3way` can use the index blob). The local tree is mutated and
+    committed so plain `git apply` would fail; whether `--3way` resolves it
+    depends on whether the drift overlaps the patched lines.
+
+    - conflict=False: drift lands on a different line → 3way resolves cleanly.
+    - conflict=True:  drift lands on the same line   → 3way leaves markers.
+    """
+    import subprocess as sp
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    target = src_dir / "cache.py"
+    target.write_text("line1\nline2\nline3\nline4\nline5\n")
+    sp.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+    sp.run(["git", "commit", "-m", "add cache"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    # Fork's change: rewrite line3.
+    target.write_text("line1\nline2\nline3-FORK\nline4\nline5\n")
+    diff = sp.run(
+        ["git", "diff"], cwd=str(tmp_path), check=True, capture_output=True, text=True
+    ).stdout
+
+    # Introduce local drift and commit so the tree differs from the patch base.
+    # (write_text below fully overwrites the only file, so no checkout reset is
+    # needed first.)
+    if conflict:
+        # Drift on the same line the patch edits → 3way conflict.
+        target.write_text("line1\nline2\nline3-LOCAL\nline4\nline5\n")
+    else:
+        # Drift on a different line → 3way resolves.
+        target.write_text("line1\nline2\nline3\nline4\nline5-LOCAL\n")
+    sp.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+    sp.run(
+        ["git", "commit", "-m", "local drift"], cwd=str(tmp_path), check=True, capture_output=True
+    )
+    return diff
+
+
+class TestApplyThreeWayDrift:
+    @pytest.mark.parametrize(
+        ("conflict", "expected_status"),
+        [
+            (False, BackfillStatus.ACCEPTED),
+            (True, BackfillStatus.CONFLICT),
+        ],
+    )
+    async def test_three_way_drift(self, tmp_path, db, provider, conflict, expected_status):
+        """3-way apply against a drifted local tree.
+
+        - conflict=False: drift away from the patched lines resolves via 3-way
+          merge, so the attempt proceeds to ACCEPTED.
+        - conflict=True: drift on the patched lines cannot be merged, so the
+          attempt is a CONFLICT and the working tree is reset so no markers
+          linger.
+        """
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+        diff = _make_git_diff_with_drift(tmp_path, conflict=conflict)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        provider.set_file_diff("forker1", "src/cache.py", diff)
+
+        service = BackfillService(
+            db=db,
+            provider=provider,
+            repo_path=tmp_path,
+            min_significance=5,
+            test_command="true",
+        )
+        attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=True)
+
+        assert attempt.status == expected_status
+        assert attempt.branch_name is not None
+
+        if conflict:
+            assert attempt.error is not None
+            # After apply_signal returns, the caller must be back on the original
+            # branch with a clean working tree — the conflict must not leak
+            # state into the caller's checkout.
+            head = sp.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=str(tmp_path),
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            assert head != attempt.branch_name
+            porcelain = sp.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(tmp_path),
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            assert porcelain == "", f"caller working tree not clean: {porcelain!r}"
+
+            # The candidate branch's tree must also be clean — no conflict
+            # markers, no unmerged index entries left by the failed 3-way apply.
+            sp.run(
+                ["git", "checkout", attempt.branch_name],
+                cwd=str(tmp_path),
+                check=True,
+                capture_output=True,
+            )
+            status = sp.run(
+                ["git", "status", "--porcelain"], cwd=str(tmp_path), capture_output=True, text=True
+            )
+            assert status.stdout.strip() == "", (
+                f"working tree not clean after CONFLICT reset: {status.stdout!r}"
+            )
+            content = (tmp_path / "src" / "cache.py").read_text()
+            assert "<<<<<<<" not in content
+            assert "line3-LOCAL" in content
+        else:
+            # The merged content carries both the fork change and the local drift.
+            sp.run(
+                ["git", "checkout", attempt.branch_name],
+                cwd=str(tmp_path),
+                check=True,
+                capture_output=True,
+            )
+            content = (tmp_path / "src" / "cache.py").read_text()
+            assert "line3-FORK" in content
+            assert "line5-LOCAL" in content
+
+
+class TestResetFailureObservability:
+    async def test_reset_failure_is_appended_to_error(self, tmp_path, db, provider):
+        """When the post-conflict `git reset --hard` itself fails, the failure is
+        surfaced in attempt.error so a dirty working tree is observable rather
+        than silently swallowed.
+        """
+        import subprocess as sp
+
+        _init_git_repo_sync(tmp_path)
+        diff = _make_git_diff_with_drift(tmp_path, conflict=True)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/cache.py"]
+        )
+        provider.set_file_diff("forker1", "src/cache.py", diff)
+
+        class ResetFailingService(BackfillService):
+            async def _run_safe_cmd(self, args, **kwargs):
+                if args[:3] == ["git", "reset", "--hard"]:
+                    return sp.CompletedProcess(
+                        args=args,
+                        returncode=1,
+                        stdout="",
+                        stderr="fatal: simulated reset failure",
+                    )
+                return await super()._run_safe_cmd(args, **kwargs)
+
+        service = ResetFailingService(
+            db=db, provider=provider, repo_path=tmp_path, min_significance=5
+        )
+        attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=True)
+
+        assert attempt.status == BackfillStatus.CONFLICT
+        assert attempt.error is not None
+        assert "tree reset failed" in attempt.error
+        assert "simulated reset failure" in attempt.error
+
+
+class TestPartialFetch:
+    async def test_one_file_fetch_error_fails_whole_attempt(self, tmp_path, db, provider):
+        """If any expected file's diff fetch raises, the attempt fails as a
+        partial fetch rather than committing a half-applied change set.
+        """
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/a.py", "src/b.py"]
+        )
+        provider.set_file_diff(
+            "forker1",
+            "src/a.py",
+            "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        provider._error_files.add("src/b.py")
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.PATCH_FAILED
+        assert attempt.error is not None
+        assert "Partial fetch" in attempt.error
+        assert "src/b.py" in attempt.error
+
+    async def test_all_files_raise_reports_partial_fetch_with_every_filename(
+        self, tmp_path, db, provider
+    ):
+        """When every involved file's diff fetch raises, the attempt fails as a
+        partial fetch and names every failed file — proving the failed_files
+        branch takes precedence over the empty-patches branch.
+        """
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/a.py", "src/b.py"]
+        )
+        provider._error_files.add("src/a.py")
+        provider._error_files.add("src/b.py")
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.PATCH_FAILED
+        assert attempt.error is not None
+        assert "Partial fetch" in attempt.error
+        assert "src/a.py" in attempt.error
+        assert "src/b.py" in attempt.error
+
+    async def test_provider_error_fetch_fails_whole_attempt(self, tmp_path, db, provider):
+        """A file whose diff fetch raises a ProviderError (e.g. a deleted
+        fork's 404) is counted as a failed fetch — PATCH_FAILED with a
+        "Partial fetch" error naming the file — instead of crashing apply_signal
+        with an unhandled traceback. Regression for forkhub-cml.
+        """
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/a.py", "src/b.py"]
+        )
+        provider.set_file_diff(
+            "forker1",
+            "src/a.py",
+            "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        provider.set_provider_error_file("src/b.py")
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.PATCH_FAILED
+        assert attempt.error is not None
+        assert "Partial fetch" in attempt.error
+        assert "src/b.py" in attempt.error
+        # The attempt trace is persisted (the bug lost it to an unhandled crash).
+        persisted = await service.get_attempt(attempt.id)
+        assert persisted is not None
+        assert persisted.status == BackfillStatus.PATCH_FAILED
+
+    async def test_all_files_empty_reports_no_applicable_diffs(self, tmp_path, db, provider):
+        """When every involved file's fetch succeeds but returns an empty diff
+        (binary/pure-rename/unchanged), fetching did not fail — so the error
+        says the signal is unpatchable as text, not that fetching failed.
+        """
+        _init_git_repo_sync(tmp_path)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/a.py", "src/b.py"]
+        )
+        # No diffs registered → provider returns "" for both files, none raise.
+
+        service = BackfillService(db=db, provider=provider, repo_path=tmp_path, min_significance=5)
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.PATCH_FAILED
+        assert attempt.error is not None
+        assert "No applicable diffs" in attempt.error
+
+    async def test_empty_diff_is_not_a_failure(self, tmp_path, db, provider):
+        """A file whose diff is empty (binary/pure-rename) is skipped, not a
+        failure — the attempt proceeds with the files that do have patches.
+        """
+        _init_git_repo_sync(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "a.py").write_text("old\n")
+        import subprocess as sp
+
+        sp.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
+        sp.run(["git", "commit", "-m", "add a"], cwd=str(tmp_path), check=True, capture_output=True)
+
+        repo = await _insert_tracked_repo(db)
+        fork = await _insert_fork(db, repo["id"])
+        signal = await _insert_signal(
+            db, repo["id"], fork["id"], significance=8, files=["src/a.py", "src/b.py"]
+        )
+        provider.set_file_diff(
+            "forker1",
+            "src/a.py",
+            "--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        # src/b.py returns "" (no diff registered) → treated as no-patch-needed.
+
+        service = BackfillService(
+            db=db,
+            provider=provider,
+            repo_path=tmp_path,
+            min_significance=5,
+            test_command="true",
+        )
+        attempt = await service.apply_signal(signal["id"])
+
+        assert attempt.status == BackfillStatus.ACCEPTED
+        # Only the file that produced a patch is staged; the empty-diff file is
+        # skipped rather than staged (which would fail when it's absent locally).
+        assert attempt.files_patched == ["src/a.py"]
+
+
 # ---------------------------------------------------------------------------
 # get_signal_by_id / get_attempt
 # ---------------------------------------------------------------------------
@@ -1057,11 +1612,15 @@ class TestGetSignalAndAttempt:
         repo = await _insert_tracked_repo(db)
         fork = await _insert_fork(db, repo["id"])
         signal = await _insert_signal(db, repo["id"], fork["id"])
+        # Explicit historic timestamp: hydration must return the STORED
+        # creation time, not the time the row was read back.
+        stored_at = datetime(2025, 3, 1, 12, 0, 0, tzinfo=UTC)
         attempt = BackfillAttempt(
             signal_id=signal["id"],
             fork_id=fork["id"],
             tracked_repo_id=repo["id"],
             status=BackfillStatus.PENDING,
+            created_at=stored_at,
         )
         d = attempt.model_dump()
         d["created_at"] = attempt.created_at.isoformat()
@@ -1074,6 +1633,7 @@ class TestGetSignalAndAttempt:
         assert loaded is not None
         assert loaded.id == attempt.id
         assert loaded.status == BackfillStatus.PENDING
+        assert loaded.created_at == stored_at
 
     async def test_get_attempt_missing_returns_none(self, db, provider):
         service = BackfillService(db=db, provider=provider)
@@ -1411,11 +1971,10 @@ class TestRunTestCommand:
 
 class TestRunBackfillRegressions:
     async def test_run_backfill_still_deletes_branch_on_failure(self, tmp_path, db, provider):
-        """The autonomous run_backfill loop must still delete candidate branches on failure.
+        """The autonomous run_backfill loop must delete candidate branches on failure.
 
-        This is the regression test for the service refactor: _try_backfill now
-        delegates to apply_signal(keep_branch_on_failure=False), preserving the
-        old autonomous-loop behavior.
+        run_backfill applies each candidate with keep_branch_on_failure=False,
+        so failed attempts never accumulate stale branches.
         """
         import subprocess as sp
 

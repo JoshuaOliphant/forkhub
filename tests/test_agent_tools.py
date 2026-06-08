@@ -453,6 +453,61 @@ class TestGetForkStars:
 
 
 class TestStoreSignal:
+    def test_files_involved_renders_as_json_array_not_string(self, tools):
+        """store_signal must declare files_involved as a JSON array.
+
+        The SDK's simple-dict schema mapper has no branch for python `list`
+        and silently renders it as `{"type": "string"}`, so the model can
+        never satisfy the contract and every store fails. The fix is an
+        explicit JSON Schema dict, which the SDK passes through verbatim —
+        so input_schema here IS the rendered MCP schema.
+        """
+        t = _find_tool(tools, "store_signal")
+        schema = t.input_schema
+        assert isinstance(schema, dict)
+        assert schema.get("type") == "object"
+        files = schema["properties"]["files_involved"]
+        assert files["type"] == "array"
+        assert files["items"]["type"] == "string"
+
+    async def test_accepts_json_string_files_involved(self, tools, db):
+        """Defensive: a JSON-encoded string for files_involved is coerced to a list."""
+        repo = await _insert_tracked_repo(db)
+        await _insert_fork(db, repo.id)
+        t = _find_tool(tools, "store_signal")
+        result = await t.handler(
+            {
+                "fork_full_name": "alice/repo",
+                "category": "fix",
+                "summary": "Coerced from a JSON string",
+                "significance": 5,
+                "files_involved": '["src/a.py", "src/b.py"]',
+                "detail": "",
+            }
+        )
+        assert not result.get("is_error", False)
+        signals = await db.list_signals(repo.id)
+        assert json.loads(signals[0]["files_involved"]) == ["src/a.py", "src/b.py"]
+
+    async def test_non_json_string_files_involved_becomes_single_element(self, tools, db):
+        """A bare (non-JSON) string for files_involved is wrapped, not exploded."""
+        repo = await _insert_tracked_repo(db)
+        await _insert_fork(db, repo.id)
+        t = _find_tool(tools, "store_signal")
+        result = await t.handler(
+            {
+                "fork_full_name": "alice/repo",
+                "category": "fix",
+                "summary": "Bare path string",
+                "significance": 5,
+                "files_involved": "src/only.py",
+                "detail": "",
+            }
+        )
+        assert not result.get("is_error", False)
+        signals = await db.list_signals(repo.id)
+        assert json.loads(signals[0]["files_involved"]) == ["src/only.py"]
+
     async def test_persists_signal_and_returns_id(self, tools, db):
         """store_signal should insert a signal row and return its ID."""
         repo = await _insert_tracked_repo(db)

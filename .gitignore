@@ -53,3 +53,9 @@ run.log
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
 .beads/proxieddb/
+
+# Observability harness runtime artifacts (binaries, pids, logs, telemetry data)
+.claude/harness/observability/bin/
+.claude/harness/observability/pids/
+.claude/harness/observability/logs/
+.claude/harness/observability/data/
