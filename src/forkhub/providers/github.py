@@ -2,6 +2,7 @@
 # ABOUTME: Implements GitProvider protocol with ETag caching and rate limit awareness.
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -19,6 +20,8 @@ from forkhub.models import (
     Release,
     RepoInfo,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubProviderError(ProviderError):
@@ -38,7 +41,20 @@ class GitHubProvider:
     """
 
     def __init__(self, token: str) -> None:
-        self._github = GitHub(TokenAuthStrategy(token))
+        # A blank, whitespace-only, or whitespace-wrapped token would make
+        # TokenAuthStrategy emit a malformed 'Authorization: token <ws>' header
+        # that the local HTTP layer (h11 via httpx) refuses to send, raising
+        # LocalProtocolError: Illegal header value. Normalize first, then fall
+        # back to unauthenticated access when nothing usable remains.
+        token = token.strip()
+        if token:
+            self._github = GitHub(TokenAuthStrategy(token))
+        else:
+            logger.warning(
+                "No GitHub token configured; using unauthenticated access "
+                "(60 req/hr). Set GITHUB_TOKEN to raise the limit to 5000 req/hr."
+            )
+            self._github = GitHub()
 
     # ------------------------------------------------------------------
     # Internal helpers
