@@ -161,3 +161,7 @@
 {"actor":"Joshua Oliphant","comment":null,"created_at":"2026-06-07T19:36:44Z","event_type":"closed","id":161,"issue_id":"forkhub-cml","new_value":"Backfill fetch loop now catches provider-agnostic ProviderError; deleted-fork 404 -\u003e PATCH_FAILED instead of unhandled crash. GitHubProviderError is now a ProviderError subclass. Regression + isinstance pin tests added, 100% cov, ty baseline (17) unchanged.","old_value":""}
 {"actor":"Joshua Oliphant","comment":null,"created_at":"2026-06-07T19:40:45Z","event_type":"created","id":162,"issue_id":"forkhub-3pj","new_value":"","old_value":""}
 {"actor":"Joshua Oliphant","comment":null,"created_at":"2026-06-07T20:10:26Z","event_type":"created","id":163,"issue_id":"forkhub-sqw","new_value":"","old_value":""}
+{"actor":"Joshua Oliphant","comment":null,"created_at":"2026-06-07T20:10:29Z","event_type":"created","id":164,"issue_id":"forkhub-9mv","new_value":"","old_value":""}
+{"actor":"Joshua Oliphant","comment":null,"created_at":"2026-06-07T20:22:45Z","event_type":"created","id":165,"issue_id":"forkhub-flk","new_value":"","old_value":""}
+{"actor":"Joshua Oliphant","comment":null,"created_at":"2026-06-07T20:22:46Z","event_type":"created","id":166,"issue_id":"forkhub-a8p","new_value":"","old_value":""}
+{"actor":"Joshua Oliphant","comment":null,"created_at":"2026-06-08T06:31:31Z","event_type":"created","id":167,"issue_id":"forkhub-r1d","new_value":"","old_value":""}
