@@ -130,11 +130,50 @@ the product's canonical use case yields zero end-to-end).
 | 2.11a | all-bogus files → "No applicable diffs", exit 2 (terminal) | PASS |
 | 2.11b | 404 fork (deleted-fork scenario) → **unhandled GitHubProviderError traceback, exit 1 (collides with tests_failed)** | **FAIL → forkhub-cml** |
 
-### Tier 3 — DEFERRED
-Blocked on forkhub-p18 + forkhub-9ey: with the vitality gate as-is, sync
-finds 0 changed forks and never invokes the agent — the budget would buy a
-demonstration of an already-documented bug. Run Tier 3 after those land;
-it then doubles as the first dvi baseline data.
+### Fix wave — 2026-06-08 (unblocking Tier 3)
+- forkhub-p18 + forkhub-9ey fixed (58beb0f): real get_head_sha + compare-all-
+  on-first-discovery. **Live-verified**: catch-up baselined 113 forks, data
+  now matches the API (rebullet 93 ahead, chroma-core 2, danner26 32);
+  steady-state re-sync ~zero extra calls. One follow-up filed: forkhub-zaa
+  (unbounded baseline retry pins a fork to the analyzer on persistent SHA-
+  fetch failure).
+- forkhub-cml fixed (f116ce3): ProviderError hierarchy; the 404 deleted-fork
+  probe now returns PATCH_FAILED/exit 3 instead of an unhandled traceback.
+
+### Tier 3 — 2026-06-08 (live agent analysis, $1.00 cap)
+The agent layer **works**; signal *storage* is broken. Diagnosed via an
+instrumented session probe rather than guesswork.
+| # | Observed | Verdict |
+|---|----------|---------|
+| 3.1 | sync invokes the agent; it reads fork summary, fetches all 3 diffs, classifies 4 signals correctly | PASS (agent reasoning sound) |
+| — | every `store_signal` call fails server-side validation; agent retried 16× across 17 turns / $0.56, then gave up; **0 signals stored** | **FAIL → forkhub-flk** |
+| 3.2-3.4 | clusters/digest/backfill-run blocked — no signals to operate on | BLOCKED on flk |
+
+**Root cause (forkhub-flk)**: `store_signal`'s `@tool` schema declares
+`files_involved` as python `list`, but the claude-agent-sdk simple-schema
+mapper has no list branch and renders it as JSON `string`. The model can
+never satisfy the contract. Unit tests missed it (they call the handler with
+a real list, bypassing SDK schema rendering) — the recurring "stubs hide the
+real path" theme.
+
+**Token detour** (two real bugs found en route): forkhub-sqw (empty
+GITHUB_TOKEN sends a malformed `token ` header instead of degrading to
+unauthenticated), forkhub-9mv (dotenv only loads from cwd). The whole UAT
+ran unauthenticated until Tier 3 because `.env` wasn't in the scratch cwd.
+
+**Process notes**: one false finding (forkhub-m1m) from reading `$?` after a
+pipe — retracted. forkhub-uox corroborated three times (agent session
+failures all invisible in the CLI summary). forkhub-3pj filed (agent can't
+run inside a Claude Code session without `env -u CLAUDECODE`).
+
+### Observability harness — 2026-06-08
+Lite harness installed (Vector→JSONL) to make agent-path debugging cheap
+(see forkhub-r1d for call-site wiring). Transport verified end-to-end;
+ports reassigned to 4418/4417/8688 to coexist with another project's harness.
+
+### Tier 3 completion — BLOCKED on forkhub-flk
+clusters/digest/backfill-run and the dvi baseline all need stored signals.
+Fix flk, then a single re-sync completes Tier 3 and seeds the baseline.
 
 ## Decisions (resolved 2026-06-07)
 
