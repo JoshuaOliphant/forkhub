@@ -830,6 +830,7 @@ class TestLastPushedAtChangeDetection:
         self,
         last_pushed_at: datetime | None,
         head_shas: dict[str, str] | None = None,
+        compare_results: dict[str, CompareResult] | None = None,
     ) -> StubGitProvider:
         from .stubs import StubGitProvider
 
@@ -847,6 +848,7 @@ class TestLastPushedAtChangeDetection:
         return StubGitProvider(
             forks={f"{self._OWNER}/{self._REPO}": [fork_info]},
             head_shas=head_shas or {},
+            compare_results=compare_results or {},
         )
 
     async def _insert_repo(self, db: Database) -> TrackedRepo:
@@ -953,8 +955,62 @@ class TestLastPushedAtChangeDetection:
         row = await db.get_fork_by_name(self._FORK_FULL)
         assert row is not None
         assert row["head_sha"] is None  # fetch failed → no SHA written
-        # SHA was None, so the catch-up still reports the fork as changed.
-        assert self._FORK_FULL in result.changed_forks
+        # With no obtainable SHA, an unchanged pushed_at, and compare showing
+        # ahead_by=0, there is no divergence evidence — the fork is NOT
+        # reported as changed (so a persistent SHA failure cannot pin it to
+        # the analyzer; see test_persistent_sha_failure_stops_reanalyzing).
+        assert self._FORK_FULL not in result.changed_forks
+
+    async def test_persistent_sha_failure_stops_reanalyzing(
+        self, db: Database, settings: SyncSettings
+    ):
+        """A NULL-baseline fork that is genuinely ahead but whose head_sha
+        fetch keeps failing must be analyzed at most once, not re-sent to the
+        analyzer on every sync (the unbounded-Claude-spend bug, forkhub-zaa).
+
+        Differential failure: compare succeeds (fork is ahead_by=5) while
+        get_head_sha persistently fails, so head_sha never populates and
+        needs_baseline stays True forever. The fix gates re-reporting on real
+        divergence evidence, so once the analyzer has seen the fork it is not
+        re-sent until ahead_by actually moves again."""
+        from .stubs import StubAnalyzer
+
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=None,  # legacy row, never baselined
+            last_pushed_at=_ACTIVE_DATE,
+        )
+        # Compare reports real divergence; head_sha fetch keeps failing
+        # (no head_shas configured → get_head_sha raises).
+        provider = self._make_provider(
+            last_pushed_at=_ACTIVE_DATE,
+            compare_results={
+                self._FORK_FULL: CompareResult(ahead_by=5, behind_by=0, files=[], commits=[])
+            },
+        )
+        analyzer = StubAnalyzer()
+        sync_service = SyncService(
+            db=db, provider=provider, settings=settings, clock=_NOW, analyzer=analyzer
+        )
+
+        await sync_service.sync_repo(repo.id)  # sync 1
+        await sync_service.sync_repo(repo.id)  # sync 2 — must not re-amplify
+
+        # head_sha never populated (fetch keeps failing) → would loop forever.
+        row = await db.get_fork_by_name(self._FORK_FULL)
+        assert row is not None
+        assert row["head_sha"] is None
+        # The fork is sent to the analyzer exactly once (sync 1), not on every
+        # sync — this is the amplification the fix bounds.
+        analyze_count = sum(
+            1 for call in analyzer.calls if self._FORK_FULL in call["changed_fork_names"]
+        )
+        assert analyze_count == 1
 
     async def test_none_pushed_at_both_sides_skips_compare(
         self, db: Database, settings: SyncSettings
