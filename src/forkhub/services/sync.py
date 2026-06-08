@@ -240,42 +240,54 @@ class SyncService:
                     stars=fork_info.stars,
                     last_pushed_at=fork_info.last_pushed_at,
                     vitality=self._classify_vitality(fork_info.last_pushed_at),
-                    head_sha=self._provider_sha(fork_info.full_name),
                 )
 
-                # Active forks are compared on first discovery so
-                # `commits_ahead` / `changed_forks` reflect divergence
-                # immediately, before a second sync establishes a
-                # baseline SHA. Only ACTIVE vitality qualifies; dormant,
-                # dead, and unknown forks skip the compare to conserve
-                # API budget.
-                if new_fork.vitality == ForkVitality.ACTIVE:
-                    try:
-                        compare_result = await self._provider.compare(
-                            repo.owner,
-                            repo.name,
-                            repo.default_branch,
-                            f"{fork_info.owner}:{fork_info.default_branch}",
-                        )
-                        new_fork.commits_ahead = compare_result.ahead_by
-                        new_fork.commits_behind = compare_result.behind_by
-                        if compare_result.ahead_by > 0:
-                            result.changed_forks.append(fork_info.full_name)
-                    except Exception as exc:
-                        # Mirror the existing-fork compare handler:
-                        # record to result.errors so callers can tell
-                        # something failed, not just hope they're reading
-                        # the warning log.
-                        error_msg = f"Error comparing new fork {fork_info.full_name}: {exc}"
-                        result.errors.append(error_msg)
-                        logger.warning(error_msg)
+                # Every newly discovered fork is compared and baselined on
+                # first sight — regardless of vitality. The product's
+                # canonical scenario is a dormant upstream whose forks are
+                # diverged-but-quiet (their pushed_at never advances again),
+                # so a vitality gate here made dead/dormant divergence
+                # invisible forever. One compare + one head_sha fetch per
+                # fork at discovery is ~2 calls/fork, well within the 4000/hr
+                # budget. The head_sha baseline is what makes subsequent
+                # syncs cheap (see the existing-fork branch below).
+                try:
+                    compare_result = await self._provider.compare(
+                        repo.owner,
+                        repo.name,
+                        repo.default_branch,
+                        f"{fork_info.owner}:{fork_info.default_branch}",
+                    )
+                    new_fork.commits_ahead = compare_result.ahead_by
+                    new_fork.commits_behind = compare_result.behind_by
+                    if compare_result.ahead_by > 0:
+                        result.changed_forks.append(fork_info.full_name)
+                except Exception as exc:
+                    # Record to result.errors so callers can tell something
+                    # failed, not just hope they're reading the warning log.
+                    error_msg = f"Error comparing new fork {fork_info.full_name}: {exc}"
+                    result.errors.append(error_msg)
+                    logger.warning(error_msg)
+
+                # Establish the head_sha baseline even if compare failed —
+                # a populated baseline is what lets future syncs skip this
+                # fork when nothing changed. A SHA fetch failure is tolerated
+                # (None baseline retried next sync).
+                new_fork.head_sha = await self._fetch_head_sha(fork_info)
 
                 await self._db.insert_fork(_fork_to_dict(new_fork))
                 result.new_forks += 1
             else:
                 # Existing fork: check for changes.
-                # NB: Read last_pushed_at BEFORE overwriting it below.
+                # NB: Read last_pushed_at / head_sha BEFORE overwriting below.
                 changed = self._has_fork_changed(fork_info, existing_row)
+                # A NULL stored head_sha means this row predates head_sha
+                # baselining (or its earlier fetch failed). Compare once to
+                # catch it up; self-extinguishing — populated rows never
+                # re-trigger this branch, so an unchanged baselined fork
+                # costs ZERO extra calls on subsequent syncs (the /forks
+                # listing stays the only bulk call).
+                needs_baseline = existing_row.get("head_sha") is None
 
                 # Update stars (always)
                 old_stars = existing_row["stars"]
@@ -287,7 +299,8 @@ class SyncService:
                 existing_row["vitality"] = self._classify_vitality(fork_info.last_pushed_at)
                 existing_row["updated_at"] = self._now().isoformat()
 
-                if changed:
+                if changed or needs_baseline:
+                    prior_sha = existing_row.get("head_sha")
                     try:
                         compare_result = await self._provider.compare(
                             repo.owner,
@@ -302,14 +315,19 @@ class SyncService:
                         result.errors.append(error_msg)
                         logger.warning(error_msg)
                     else:
-                        # Compare succeeded: update head_sha when provider supplies one.
-                        # SHA update is tied to compare success — a SHA fetch failure
-                        # must not prevent the fork from entering changed_forks or
-                        # create a partial-state DB write.
-                        new_sha = self._provider_sha(fork_info.full_name)
+                        # Compare succeeded: refresh the head_sha baseline.
+                        # A SHA fetch failure must not create a partial-state
+                        # write, so head_sha is only overwritten when a real
+                        # SHA comes back.
+                        new_sha = await self._fetch_head_sha(fork_info)
                         if new_sha is not None:
                             existing_row["head_sha"] = new_sha
-                        result.changed_forks.append(fork_info.full_name)
+                        # The SHA is authoritative for "really changed": when
+                        # we only entered this branch for a one-time baseline
+                        # catch-up and the SHA matches what we already had,
+                        # nothing actually diverged — don't report it.
+                        if new_sha is None or new_sha != prior_sha:
+                            result.changed_forks.append(fork_info.full_name)
 
                 await self._db.update_fork(existing_row)
 
@@ -383,28 +401,40 @@ class SyncService:
             return ForkVitality.DEAD
 
     def _has_fork_changed(self, fork_info: ForkInfo, existing_row: dict) -> bool:
-        """Return True if the fork has changed since the last sync.
+        """Return True if the fork *may* have changed since the last sync.
 
-        Prefers a real HEAD SHA when the provider supplies one (stubs, future real API).
-        Falls back to last_pushed_at as a zero-cost change signal — the GitHub /forks
-        endpoint always returns pushed_at, and it advances when the branch head moves.
+        This is the cheap, zero-cost pre-filter: it compares last_pushed_at,
+        which the GitHub /forks listing always returns and which advances when
+        the branch head moves. It deliberately does NOT fetch a HEAD SHA — a
+        per-fork SHA call on every sync would blow the API budget. The SHA is
+        fetched only after we've decided to compare, and it serves as the
+        authoritative confirmation of divergence (see sync_repo).
 
         Caller must read existing_row["last_pushed_at"] BEFORE overwriting it.
         """
-        new_sha = self._provider_sha(fork_info.full_name)
-        if new_sha is not None:
-            return existing_row.get("head_sha") != new_sha
-
-        # Fallback: compare last_pushed_at strings. Both sides are ISO-format
-        # strings produced by datetime.isoformat(), so string equality is safe.
+        # Compare last_pushed_at strings. Both sides are ISO-format strings
+        # produced by datetime.isoformat(), so string equality is safe.
         old_pushed = existing_row.get("last_pushed_at")
         new_pushed = fork_info.last_pushed_at.isoformat() if fork_info.last_pushed_at else None
         return old_pushed != new_pushed
 
-    def _provider_sha(self, fork_full_name: str) -> str | None:
-        """Return the HEAD SHA for a fork if the provider supports it, else None."""
-        fn = getattr(self._provider, "get_head_sha", None)
-        return fn(fork_full_name) if callable(fn) else None
+    async def _fetch_head_sha(self, fork_info: ForkInfo) -> str | None:
+        """Fetch the fork's HEAD SHA, returning None on any provider error.
+
+        A SHA fetch failure must never abort the sync loop — discovery and
+        compare data are valuable on their own, and a None baseline is simply
+        retried on the next sync. `CancelledError` is BaseException in 3.12,
+        so it still propagates past this broad catch (Ctrl-C / shutdown stay
+        intact).
+        """
+        _, repo_name = fork_info.full_name.split("/", 1)
+        try:
+            return await self._provider.get_head_sha(
+                fork_info.owner, repo_name, fork_info.default_branch
+            )
+        except Exception as exc:
+            logger.warning("Failed to fetch head SHA for %s: %s", fork_info.full_name, exc)
+            return None
 
 
 def _fork_to_dict(fork: Fork) -> dict:

@@ -184,8 +184,13 @@ class IntegrationStubGitProvider:
     async def get_rate_limit(self) -> RateLimitInfo:
         return RateLimitInfo(limit=5000, remaining=4999, reset_at=_NOW)
 
-    def get_head_sha(self, fork_full_name: str) -> str | None:
-        return self._head_shas.get(fork_full_name)
+    async def get_head_sha(self, owner: str, repo: str, branch: str) -> str:
+        fork_full_name = f"{owner}/{repo}"
+        if fork_full_name not in self._head_shas:
+            from forkhub.providers.github import GitHubProviderError
+
+            raise GitHubProviderError(404, f"No head SHA for {fork_full_name}")
+        return self._head_shas[fork_full_name]
 
 
 class IntegrationStubNotificationBackend:

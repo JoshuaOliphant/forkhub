@@ -26,6 +26,7 @@ class TestGitProviderSignatures:
             "get_repo",
             "get_commit_messages",
             "get_file_diff",
+            "get_head_sha",
             "get_rate_limit",
         ]:
             method = getattr(GitProvider, name, None)
@@ -100,6 +101,14 @@ class TestGitProviderSignatures:
         assert "head" in params
         assert "path" in params
 
+    def test_get_head_sha_params(self, protocol_methods: dict) -> None:
+        sig = protocol_methods["get_head_sha"]
+        params = list(sig.parameters.keys())
+        assert "self" in params
+        assert "owner" in params
+        assert "repo" in params
+        assert "branch" in params
+
     def test_get_rate_limit_params(self, protocol_methods: dict) -> None:
         sig = protocol_methods["get_rate_limit"]
         params = list(sig.parameters.keys())
@@ -149,6 +158,7 @@ class TestProtocolMethodCount:
             "get_repo",
             "get_commit_messages",
             "get_file_diff",
+            "get_head_sha",
             "get_rate_limit",
         }
         assert self._protocol_method_names(NotificationBackend) == {"deliver", "backend_name"}
