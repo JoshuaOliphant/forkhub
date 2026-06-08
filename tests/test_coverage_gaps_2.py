@@ -692,7 +692,13 @@ class TestAgentToolsGaps:
 
 
 class _FakeResultMessage:
-    """Minimal ResultMessage stand-in used to terminate the receive_messages loop."""
+    """Minimal ResultMessage stand-in used to terminate the receive_messages loop.
+
+    Carries the cost/turn fields that _run_session records via otel.record_session.
+    """
+
+    total_cost_usd = 0.42
+    num_turns = 3
 
 
 class _FakeSDKClient:
@@ -904,6 +910,14 @@ class TestClaudeAnalyzerRunner:
         monkeypatch.setattr(runner_mod, "ResultMessage", _FakeResultMessage)
         monkeypatch.setattr(runner_mod, "create_sdk_mcp_server", lambda *a, **kw: object())
 
+        # Capture the session cost/turns instrument fired from _run_session.
+        import forkhub.otel as otel
+
+        sessions: list[tuple[float, int]] = []
+        monkeypatch.setattr(
+            otel, "record_session", lambda cost, turns: sessions.append((cost, turns))
+        )
+
         # Insert a fork + tracked_repo so that signals associate properly.
         from tests.stubs import make_fork, make_tracked_repo
 
@@ -944,6 +958,8 @@ class TestClaudeAnalyzerRunner:
         # The pre-existing signal should NOT be returned because it was created
         # BEFORE session_start; verify that analyze still completes cleanly.
         assert isinstance(result, list)
+        # The ResultMessage cost/turns were recorded to the session instrument.
+        assert sessions == [(0.42, 3)]
 
     async def test_analyze_handles_session_exception(
         self, monkeypatch: pytest.MonkeyPatch, db: Database

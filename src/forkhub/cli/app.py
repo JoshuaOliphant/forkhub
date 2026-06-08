@@ -51,9 +51,11 @@ def main(
     ),
 ) -> None:
     """Monitor GitHub fork constellations with AI-powered analysis."""
+    import forkhub.otel as otel
     from forkhub.config import load_dotenv_file
 
     load_dotenv_file()
+    otel.configure()
 
     if show_version:
         from forkhub import __version__
