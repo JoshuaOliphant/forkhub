@@ -258,12 +258,16 @@ class StubGitProvider:
         repos: dict[str, RepoInfo] | None = None,
         forks: dict[str, list[ForkInfo]] | None = None,
         head_shas: dict[str, str] | None = None,
+        compare_results: dict[str, CompareResult] | None = None,
         rate_limit_remaining: int = 5000,
     ) -> None:
         self.user_repos: dict[str, list[RepoInfo]] = user_repos or {}
         self.repos: dict[str, RepoInfo] = repos or {}
         self._forks: dict[str, list[ForkInfo]] = forks or {}
         self._head_shas: dict[str, str] = head_shas or {}
+        # Canned compare results keyed by fork full_name ("owner/repo");
+        # unconfigured forks fall back to a zero-divergence CompareResult.
+        self._compare_results: dict[str, CompareResult] = compare_results or {}
         self._file_diffs: dict[str, str] = {}
         self._error_files: set[str] = set()
         # Files whose diff fetch raises a provider-level error (e.g. a deleted
@@ -333,6 +337,10 @@ class StubGitProvider:
 
     async def compare(self, owner: str, repo: str, base: str, head: str) -> CompareResult:
         self.compare_calls.append({"base": base, "head": head})
+        # head encodes the fork owner ("forker1:main") → key by fork full_name.
+        fork_full = f"{head.split(':')[0]}/{repo}"
+        if fork_full in self._compare_results:
+            return self._compare_results[fork_full]
         return CompareResult(ahead_by=0, behind_by=0, files=[], commits=[])
 
     async def get_releases(

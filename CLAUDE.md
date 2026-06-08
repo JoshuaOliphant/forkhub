@@ -27,8 +27,7 @@ uv run ruff check src/ tests/   # Lint
 uv run ruff format src/ tests/  # Format
 
 # Type checking
-uv run ty check                 # Type check (Astral's ty - preferred)
-uv run mypy src/forkhub/        # Type check (mypy - legacy)
+uv run ty check                 # Type check (Astral's ty)
 ```
 
 ## Architecture

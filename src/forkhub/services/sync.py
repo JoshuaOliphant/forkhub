@@ -281,12 +281,16 @@ class SyncService:
                 # Existing fork: check for changes.
                 # NB: Read last_pushed_at / head_sha BEFORE overwriting below.
                 changed = self._has_fork_changed(fork_info, existing_row)
-                # A NULL stored head_sha means this row predates head_sha
-                # baselining (or its earlier fetch failed). Compare once to
-                # catch it up; self-extinguishing — populated rows never
-                # re-trigger this branch, so an unchanged baselined fork
-                # costs ZERO extra calls on subsequent syncs (the /forks
-                # listing stays the only bulk call).
+                # A NULL stored head_sha means this fork has no baseline yet
+                # (an earlier SHA fetch failed). Compare once to catch it up. A
+                # row whose SHA fetch SUCCEEDS is populated and never
+                # re-triggers this branch — zero extra calls on later syncs
+                # (the /forks listing stays the only bulk call). A row whose
+                # SHA fetch PERSISTENTLY FAILS stays NULL and keeps re-comparing
+                # every sync (an accepted residual, see forkhub-lgh) — but it no
+                # longer re-triggers the analyzer: the compare-success path
+                # below only reports the fork as changed when there is real
+                # divergence evidence.
                 needs_baseline = existing_row.get("head_sha") is None
 
                 # Update stars (always)
@@ -301,6 +305,7 @@ class SyncService:
 
                 if changed or needs_baseline:
                     prior_sha = existing_row.get("head_sha")
+                    prior_ahead = existing_row.get("commits_ahead")
                     try:
                         compare_result = await self._provider.compare(
                             repo.owner,
@@ -322,11 +327,20 @@ class SyncService:
                         new_sha = await self._fetch_head_sha(fork_info)
                         if new_sha is not None:
                             existing_row["head_sha"] = new_sha
-                        # The SHA is authoritative for "really changed": when
-                        # we only entered this branch for a one-time baseline
-                        # catch-up and the SHA matches what we already had,
-                        # nothing actually diverged — don't report it.
-                        if new_sha is None or new_sha != prior_sha:
+                            # The SHA is the authoritative change-detector:
+                            # report only when it actually moved.
+                            diverged = new_sha != prior_sha
+                        else:
+                            # SHA unavailable (fetch failed). A persistent
+                            # failure keeps head_sha NULL, so this fork would
+                            # re-enter the baseline branch every sync; gate on
+                            # coarser divergence evidence (a real pushed_at
+                            # change or a shift in commits_ahead vs the stored
+                            # baseline) so it is not re-sent to the analyzer
+                            # every sync. commits_ahead is persisted below, so
+                            # the next sync compares against this run's value.
+                            diverged = changed or compare_result.ahead_by != prior_ahead
+                        if diverged:
                             result.changed_forks.append(fork_info.full_name)
 
                 await self._db.update_fork(existing_row)
