@@ -38,7 +38,10 @@ class GitHubProvider:
     """
 
     def __init__(self, token: str) -> None:
-        self._github = GitHub(TokenAuthStrategy(token))
+        # An empty token must degrade to unauthenticated access. Passing it to
+        # TokenAuthStrategy would emit a malformed 'Authorization: token '
+        # header that GitHub rejects with 'Illegal header value'.
+        self._github = GitHub(TokenAuthStrategy(token)) if token else GitHub()
 
     # ------------------------------------------------------------------
     # Internal helpers

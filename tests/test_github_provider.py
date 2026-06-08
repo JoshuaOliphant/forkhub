@@ -575,3 +575,45 @@ class TestErrorHandling:
     """Tests for error responses from the GitHub API."""
 
     pass
+
+
+# ===========================================================================
+# Test: Authentication header construction
+# ===========================================================================
+
+
+class TestAuthentication:
+    """How the provider sets (or omits) the Authorization header."""
+
+    async def _captured_auth_header(self, mock_github: respx.MockRouter, token: str) -> str | None:
+        """Make one request with the given token and return the auth header sent."""
+        captured: dict[str, str | None] = {}
+
+        def _capture(request: Any) -> Response:
+            captured["auth"] = request.headers.get("authorization")
+            return Response(200, json=_repo_json(owner="octocat", name="hello-world"))
+
+        mock_github.get("/repos/octocat/hello-world").mock(side_effect=_capture)
+        await GitHubProvider(token=token).get_repo("octocat", "hello-world")
+        return captured["auth"]
+
+    async def test_empty_token_sends_no_authorization_header(
+        self, mock_github: respx.MockRouter
+    ) -> None:
+        """An empty token must degrade to unauthenticated, not send 'token '.
+
+        With no GITHUB_TOKEN configured, githubkit's TokenAuthStrategy('')
+        emits a malformed 'Authorization: token ' header that the API rejects
+        with 'Illegal header value'. The provider should instead make
+        unauthenticated requests (no Authorization header at all).
+        """
+        auth = await self._captured_auth_header(mock_github, "")
+
+        assert auth != "token "
+        assert auth is None
+
+    async def test_real_token_still_sends_token_header(self, mock_github: respx.MockRouter) -> None:
+        """A real token must still produce a 'token <value>' header."""
+        auth = await self._captured_auth_header(mock_github, "abc123")
+
+        assert auth == "token abc123"
