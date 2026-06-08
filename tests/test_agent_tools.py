@@ -696,8 +696,11 @@ class TestToolInstrumentation:
         result = await t.handler({"fork_full_name": "nobody/nothing"})
 
         assert result.get("is_error") is True
-        assert calls == [("get_fork_summary", False, calls[0][2])]
-        assert calls[0][1] is False
+        assert len(calls) == 1
+        tool_name, ok, ms = calls[0]
+        assert tool_name == "get_fork_summary"
+        assert ok is False
+        assert isinstance(ms, float) and ms >= 0.0
 
     async def test_store_signal_records_signal_stored(
         self, tools, db, monkeypatch: pytest.MonkeyPatch
@@ -744,3 +747,53 @@ class TestToolInstrumentation:
 
         assert result.get("is_error") is True
         assert stored == []
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "list_forks",
+            "get_fork_summary",
+            "get_file_diff",
+            "get_releases",
+            "get_fork_stars",
+            "store_signal",
+            "search_similar_signals",
+        ],
+    )
+    async def test_every_tool_records_exactly_one_call(
+        self, tools, tool_name: str, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Each of the 7 handlers must fire record_tool_call exactly once.
+
+        Without this, dropping @_instrument from any single tool would pass both
+        the per-tool semantic tests above (which only cover list_forks and
+        get_fork_summary) and statement coverage (the handler still runs). A
+        superset args dict lets one call drive every tool; outcome (ok) is
+        irrelevant here — we assert only that the decorator fired for this name.
+        """
+        import forkhub.otel as otel
+
+        calls: list[tuple[str, bool, float]] = []
+        monkeypatch.setattr(otel, "record_tool_call", lambda *a: calls.append(a))
+
+        # Keys span every handler's reads; missing DB rows just yield _err
+        # responses, which still flow through the decorator's finally block.
+        args = {
+            "owner": "owner",
+            "repo": "repo",
+            "page": 1,
+            "only_active": False,
+            "fork_full_name": "nobody/nothing",
+            "file_path": "src/x.py",
+            "since_days": 30,
+            "category": "feature",
+            "summary": "s",
+            "significance": 5,
+            "summary_text": "s",
+            "repo_id": "r",
+            "limit": 5,
+        }
+        t = _find_tool(tools, tool_name)
+        await t.handler(args)
+
+        assert [c[0] for c in calls] == [tool_name]

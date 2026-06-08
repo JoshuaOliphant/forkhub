@@ -701,10 +701,17 @@ class _FakeResultMessage:
     num_turns = 3
 
 
+class _FakeResultMessageNoCost(_FakeResultMessage):
+    """ResultMessage stand-in with no cost, exercising the `or 0.0` fallback."""
+
+    total_cost_usd = None
+
+
 class _FakeSDKClient:
     """Stub ClaudeSDKClient that captures init args and yields one ResultMessage."""
 
     instances: list[_FakeSDKClient] = []
+    result_message_factory = _FakeResultMessage
 
     def __init__(self, options):
         self.options = options
@@ -724,7 +731,13 @@ class _FakeSDKClient:
 
     async def receive_messages(self):
         # Yield one stand-in ResultMessage so the runner exits the loop.
-        yield _FakeResultMessage()
+        yield type(self).result_message_factory()
+
+
+class _FakeSDKClientNoCost(_FakeSDKClient):
+    """Yields a ResultMessage whose total_cost_usd is None."""
+
+    result_message_factory = _FakeResultMessageNoCost
 
 
 class TestClaudeAnalyzerRunner:
@@ -960,6 +973,59 @@ class TestClaudeAnalyzerRunner:
         assert isinstance(result, list)
         # The ResultMessage cost/turns were recorded to the session instrument.
         assert sessions == [(0.42, 3)]
+
+    async def test_run_session_records_zero_cost_when_cost_is_none(
+        self, monkeypatch: pytest.MonkeyPatch, db: Database
+    ):
+        """A None total_cost_usd records 0.0 via the `or 0.0` fallback.
+
+        The SDK returns None for cost in some sessions; without the fallback,
+        None would be pushed into the cost histogram. branch=false coverage
+        can't force this arm, so it needs an explicit None-cost ResultMessage.
+        """
+        from forkhub.agent import runner as runner_mod
+        from forkhub.agent.runner import ClaudeAnalyzer
+        from forkhub.config import ForkHubSettings
+        from forkhub.models import Fork, ForkVitality, TrackedRepo, TrackingMode
+        from tests.stubs import StubEmbeddingProvider, StubGitProvider
+
+        _FakeSDKClient.instances.clear()
+        monkeypatch.setattr(runner_mod, "ClaudeSDKClient", _FakeSDKClientNoCost)
+        monkeypatch.setattr(runner_mod, "ResultMessage", _FakeResultMessage)
+        monkeypatch.setattr(runner_mod, "create_sdk_mcp_server", lambda *a, **kw: object())
+
+        import forkhub.otel as otel
+
+        sessions: list[tuple[float, int]] = []
+        monkeypatch.setattr(
+            otel, "record_session", lambda cost, turns: sessions.append((cost, turns))
+        )
+
+        analyzer = ClaudeAnalyzer(
+            db=db,
+            provider=StubGitProvider(),
+            embedding_provider=StubEmbeddingProvider(),
+            settings=ForkHubSettings(),
+        )
+        repo = TrackedRepo(
+            github_id=7,
+            owner="o",
+            name="p",
+            full_name="o/p",
+            tracking_mode=TrackingMode.WATCHED,
+            default_branch="main",
+        )
+        fork = Fork(
+            tracked_repo_id=repo.id,
+            github_id=8,
+            owner="alice",
+            full_name="alice/p",
+            default_branch="main",
+            vitality=ForkVitality.ACTIVE,
+        )
+        await analyzer.analyze(repo, [fork], [])
+
+        assert sessions == [(0.0, 3)]
 
     async def test_analyze_handles_session_exception(
         self, monkeypatch: pytest.MonkeyPatch, db: Database

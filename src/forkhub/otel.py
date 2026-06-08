@@ -206,26 +206,42 @@ _session_turns = None
 _signals_stored = None
 
 
+# record_* helpers swallow their own exceptions: these run on the business
+# path (record_tool_call fires from a tool wrapper's `finally`), so a throwing
+# exporter must never convert a working tool call into a failure. Telemetry
+# fails open. The no-op stand-ins can't raise, so this only matters once a real
+# (possibly misconfigured) provider is wired.
+
+
 def record_tool_call(tool: str, ok: bool, ms: float) -> None:
     """Count one MCP tool call and its latency, labelled by tool name and outcome."""
-    if _tool_calls is not None:
-        _tool_calls.add(1, {"tool": tool, "ok": str(ok).lower()})
-    if _tool_latency is not None:
-        _tool_latency.record(ms, {"tool": tool})
+    try:
+        if _tool_calls is not None:
+            _tool_calls.add(1, {"tool": tool, "ok": str(ok).lower()})
+        if _tool_latency is not None:
+            _tool_latency.record(ms, {"tool": tool})
+    except Exception:  # pragma: no cover — telemetry must not break the caller
+        _logger.debug("record_tool_call failed", exc_info=True)
 
 
 def record_session(cost_usd: float, turns: int) -> None:
     """Record the cost and turn count of one completed agent analysis session."""
-    if _session_cost is not None:
-        _session_cost.record(cost_usd)
-    if _session_turns is not None:
-        _session_turns.record(turns)
+    try:
+        if _session_cost is not None:
+            _session_cost.record(cost_usd)
+        if _session_turns is not None:
+            _session_turns.record(turns)
+    except Exception:  # pragma: no cover — telemetry must not break the caller
+        _logger.debug("record_session failed", exc_info=True)
 
 
 def record_signal_stored(category: str) -> None:
     """Count one signal the agent successfully persisted, labelled by category."""
-    if _signals_stored is not None:
-        _signals_stored.add(1, {"category": category})
+    try:
+        if _signals_stored is not None:
+            _signals_stored.add(1, {"category": category})
+    except Exception:  # pragma: no cover — telemetry must not break the caller
+        _logger.debug("record_signal_stored failed", exc_info=True)
 
 
 # ===============================================================================
