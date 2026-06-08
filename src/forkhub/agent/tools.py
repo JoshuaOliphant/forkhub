@@ -270,13 +270,21 @@ def create_tools(
         "Store a classified change signal for a fork. "
         "Category must be one of: feature, fix, refactor, config, dependency, "
         "removal, adaptation, release. Significance is 1-10.",
+        # Explicit JSON Schema (not the {name: type} shorthand): the SDK's
+        # shorthand mapper has no branch for `list` and would render
+        # files_involved as {"type": "string"}, which the model can never
+        # satisfy. A dict with "type"/"properties" is passed through verbatim.
         {
-            "fork_full_name": str,
-            "category": str,
-            "summary": str,
-            "significance": int,
-            "files_involved": list,
-            "detail": str,
+            "type": "object",
+            "properties": {
+                "fork_full_name": {"type": "string"},
+                "category": {"type": "string"},
+                "summary": {"type": "string"},
+                "significance": {"type": "integer"},
+                "files_involved": {"type": "array", "items": {"type": "string"}},
+                "detail": {"type": "string"},
+            },
+            "required": ["fork_full_name", "category", "summary", "significance"],
         },
     )
     async def store_signal(args: dict[str, Any]) -> dict[str, Any]:
@@ -286,6 +294,14 @@ def create_tools(
             summary = args["summary"]
             significance = args["significance"]
             files_involved = args.get("files_involved", [])
+            # Defensive: some models still send the array JSON-encoded as a
+            # string despite the schema. Coerce so a stray string can't
+            # become a one-element list of the whole blob.
+            if isinstance(files_involved, str):
+                try:
+                    files_involved = json.loads(files_involved)
+                except json.JSONDecodeError:
+                    files_involved = [files_involved] if files_involved else []
             detail = args.get("detail", "")
 
             # Validate category
