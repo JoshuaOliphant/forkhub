@@ -23,13 +23,14 @@ Usage:
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 _logger = logging.getLogger("forkhub")
 
@@ -207,42 +208,48 @@ _session_turns = None
 _signals_stored = None
 
 
-# record_* helpers swallow their own exceptions: these run on the business
-# path (record_tool_call fires from a tool wrapper's `finally`), so a throwing
-# exporter must never convert a working tool call into a failure. Telemetry
-# fails open. The no-op stand-ins can't raise, so this only matters once a real
-# (possibly misconfigured) provider is wired.
+def _fail_open[**P](fn: Callable[P, None]) -> Callable[P, None]:
+    """Swallow and log any exception so telemetry can't break the caller.
+
+    The record_* helpers run on the business path (record_tool_call fires from a
+    tool wrapper's `finally`), so a throwing exporter must never convert a
+    working call into a failure. The no-op stand-ins can't raise, so this only
+    matters once a real (possibly misconfigured) provider is wired.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> None:
+        try:
+            fn(*args, **kwargs)
+        except Exception:  # pragma: no cover — telemetry must not break the caller
+            _logger.debug("%s failed", getattr(fn, "__name__", "telemetry"), exc_info=True)
+
+    return wrapper
 
 
+@_fail_open
 def record_tool_call(tool: str, ok: bool, ms: float) -> None:
     """Count one MCP tool call and its latency, labelled by tool name and outcome."""
-    try:
-        if _tool_calls is not None:
-            _tool_calls.add(1, {"tool": tool, "ok": str(ok).lower()})
-        if _tool_latency is not None:
-            _tool_latency.record(ms, {"tool": tool})
-    except Exception:  # pragma: no cover — telemetry must not break the caller
-        _logger.debug("record_tool_call failed", exc_info=True)
+    if _tool_calls is not None:
+        _tool_calls.add(1, {"tool": tool, "ok": str(ok).lower()})
+    if _tool_latency is not None:
+        _tool_latency.record(ms, {"tool": tool})
 
 
+@_fail_open
 def record_session(cost_usd: float, turns: int) -> None:
     """Record the cost and turn count of one completed agent analysis session."""
-    try:
-        if _session_cost is not None:
-            _session_cost.record(cost_usd)
-        if _session_turns is not None:
-            _session_turns.record(turns)
-    except Exception:  # pragma: no cover — telemetry must not break the caller
-        _logger.debug("record_session failed", exc_info=True)
+    if _session_cost is not None:
+        _session_cost.record(cost_usd)
+    if _session_turns is not None:
+        _session_turns.record(turns)
 
 
+@_fail_open
 def record_signal_stored(category: str) -> None:
     """Count one signal the agent successfully persisted, labelled by category."""
-    try:
-        if _signals_stored is not None:
-            _signals_stored.add(1, {"category": category})
-    except Exception:  # pragma: no cover — telemetry must not break the caller
-        _logger.debug("record_signal_stored failed", exc_info=True)
+    if _signals_stored is not None:
+        _signals_stored.add(1, {"category": category})
 
 
 # ===============================================================================

@@ -37,30 +37,30 @@ def _err(message: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": f"Error: {message}"}], "is_error": True}
 
 
-def _instrument(tool_name: str):  # noqa: ANN202 — returns a decorator
+def _instrument(handler):  # noqa: ANN001, ANN202 — wraps a tool handler
     """Wrap a tool handler so each call emits a span plus a tool-call metric.
 
-    Outcome is read from the handler's own response shape — `is_error` marks a
-    failed call — so the metric labels success/failure without the handlers
-    needing to know about telemetry. No-op when the OTel SDK is absent.
+    The tool name is read from the handler's own ``__name__`` — which equals
+    its ``@tool`` name — so there is no literal to keep in sync. Outcome is read
+    from the handler's own response shape — `is_error` marks a failed call — so
+    the handlers stay telemetry-agnostic. No-op when the OTel SDK is absent.
     """
+    name = handler.__name__
+    span_name = f"tool.{name}"
 
-    def decorator(handler):  # noqa: ANN001, ANN202
-        @functools.wraps(handler)
-        async def wrapper(args: dict[str, Any]) -> dict[str, Any]:
-            start = time.perf_counter()
-            ok = False
-            try:
-                with otel.span(f"tool.{tool_name}"):
-                    result = await handler(args)
-                ok = not result.get("is_error", False)
-                return result
-            finally:
-                otel.record_tool_call(tool_name, ok, (time.perf_counter() - start) * 1000.0)
+    @functools.wraps(handler)
+    async def wrapper(args: dict[str, Any]) -> dict[str, Any]:
+        start = time.perf_counter()
+        ok = False
+        try:
+            with otel.span(span_name):
+                result = await handler(args)
+            ok = not result.get("is_error", False)
+            return result
+        finally:
+            otel.record_tool_call(name, ok, (time.perf_counter() - start) * 1000.0)
 
-        return wrapper
-
-    return decorator
+    return wrapper
 
 
 def create_tools(
@@ -85,7 +85,7 @@ def create_tools(
         "Set only_active=True to filter to active forks from the database.",
         {"owner": str, "repo": str, "page": int, "only_active": bool},
     )
-    @_instrument("list_forks")
+    @_instrument
     async def list_forks(args: dict[str, Any]) -> dict[str, Any]:
         try:
             owner = args["owner"]
@@ -143,7 +143,7 @@ def create_tools(
         "fetching full diffs.",
         {"fork_full_name": str},
     )
-    @_instrument("get_fork_summary")
+    @_instrument
     async def get_fork_summary(args: dict[str, Any]) -> dict[str, Any]:
         try:
             fork_full_name = args["fork_full_name"]
@@ -201,7 +201,7 @@ def create_tools(
         "This is the EXPENSIVE call — only use it for files you truly need to analyze.",
         {"fork_full_name": str, "file_path": str},
     )
-    @_instrument("get_file_diff")
+    @_instrument
     async def get_file_diff(args: dict[str, Any]) -> dict[str, Any]:
         try:
             fork_full_name = args["fork_full_name"]
@@ -242,7 +242,7 @@ def create_tools(
         "Use since_days to limit how far back to look.",
         {"owner": str, "repo": str, "since_days": int},
     )
-    @_instrument("get_releases")
+    @_instrument
     async def get_releases(args: dict[str, Any]) -> dict[str, Any]:
         try:
             owner = args["owner"]
@@ -274,7 +274,7 @@ def create_tools(
         "Velocity is the change in stars since the last sync.",
         {"fork_full_name": str},
     )
-    @_instrument("get_fork_stars")
+    @_instrument
     async def get_fork_stars(args: dict[str, Any]) -> dict[str, Any]:
         try:
             fork_full_name = args["fork_full_name"]
@@ -321,7 +321,7 @@ def create_tools(
             "required": ["fork_full_name", "category", "summary", "significance"],
         },
     )
-    @_instrument("store_signal")
+    @_instrument
     async def store_signal(args: dict[str, Any]) -> dict[str, Any]:
         try:
             fork_full_name = args["fork_full_name"]
@@ -394,7 +394,7 @@ def create_tools(
         "Useful for detecting clusters of similar changes across forks.",
         {"summary_text": str, "repo_id": str, "limit": int},
     )
-    @_instrument("search_similar_signals")
+    @_instrument
     async def search_similar_signals(args: dict[str, Any]) -> dict[str, Any]:
         try:
             summary_text = args["summary_text"]

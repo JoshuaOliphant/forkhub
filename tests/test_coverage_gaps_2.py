@@ -701,17 +701,10 @@ class _FakeResultMessage:
     num_turns = 3
 
 
-class _FakeResultMessageNoCost(_FakeResultMessage):
-    """ResultMessage stand-in with no cost, exercising the `or 0.0` fallback."""
-
-    total_cost_usd = None
-
-
 class _FakeSDKClient:
     """Stub ClaudeSDKClient that captures init args and yields one ResultMessage."""
 
     instances: list[_FakeSDKClient] = []
-    result_message_factory = _FakeResultMessage
 
     def __init__(self, options):
         self.options = options
@@ -731,13 +724,7 @@ class _FakeSDKClient:
 
     async def receive_messages(self):
         # Yield one stand-in ResultMessage so the runner exits the loop.
-        yield type(self).result_message_factory()
-
-
-class _FakeSDKClientNoCost(_FakeSDKClient):
-    """Yields a ResultMessage whose total_cost_usd is None."""
-
-    result_message_factory = _FakeResultMessageNoCost
+        yield _FakeResultMessage()
 
 
 class TestClaudeAnalyzerRunner:
@@ -990,9 +977,11 @@ class TestClaudeAnalyzerRunner:
         from tests.stubs import StubEmbeddingProvider, StubGitProvider
 
         _FakeSDKClient.instances.clear()
-        monkeypatch.setattr(runner_mod, "ClaudeSDKClient", _FakeSDKClientNoCost)
+        monkeypatch.setattr(runner_mod, "ClaudeSDKClient", _FakeSDKClient)
         monkeypatch.setattr(runner_mod, "ResultMessage", _FakeResultMessage)
         monkeypatch.setattr(runner_mod, "create_sdk_mcp_server", lambda *a, **kw: object())
+        # Flip the yielded message's cost to None to exercise the `or 0.0` arm.
+        monkeypatch.setattr(_FakeResultMessage, "total_cost_usd", None)
 
         import forkhub.otel as otel
 
