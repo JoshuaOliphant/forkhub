@@ -49,6 +49,21 @@ def _clean_forkhub_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_otel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize otel.configure() so tests never wire real OTLP exporters.
+
+    The CLI callback calls otel.configure() at startup; when the OTel SDK is
+    installed it would register global providers and spin up background exporter
+    threads pointed at a live collector — leaking deprecation warnings and
+    cross-test thread exceptions into otherwise-pristine test output. The
+    record_* call sites stay live (they no-op without a configured provider).
+    """
+    import forkhub.otel as otel
+
+    monkeypatch.setattr(otel, "configure", lambda *a, **k: False)
+
+
 @pytest.fixture
 async def db():
     """Provide an in-memory Database connected and schema-created."""

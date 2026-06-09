@@ -654,3 +654,146 @@ class TestToolCompleteness:
         }
         assert names == expected
         assert len(tools) == 7
+
+
+# ===========================================================================
+# Instrumentation — the _instrument decorator + store_signal counter
+# ===========================================================================
+
+
+class TestToolInstrumentation:
+    """Every tool call emits a record_tool_call; store_signal also counts the
+    signal. Guards against a decorator being silently dropped — coverage alone
+    wouldn't catch that, since the handler still works without it.
+    """
+
+    async def test_successful_call_records_ok_true(
+        self, tools, db, monkeypatch: pytest.MonkeyPatch
+    ):
+        import forkhub.otel as otel
+
+        calls: list[tuple[str, bool, float]] = []
+        monkeypatch.setattr(otel, "record_tool_call", lambda *a: calls.append(a))
+
+        await _insert_tracked_repo(db)
+        t = _find_tool(tools, "list_forks")
+        await t.handler({"owner": "owner", "repo": "repo", "page": 1, "only_active": False})
+
+        assert len(calls) == 1
+        tool_name, ok, ms = calls[0]
+        assert tool_name == "list_forks"
+        assert ok is True
+        assert isinstance(ms, float) and ms >= 0.0
+
+    async def test_failed_call_records_ok_false(self, tools, monkeypatch: pytest.MonkeyPatch):
+        import forkhub.otel as otel
+
+        calls: list[tuple[str, bool, float]] = []
+        monkeypatch.setattr(otel, "record_tool_call", lambda *a: calls.append(a))
+
+        # No tracked repo / fork in the DB -> the handler returns an _err response.
+        t = _find_tool(tools, "get_fork_summary")
+        result = await t.handler({"fork_full_name": "nobody/nothing"})
+
+        assert result.get("is_error") is True
+        assert len(calls) == 1
+        tool_name, ok, ms = calls[0]
+        assert tool_name == "get_fork_summary"
+        assert ok is False
+        assert isinstance(ms, float) and ms >= 0.0
+
+    async def test_store_signal_records_signal_stored(
+        self, tools, db, monkeypatch: pytest.MonkeyPatch
+    ):
+        import forkhub.otel as otel
+
+        stored: list[str] = []
+        monkeypatch.setattr(otel, "record_signal_stored", lambda category: stored.append(category))
+
+        repo = await _insert_tracked_repo(db)
+        await _insert_fork(db, repo.id)
+        t = _find_tool(tools, "store_signal")
+        result = await t.handler(
+            {
+                "fork_full_name": "alice/repo",
+                "category": "fix",
+                "summary": "Patches a bug",
+                "significance": 6,
+            }
+        )
+
+        assert not result.get("is_error", False)
+        assert stored == ["fix"]
+
+    async def test_rejected_signal_does_not_record_stored(
+        self, tools, db, monkeypatch: pytest.MonkeyPatch
+    ):
+        import forkhub.otel as otel
+
+        stored: list[str] = []
+        monkeypatch.setattr(otel, "record_signal_stored", lambda category: stored.append(category))
+
+        repo = await _insert_tracked_repo(db)
+        await _insert_fork(db, repo.id)
+        t = _find_tool(tools, "store_signal")
+        result = await t.handler(
+            {
+                "fork_full_name": "alice/repo",
+                "category": "not_a_category",
+                "summary": "Bad",
+                "significance": 5,
+            }
+        )
+
+        assert result.get("is_error") is True
+        assert stored == []
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "list_forks",
+            "get_fork_summary",
+            "get_file_diff",
+            "get_releases",
+            "get_fork_stars",
+            "store_signal",
+            "search_similar_signals",
+        ],
+    )
+    async def test_every_tool_records_exactly_one_call(
+        self, tools, tool_name: str, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Each of the 7 handlers must fire record_tool_call exactly once.
+
+        Without this, dropping @_instrument from any single tool would pass both
+        the per-tool semantic tests above (which only cover list_forks and
+        get_fork_summary) and statement coverage (the handler still runs). A
+        superset args dict lets one call drive every tool; outcome (ok) is
+        irrelevant here — we assert only that the decorator fired for this name.
+        """
+        import forkhub.otel as otel
+
+        calls: list[tuple[str, bool, float]] = []
+        monkeypatch.setattr(otel, "record_tool_call", lambda *a: calls.append(a))
+
+        # Keys span every handler's reads; missing DB rows just yield _err
+        # responses, which still flow through the decorator's finally block.
+        args = {
+            "owner": "owner",
+            "repo": "repo",
+            "page": 1,
+            "only_active": False,
+            "fork_full_name": "nobody/nothing",
+            "file_path": "src/x.py",
+            "since_days": 30,
+            "category": "feature",
+            "summary": "s",
+            "significance": 5,
+            "summary_text": "s",
+            "repo_id": "r",
+            "limit": 5,
+        }
+        t = _find_tool(tools, tool_name)
+        await t.handler(args)
+
+        assert [c[0] for c in calls] == [tool_name]

@@ -692,7 +692,13 @@ class TestAgentToolsGaps:
 
 
 class _FakeResultMessage:
-    """Minimal ResultMessage stand-in used to terminate the receive_messages loop."""
+    """Minimal ResultMessage stand-in used to terminate the receive_messages loop.
+
+    Carries the cost/turn fields that _run_session records via otel.record_session.
+    """
+
+    total_cost_usd = 0.42
+    num_turns = 3
 
 
 class _FakeSDKClient:
@@ -904,6 +910,14 @@ class TestClaudeAnalyzerRunner:
         monkeypatch.setattr(runner_mod, "ResultMessage", _FakeResultMessage)
         monkeypatch.setattr(runner_mod, "create_sdk_mcp_server", lambda *a, **kw: object())
 
+        # Capture the session cost/turns instrument fired from _run_session.
+        import forkhub.otel as otel
+
+        sessions: list[tuple[float, int]] = []
+        monkeypatch.setattr(
+            otel, "record_session", lambda cost, turns: sessions.append((cost, turns))
+        )
+
         # Insert a fork + tracked_repo so that signals associate properly.
         from tests.stubs import make_fork, make_tracked_repo
 
@@ -944,6 +958,63 @@ class TestClaudeAnalyzerRunner:
         # The pre-existing signal should NOT be returned because it was created
         # BEFORE session_start; verify that analyze still completes cleanly.
         assert isinstance(result, list)
+        # The ResultMessage cost/turns were recorded to the session instrument.
+        assert sessions == [(0.42, 3)]
+
+    async def test_run_session_records_zero_cost_when_cost_is_none(
+        self, monkeypatch: pytest.MonkeyPatch, db: Database
+    ):
+        """A None total_cost_usd records 0.0 via the `or 0.0` fallback.
+
+        The SDK returns None for cost in some sessions; without the fallback,
+        None would be pushed into the cost histogram. branch=false coverage
+        can't force this arm, so it needs an explicit None-cost ResultMessage.
+        """
+        from forkhub.agent import runner as runner_mod
+        from forkhub.agent.runner import ClaudeAnalyzer
+        from forkhub.config import ForkHubSettings
+        from forkhub.models import Fork, ForkVitality, TrackedRepo, TrackingMode
+        from tests.stubs import StubEmbeddingProvider, StubGitProvider
+
+        _FakeSDKClient.instances.clear()
+        monkeypatch.setattr(runner_mod, "ClaudeSDKClient", _FakeSDKClient)
+        monkeypatch.setattr(runner_mod, "ResultMessage", _FakeResultMessage)
+        monkeypatch.setattr(runner_mod, "create_sdk_mcp_server", lambda *a, **kw: object())
+        # Flip the yielded message's cost to None to exercise the `or 0.0` arm.
+        monkeypatch.setattr(_FakeResultMessage, "total_cost_usd", None)
+
+        import forkhub.otel as otel
+
+        sessions: list[tuple[float, int]] = []
+        monkeypatch.setattr(
+            otel, "record_session", lambda cost, turns: sessions.append((cost, turns))
+        )
+
+        analyzer = ClaudeAnalyzer(
+            db=db,
+            provider=StubGitProvider(),
+            embedding_provider=StubEmbeddingProvider(),
+            settings=ForkHubSettings(),
+        )
+        repo = TrackedRepo(
+            github_id=7,
+            owner="o",
+            name="p",
+            full_name="o/p",
+            tracking_mode=TrackingMode.WATCHED,
+            default_branch="main",
+        )
+        fork = Fork(
+            tracked_repo_id=repo.id,
+            github_id=8,
+            owner="alice",
+            full_name="alice/p",
+            default_branch="main",
+            vitality=ForkVitality.ACTIVE,
+        )
+        await analyzer.analyze(repo, [fork], [])
+
+        assert sessions == [(0.0, 3)]
 
     async def test_analyze_handles_session_exception(
         self, monkeypatch: pytest.MonkeyPatch, db: Database

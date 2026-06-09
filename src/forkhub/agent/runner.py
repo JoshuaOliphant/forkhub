@@ -21,6 +21,7 @@ try:
 except ImportError:  # pragma: no cover
     _CLAUDE_SDK_AVAILABLE = False
 
+import forkhub.otel as otel
 from forkhub.agent.hooks import (
     create_cost_tracker_hook,
     create_pre_compact_hook,
@@ -145,6 +146,7 @@ class ClaudeAnalyzer:
             await client.query(prompt=prompt)
             async for msg in client.receive_messages():
                 if isinstance(msg, ResultMessage):
+                    otel.record_session(msg.total_cost_usd or 0.0, msg.num_turns)
                     break
         finally:
             await client.disconnect()
