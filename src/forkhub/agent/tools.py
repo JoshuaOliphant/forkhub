@@ -385,42 +385,6 @@ def create_tools(
         except Exception as exc:
             return _err(str(exc))
 
-    # ------------------------------------------------------------------
-    # 7. search_similar_signals
-    # ------------------------------------------------------------------
-    @tool(
-        "search_similar_signals",
-        "Search for signals similar to the given summary text using vector similarity. "
-        "Useful for detecting clusters of similar changes across forks.",
-        {"summary_text": str, "repo_id": str, "limit": int},
-    )
-    @_instrument
-    async def search_similar_signals(args: dict[str, Any]) -> dict[str, Any]:
-        try:
-            summary_text = args["summary_text"]
-            repo_id = args["repo_id"]
-            limit = args.get("limit", 5)
-
-            # Generate embedding for the query text
-            embeddings = await embedding_provider.embed([summary_text])
-            embedding = embeddings[0]
-
-            results = await db.search_similar_signals(embedding, repo_id, limit=limit)
-
-            similar = [
-                {
-                    "id": r.get("id"),
-                    "summary": r.get("summary"),
-                    "category": r.get("category"),
-                    "significance": r.get("significance"),
-                }
-                for r in results
-            ]
-
-            return _ok({"similar_signals": similar})
-        except Exception as exc:
-            return _err(str(exc))
-
     return [
         list_forks,
         get_fork_summary,
@@ -428,5 +392,4 @@ def create_tools(
         get_releases,
         get_fork_stars,
         store_signal,
-        search_similar_signals,
     ]

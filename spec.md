@@ -349,7 +349,6 @@ ForkHub uses the Agent SDK with a **coordinator + specialist subagent** pattern:
 │  ├── get_file_diff (full diff for a specific file)│
 │  ├── get_releases (tags + release notes)          │
 │  ├── get_fork_stars (star count + velocity)       │
-│  ├── search_similar_signals (vector search)       │
 │  └── store_signal (persist a classified signal)   │
 │                                                    │
 │  Subagents:                                        │
@@ -435,18 +434,6 @@ async def store_signal(
         detail: Optional longer explanation
     """
     ...
-
-
-async def search_similar_signals(summary_text: str, limit: int = 5) -> list[dict]:
-    """Search for existing signals similar to the given description.
-    Used to detect clusters — if a new signal is similar to existing ones,
-    it may indicate an emerging pattern.
-    
-    Args:
-        summary_text: Description to search against
-        limit: Max results to return
-    """
-    ...
 ```
 
 ### 6.3 Subagents
@@ -467,7 +454,7 @@ diff_analyst = {
     
     Focus on WHY the change was made, not just WHAT changed.""",
     "tools": ["get_fork_summary", "get_file_diff", "get_releases", 
-              "get_fork_stars", "store_signal", "search_similar_signals"],
+              "get_fork_stars", "store_signal"],
     "model": "sonnet",
 }
 
@@ -586,7 +573,7 @@ what's worth investigating:
    - Skims fork summaries (cheap: commit messages + file lists)
    - Dispatches diff-analyst subagents for interesting forks
    - Each subagent digs into specific changes, stores signals
-   - Agent checks for cluster formation via search_similar_signals
+   - Cluster formation is detected server-side via cosine-similarity clustering (cluster.py)
    - If context gets large, SDK auto-compacts (preserving stored signals in DB)
    
 5. Library saves all signals to SQLite

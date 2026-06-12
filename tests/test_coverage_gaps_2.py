@@ -344,13 +344,6 @@ class TestDatabaseGaps:
         assert row is not None
         assert row["title"] == "Notes"
 
-    async def test_search_similar_signals_returns_empty_without_vec(self, db: Database):
-        """When vec_enabled is False, search returns []."""
-        # Force vec_enabled off regardless of platform support.
-        db.vec_enabled = False
-        result = await db.search_similar_signals([0.1, 0.2, 0.3], "any-repo")
-        assert result == []
-
     async def test_load_sqlite_vec_handles_failure(self, monkeypatch: pytest.MonkeyPatch):
         """_load_sqlite_vec must catch any exception and set vec_enabled=False."""
         import sys
@@ -562,25 +555,6 @@ class TestAgentToolsGaps:
         )
         t = next(t for t in tools if t.name == "get_releases")
         result = await t.handler({"owner": "o", "repo": "r", "since_days": 30})
-        assert result.get("is_error") is True
-
-    async def test_search_similar_signals_handles_provider_error(self, db: Database):
-        """search_similar_signals returns is_error when embedding fails."""
-        pytest.importorskip("claude_agent_sdk")
-
-        from forkhub.agent.tools import create_tools
-        from tests.stubs import StubGitProvider
-
-        class BrokenEmbed:
-            async def embed(self, _texts):
-                raise RuntimeError("embed broken")
-
-            def dimensions(self):
-                return 4
-
-        tools = create_tools(db=db, provider=StubGitProvider(), embedding_provider=BrokenEmbed())
-        t = next(t for t in tools if t.name == "search_similar_signals")
-        result = await t.handler({"summary_text": "x", "repo_id": "rid", "limit": 5})
         assert result.get("is_error") is True
 
     async def test_store_signal_continues_when_embedding_fails(self, db: Database):
