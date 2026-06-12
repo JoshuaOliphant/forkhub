@@ -11,7 +11,7 @@ from rich.console import Console
 
 from forkhub.cli.formatting import render_fork_table, render_signal
 from forkhub.cli.helpers import async_command
-from forkhub.models import Fork, Signal, SignalCategory
+from forkhub.models import Fork, Signal
 
 if TYPE_CHECKING:
     from forkhub.database import Database
@@ -127,16 +127,11 @@ async def _inspect_impl(
                     if isinstance(sig_row["files_involved"], str)
                     else sig_row["files_involved"]
                 )
-                sig = Signal(
-                    id=sig_row["id"],
-                    fork_id=sig_row["fork_id"],
-                    tracked_repo_id=sig_row["tracked_repo_id"],
-                    category=SignalCategory(sig_row["category"]),
-                    summary=sig_row["summary"],
-                    detail=sig_row.get("detail"),
-                    files_involved=files,
-                    significance=sig_row["significance"],
-                )
+                # Spread the row so Pydantic hydrates every column (including the
+                # stored created_at) instead of defaulting it to read time. Only
+                # files_involved needs overriding — it is JSON TEXT in the DB and
+                # must be decoded before validation.
+                sig = Signal(**{**sig_row, "files_involved": files})
                 if capture_output is not None:
                     _output(
                         f"    [{sig.category}] {sig.summary} (significance: {sig.significance})",

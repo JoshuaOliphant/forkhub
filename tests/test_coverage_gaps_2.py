@@ -1088,7 +1088,17 @@ class TestClaudeAnalyzerRunner:
     async def test_analyze_collects_signals_inserted_during_session(
         self, monkeypatch: pytest.MonkeyPatch, db: Database
     ):
-        """analyze() should collect signals created by _run_session (lines 106-107)."""
+        """analyze() should collect signals created by _run_session (lines 106-107).
+
+        Also pins the round-trip: the collected Signal must carry the row's
+        STORED created_at, not the time the collection loop constructed the
+        model. The stored timestamp is set to a far-future value that is still
+        ``> session_start`` (so list_signals returns it) yet unmistakably not
+        construction time — if the constructor dropped created_at and defaulted
+        it to ~now, this assertion fails.
+        """
+        from datetime import UTC, datetime
+
         from forkhub.agent import runner as runner_mod
         from forkhub.agent.runner import ClaudeAnalyzer
         from forkhub.config import ForkHubSettings
@@ -1111,9 +1121,15 @@ class TestClaudeAnalyzerRunner:
         fk = make_fork(tr["id"], full_name="alice/nn", github_id=5433)
         await db.insert_fork(fk)
 
+        stored_at = datetime(2099, 1, 2, 3, 4, 5, tzinfo=UTC)
+
         async def fake_session(_self, repo, forks, releases):
-            # Insert a signal mid-session so list_signals(since=session_start) finds it.
-            await db.insert_signal(make_signal(fk["id"], tr["id"]))
+            # Insert a signal mid-session so list_signals(since=session_start)
+            # finds it. The far-future created_at is both > session_start and
+            # clearly distinct from model-construction time.
+            await db.insert_signal(
+                make_signal(fk["id"], tr["id"], created_at=stored_at.isoformat())
+            )
 
         monkeypatch.setattr(runner_mod.ClaudeAnalyzer, "_run_session", fake_session)
 
@@ -1143,6 +1159,7 @@ class TestClaudeAnalyzerRunner:
         )
         result = await analyzer.analyze(repo, [fork], [])
         assert len(result) == 1
+        assert result[0].created_at == stored_at
 
     async def test_analyze_releases_only_runs_one_batch(
         self, monkeypatch: pytest.MonkeyPatch, db: Database

@@ -56,16 +56,11 @@ async def _clusters_impl(
                     if isinstance(row["files_pattern"], str)
                     else row["files_pattern"]
                 )
-                clusters.append(
-                    Cluster(
-                        id=row["id"],
-                        tracked_repo_id=row["tracked_repo_id"],
-                        label=row["label"],
-                        description=row["description"],
-                        files_pattern=files_pattern,
-                        fork_count=row["fork_count"],
-                    )
-                )
+                # Spread the row so Pydantic hydrates every column (including the
+                # stored created_at) instead of defaulting it to read time. Only
+                # files_pattern needs overriding — it is JSON TEXT in the DB and
+                # must be decoded before validation.
+                clusters.append(Cluster(**{**row, "files_pattern": files_pattern}))
 
         if not clusters:
             _output(f"No clusters found for {repo} (min size: {min_size}).", capture_output)
