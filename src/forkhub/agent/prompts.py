@@ -18,7 +18,6 @@ need to understand the actual code changes.
 5. Call store_signal for each classified finding.
 6. Check get_releases for upstream changes that forks might be adapting to.
 7. Use get_fork_stars to identify forks gaining traction.
-8. Use search_similar_signals to detect clusters of similar changes.
 
 Signal categories (use exactly these values):
 - feature: New functionality added

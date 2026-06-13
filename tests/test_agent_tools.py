@@ -554,31 +554,6 @@ class TestStoreSignal:
 
 
 # ===========================================================================
-# search_similar_signals
-# ===========================================================================
-
-
-class TestSearchSimilarSignals:
-    async def test_returns_results(self, tools, db):
-        """search_similar_signals should return results (may be empty without vec)."""
-        repo = await _insert_tracked_repo(db)
-        t = _find_tool(tools, "search_similar_signals")
-        result = await t.handler(
-            {
-                "summary_text": "cool feature addition",
-                "repo_id": repo.id,
-                "limit": 5,
-            }
-        )
-        assert not result.get("is_error", False)
-        text = result["content"][0]["text"]
-        data = json.loads(text)
-        assert "similar_signals" in data
-        # Without sqlite-vec, should return empty list
-        assert isinstance(data["similar_signals"], list)
-
-
-# ===========================================================================
 # Error handling
 # ===========================================================================
 
@@ -640,8 +615,8 @@ class TestToolErrorHandling:
 
 
 class TestToolCompleteness:
-    def test_all_seven_tools_created(self, tools):
-        """create_tools should return exactly 7 tools with the expected names."""
+    def test_all_six_tools_created(self, tools):
+        """create_tools should return exactly 6 tools with the expected names."""
         names = {t.name for t in tools}
         expected = {
             "list_forks",
@@ -650,10 +625,9 @@ class TestToolCompleteness:
             "get_releases",
             "get_fork_stars",
             "store_signal",
-            "search_similar_signals",
         }
         assert names == expected
-        assert len(tools) == 7
+        assert len(tools) == 6
 
 
 # ===========================================================================
@@ -757,13 +731,12 @@ class TestToolInstrumentation:
             "get_releases",
             "get_fork_stars",
             "store_signal",
-            "search_similar_signals",
         ],
     )
     async def test_every_tool_records_exactly_one_call(
         self, tools, tool_name: str, monkeypatch: pytest.MonkeyPatch
     ):
-        """Each of the 7 handlers must fire record_tool_call exactly once.
+        """Each of the 6 handlers must fire record_tool_call exactly once.
 
         Without this, dropping @_instrument from any single tool would pass both
         the per-tool semantic tests above (which only cover list_forks and
@@ -789,9 +762,6 @@ class TestToolInstrumentation:
             "category": "feature",
             "summary": "s",
             "significance": 5,
-            "summary_text": "s",
-            "repo_id": "r",
-            "limit": 5,
         }
         t = _find_tool(tools, tool_name)
         await t.handler(args)

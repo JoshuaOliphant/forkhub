@@ -652,24 +652,3 @@ class Database:
             (key, value),
         )
         await self._db.commit()
-
-    # ------------------------------------------------------------------
-    # Vector search (sqlite-vec)
-    # ------------------------------------------------------------------
-
-    async def search_similar_signals(
-        self,
-        embedding: list[float],
-        repo_id: str,
-        limit: int = 5,
-    ) -> list[dict[str, Any]]:
-        """Find signals with similar embeddings via sqlite-vec.
-
-        Returns an empty list when sqlite-vec is not available.
-        """
-        if not self.vec_enabled:
-            return []
-
-        # sqlite-vec integration will be implemented when the extension
-        # is set up with a virtual table. For now, return empty.
-        return []

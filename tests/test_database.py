@@ -7,7 +7,6 @@ from forkhub.database import Database
 from tests.stubs import (
     make_cluster,
     make_cluster_member,
-    make_id,
     make_signal,
 )
 
@@ -113,10 +112,3 @@ class TestVectorSearch:
     async def test_vec_enabled_flag_set(self, db: Database):
         """vec_enabled should be a boolean flag on the database."""
         assert isinstance(db.vec_enabled, bool)
-
-    async def test_search_without_vec_returns_empty(self, db: Database):
-        """If sqlite-vec is not available, search_similar_signals returns empty."""
-        if not db.vec_enabled:
-            embedding = [0.1] * 384
-            results = await db.search_similar_signals(embedding, make_id())
-            assert results == []

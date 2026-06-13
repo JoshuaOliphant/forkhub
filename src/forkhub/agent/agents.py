@@ -58,7 +58,6 @@ def _build_subagents(settings: ForkHubSettings) -> tuple[Any, Any]:
             "mcp__forkhub__get_releases",
             "mcp__forkhub__get_fork_stars",
             "mcp__forkhub__store_signal",
-            "mcp__forkhub__search_similar_signals",
         ],
         model=_subagent_model(settings.anthropic.model, "diff-analyst"),
     )
