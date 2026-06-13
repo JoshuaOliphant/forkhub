@@ -668,11 +668,13 @@ class TestAgentToolsGaps:
 class _FakeResultMessage:
     """Minimal ResultMessage stand-in used to terminate the receive_messages loop.
 
-    Carries the cost/turn fields that _run_session records via otel.record_session.
+    Carries the cost/turn fields that _run_session records via otel.record_session,
+    plus the usage dict it reads for prompt-cache verification.
     """
 
     total_cost_usd = 0.42
     num_turns = 3
+    usage = {"cache_read_input_tokens": 1200, "cache_creation_input_tokens": 800}
 
 
 class _FakeSDKClient:
@@ -884,12 +886,16 @@ class TestClaudeAnalyzerRunner:
         monkeypatch.setattr(runner_mod, "ResultMessage", _FakeResultMessage)
         monkeypatch.setattr(runner_mod, "create_sdk_mcp_server", lambda *a, **kw: object())
 
-        # Capture the session cost/turns instrument fired from _run_session.
+        # Capture the session cost/turns + cache instruments fired from _run_session.
         import forkhub.otel as otel
 
         sessions: list[tuple[float, int]] = []
         monkeypatch.setattr(
             otel, "record_session", lambda cost, turns: sessions.append((cost, turns))
+        )
+        cache: list[tuple[int, int]] = []
+        monkeypatch.setattr(
+            otel, "record_cache_usage", lambda read, creation: cache.append((read, creation))
         )
 
         # Insert a fork + tracked_repo so that signals associate properly.
@@ -934,15 +940,18 @@ class TestClaudeAnalyzerRunner:
         assert isinstance(result, list)
         # The ResultMessage cost/turns were recorded to the session instrument.
         assert sessions == [(0.42, 3)]
+        # The ResultMessage usage cache tokens were recorded for cache verification.
+        assert cache == [(1200, 800)]
 
-    async def test_run_session_records_zero_cost_when_cost_is_none(
+    async def test_run_session_handles_none_cost_and_usage(
         self, monkeypatch: pytest.MonkeyPatch, db: Database
     ):
-        """A None total_cost_usd records 0.0 via the `or 0.0` fallback.
+        """None total_cost_usd and None usage both fall back cleanly.
 
-        The SDK returns None for cost in some sessions; without the fallback,
-        None would be pushed into the cost histogram. branch=false coverage
-        can't force this arm, so it needs an explicit None-cost ResultMessage.
+        The SDK returns None for cost in some sessions, and usage may be absent;
+        without `or 0.0` / `or {}`, None would reach the cost histogram or the
+        usage `.get()` would raise. branch=false coverage can't force these arms,
+        so this drives them with an all-None ResultMessage.
         """
         from forkhub.agent import runner as runner_mod
         from forkhub.agent.runner import ClaudeAnalyzer
@@ -954,14 +963,19 @@ class TestClaudeAnalyzerRunner:
         monkeypatch.setattr(runner_mod, "ClaudeSDKClient", _FakeSDKClient)
         monkeypatch.setattr(runner_mod, "ResultMessage", _FakeResultMessage)
         monkeypatch.setattr(runner_mod, "create_sdk_mcp_server", lambda *a, **kw: object())
-        # Flip the yielded message's cost to None to exercise the `or 0.0` arm.
+        # Flip cost and usage to None to exercise the `or 0.0` and `or {}` arms.
         monkeypatch.setattr(_FakeResultMessage, "total_cost_usd", None)
+        monkeypatch.setattr(_FakeResultMessage, "usage", None)
 
         import forkhub.otel as otel
 
         sessions: list[tuple[float, int]] = []
         monkeypatch.setattr(
             otel, "record_session", lambda cost, turns: sessions.append((cost, turns))
+        )
+        cache: list[tuple[int, int]] = []
+        monkeypatch.setattr(
+            otel, "record_cache_usage", lambda read, creation: cache.append((read, creation))
         )
 
         analyzer = ClaudeAnalyzer(
@@ -989,6 +1003,8 @@ class TestClaudeAnalyzerRunner:
         await analyzer.analyze(repo, [fork], [])
 
         assert sessions == [(0.0, 3)]
+        # None usage falls back to an empty dict -> both cache counts default to 0.
+        assert cache == [(0, 0)]
 
     async def test_analyze_handles_session_exception(
         self, monkeypatch: pytest.MonkeyPatch, db: Database

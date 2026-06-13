@@ -137,6 +137,11 @@ class ClaudeAnalyzer:
             async for msg in client.receive_messages():
                 if isinstance(msg, ResultMessage):
                     otel.record_session(msg.total_cost_usd or 0.0, msg.num_turns)
+                    usage = msg.usage or {}
+                    otel.record_cache_usage(
+                        usage.get("cache_read_input_tokens", 0),
+                        usage.get("cache_creation_input_tokens", 0),
+                    )
                     break
         finally:
             await client.disconnect()

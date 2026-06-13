@@ -184,6 +184,7 @@ def span(name: str, **attrs: str) -> Iterator[object]:
 def _build_instruments() -> None:
     """Create domain instruments. Called by configure() after the meter is real."""
     global _tool_calls, _tool_latency, _session_cost, _session_turns, _signals_stored  # noqa: PLW0603
+    global _cache_read_tokens, _cache_creation_tokens  # noqa: PLW0603
     _tool_calls = meter.create_counter(
         "forkhub.tool.calls", description="Agent MCP tool invocations by tool and outcome"
     )
@@ -199,6 +200,18 @@ def _build_instruments() -> None:
     _signals_stored = meter.create_counter(
         "forkhub.signals.stored", description="Signals persisted by the agent, by category"
     )
+    # Prompt-cache verification: the Agent SDK runtime caches the stable
+    # system-prompt + tool-definition prefix automatically. These counters let a
+    # real sync prove it — cache_read climbing while cache_creation stays flat is
+    # a warm prefix; cache_read stuck at zero means a silent invalidator.
+    _cache_read_tokens = meter.create_counter(
+        "forkhub.agent.session.cache_read_tokens",
+        description="Prompt-cache tokens served from cache (≈0.1x input cost)",
+    )
+    _cache_creation_tokens = meter.create_counter(
+        "forkhub.agent.session.cache_creation_tokens",
+        description="Prompt-cache tokens written to cache (≈1.25x input cost)",
+    )
 
 
 _tool_calls = None
@@ -206,6 +219,8 @@ _tool_latency = None
 _session_cost = None
 _session_turns = None
 _signals_stored = None
+_cache_read_tokens = None
+_cache_creation_tokens = None
 
 
 def _fail_open[**P](fn: Callable[P, None]) -> Callable[P, None]:
@@ -250,6 +265,19 @@ def record_signal_stored(category: str) -> None:
     """Count one signal the agent successfully persisted, labelled by category."""
     if _signals_stored is not None:
         _signals_stored.add(1, {"category": category})
+
+
+@_fail_open
+def record_cache_usage(cache_read: int, cache_creation: int) -> None:
+    """Record prompt-cache token counts from a completed session's usage.
+
+    Reads from ResultMessage.usage. cache_read > 0 confirms the agent runtime's
+    automatic caching of the system-prompt + tool prefix is taking effect.
+    """
+    if _cache_read_tokens is not None:
+        _cache_read_tokens.add(cache_read)
+    if _cache_creation_tokens is not None:
+        _cache_creation_tokens.add(cache_creation)
 
 
 # ===============================================================================
