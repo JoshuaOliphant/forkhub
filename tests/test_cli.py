@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 from forkhub.cli.app import app
 from forkhub.models import (
+    Cluster,
     Fork,
     ForkVitality,
     Signal,
@@ -340,6 +341,64 @@ class TestInspectCommand:
         output = "\n".join(output_lines)
         assert "not found" in output.lower()
 
+    async def test_inspect_signal_preserves_created_at(
+        self, db: Database, provider: StubGitProvider, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The Signal hydrated for rendering must keep the row's stored created_at.
+
+        inspect builds a Signal per signal row to render. If it constructs the
+        model field-by-field and omits created_at, the field silently defaults
+        to read time. This pins the round-trip: a signal stored with an explicit
+        historic created_at must surface that same value on the rendered model.
+        """
+        from forkhub.cli import forks_cmd
+        from forkhub.cli.forks_cmd import _inspect_impl
+        from forkhub.cli.track_cmd import _track_impl
+
+        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
+        repo_row = await db.get_tracked_repo_by_name("testuser/alpha")
+        assert repo_row is not None
+
+        fork = Fork(
+            tracked_repo_id=repo_row["id"],
+            github_id=9101,
+            owner="someone",
+            full_name="someone/alpha",
+            default_branch="main",
+            vitality=ForkVitality.ACTIVE,
+        )
+        fork_dict = fork.model_dump()
+        fork_dict["created_at"] = fork.created_at.isoformat()
+        fork_dict["updated_at"] = fork.updated_at.isoformat()
+        fork_dict["last_pushed_at"] = None
+        await db.insert_fork(fork_dict)
+
+        stored_at = datetime(2024, 2, 3, 4, 5, 6, tzinfo=UTC)
+        signal = Signal(
+            fork_id=fork.id,
+            tracked_repo_id=repo_row["id"],
+            category=SignalCategory.FEATURE,
+            summary="Added dark mode support",
+            significance=8,
+            files_involved=["src/theme.py"],
+            created_at=stored_at,
+        )
+        signal_dict = signal.model_dump()
+        signal_dict["created_at"] = signal.created_at.isoformat()
+        signal_dict["files_involved"] = json.dumps(signal.files_involved)
+        signal_dict["embedding"] = None
+        await db.insert_signal(signal_dict)
+
+        # Capture the Signal the impl builds for rendering (non-capture branch).
+        rendered: list[Signal] = []
+        monkeypatch.setattr(forks_cmd, "render_signal", lambda _console, sig: rendered.append(sig))
+
+        await _inspect_impl(fork_name="someone/alpha", db=db)
+
+        assert len(rendered) == 1
+        assert rendered[0].created_at == stored_at
+        assert rendered[0].files_involved == ["src/theme.py"]
+
 
 # ---------------------------------------------------------------------------
 # clusters command
@@ -379,6 +438,48 @@ class TestClustersCommand:
 
         output = "\n".join(output_lines)
         assert "theme" in output.lower() or "cluster" in output.lower()
+
+    async def test_clusters_preserve_created_at(
+        self, db: Database, provider: StubGitProvider, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The Cluster hydrated for rendering must keep the row's stored created_at.
+
+        clusters builds a Cluster per row to render. Field-by-field construction
+        that omits created_at silently defaults it to read time. This pins the
+        round-trip on the rendered model.
+        """
+        from forkhub.cli import clusters_cmd
+        from forkhub.cli.clusters_cmd import _clusters_impl
+        from forkhub.cli.track_cmd import _track_impl
+
+        await _track_impl(repo="testuser/alpha", db=db, provider=provider)
+        repo_row = await db.get_tracked_repo_by_name("testuser/alpha")
+        assert repo_row is not None
+
+        stored_at = datetime(2024, 5, 6, 7, 8, 9, tzinfo=UTC)
+        cluster_dict = {
+            "id": "cluster-rt",
+            "tracked_repo_id": repo_row["id"],
+            "label": "feature in theme",
+            "description": "Cluster of 3 forks with similar changes",
+            "files_pattern": json.dumps(["src/theme.py"]),
+            "fork_count": 3,
+            "created_at": stored_at.isoformat(),
+            "updated_at": stored_at.isoformat(),
+        }
+        await db.insert_cluster(cluster_dict)
+
+        # Capture the Cluster the impl builds for rendering (non-capture branch).
+        rendered: list[Cluster] = []
+        monkeypatch.setattr(
+            clusters_cmd, "render_cluster", lambda _console, cl: rendered.append(cl)
+        )
+
+        await _clusters_impl(repo="testuser/alpha", min_size=2, db=db)
+
+        assert len(rendered) == 1
+        assert rendered[0].created_at == stored_at
+        assert rendered[0].files_pattern == ["src/theme.py"]
 
     async def test_clusters_no_clusters(self, db: Database, provider: StubGitProvider):
         """clusters with no results should show a message."""

@@ -105,21 +105,11 @@ class ClaudeAnalyzer:
         signal_rows = await self._db.list_signals(repo.id, since=session_start)
         for row in signal_rows:
             files = json.loads(row["files_involved"]) if row["files_involved"] else []
-            all_signals.append(
-                Signal(
-                    id=row["id"],
-                    fork_id=row["fork_id"],
-                    tracked_repo_id=row["tracked_repo_id"],
-                    category=row["category"],
-                    summary=row["summary"],
-                    detail=row["detail"],
-                    files_involved=files,
-                    significance=row["significance"],
-                    embedding=row["embedding"],
-                    is_upstream=bool(row["is_upstream"]),
-                    release_tag=row["release_tag"],
-                )
-            )
+            # Spread the row so Pydantic hydrates every column (including the
+            # stored created_at) instead of defaulting it to read time. Only
+            # files_involved needs overriding — it is JSON TEXT in the DB and
+            # must be decoded before validation.
+            all_signals.append(Signal(**{**row, "files_involved": files}))
 
         return all_signals
 
