@@ -391,9 +391,7 @@ class TestInspectCommand:
 
         # Capture the Signal the impl builds for rendering (non-capture branch).
         rendered: list[Signal] = []
-        monkeypatch.setattr(
-            forks_cmd, "render_signal", lambda _console, sig: rendered.append(sig)
-        )
+        monkeypatch.setattr(forks_cmd, "render_signal", lambda _console, sig: rendered.append(sig))
 
         await _inspect_impl(fork_name="someone/alpha", db=db)
 
