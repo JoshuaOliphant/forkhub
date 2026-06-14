@@ -14,9 +14,15 @@ const ICONS = {
   removal: 'M5 12h14',
 };
 const CATCOLOR = (c) => `var(--sig-${c})`;
+const GH = 'https://github.com';
 
 const svgIcon = (d, size = 13) =>
   `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
+const EXT = svgIcon('M7 17 17 7M9 7h8v8', 11); // external-link arrow
+
+// GitHub URLs for a fork: the fork's repo lives under the fork owner with the
+// upstream repo's name; the SHA links to that exact commit.
+function ghUrls(owner) { const repo = `${GH}/${owner}/${DATA.repo.name}`; return { repo, commit: (sha) => `${repo}/commit/${sha}` }; }
 
 function chip(cat, withScore = null) {
   const col = CATCOLOR(cat);
@@ -37,12 +43,16 @@ function renderDiff(diff) {
     const cls = l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : 'ctx';
     return `<div class="${cls}">${l.replace(/</g, '&lt;')}</div>`;
   }).join('');
-  return `<div><div class="insp-label">Diff preview</div><div class="diff">${rows}</div></div>`;
+  return `<div><div class="insp-label">Diff preview <span class="zoom-hint">click to enlarge</span></div><div class="diff" role="button" tabindex="0" aria-label="Enlarge diff preview">${rows}</div></div>`;
 }
 
 function populateFork(insp, f) {
+  const gh = ghUrls(f.owner);
   insp.querySelector('.insp-head').innerHTML =
-    `${avatar(f.owner)}<div><div class="who">${f.owner}/${DATA.repo.name}</div><div class="sha mono">#${f.sha}</div></div>` +
+    `${avatar(f.owner)}<div class="who-block">` +
+      `<a class="who" href="${gh.repo}" target="_blank" rel="noopener">${f.owner}/${DATA.repo.name}${EXT}</a>` +
+      `<a class="sha mono" href="${gh.commit(f.sha)}" target="_blank" rel="noopener">#${f.sha}</a>` +
+    `</div>` +
     `<button class="close" aria-label="Close inspector">${svgIcon('M18 6 6 18M6 6l12 12', 18)}</button>`;
   if (f.live) {
     insp.querySelector('.insp-body').innerHTML =
@@ -69,7 +79,11 @@ function populateCluster(insp, c) {
     `<button class="close" aria-label="Close inspector">${svgIcon('M18 6 6 18M6 6l12 12', 18)}</button>`;
   const rows = c.members.map((m) => {
     const f = DATA.forks.find((x) => x.id === m);
-    return `<div class="frow"><div class="av">${m[0].toUpperCase()}</div><div class="meta"><div class="who">${f.owner}</div><div class="sha mono">#${f.sha}</div></div><div>${chip(f.signal.category, f.signal.significance)}</div></div>`;
+    const g = ghUrls(f.owner);
+    return `<div class="frow"><div class="av">${m[0].toUpperCase()}</div><div class="meta">` +
+      `<a class="who" href="${g.repo}" target="_blank" rel="noopener">${f.owner}${EXT}</a>` +
+      `<a class="sha mono" href="${g.commit(f.sha)}" target="_blank" rel="noopener">#${f.sha}</a></div>` +
+      `<div>${chip(f.signal.category, f.signal.significance)}</div></div>`;
   }).join('');
   insp.querySelector('.insp-body').innerHTML = `
     <div class="why"><div class="tag">${svgIcon('M12 2 2 7l10 5 10-5-10-5z', 12)} convergent divergence</div>${c.summary}</div>
@@ -123,10 +137,11 @@ function boot() {
   });
   buildList(DATA);
 
-  // Render (and re-render) only when the container's size actually changes, and
-  // only once layout is stable — avoids the measure-too-early viewBox mismatch
-  // and spurious re-renders that would wipe the current selection.
-  let lastW = 0, lastH = 0;
+  // Initial render happens immediately — ResizeObserver callbacks are paused for
+  // hidden/background tabs, so relying on the observer alone would leave the map
+  // blank until the tab is foregrounded. The observer then handles resizes only.
+  let lastW = svg.clientWidth, lastH = svg.clientHeight;
+  draw();
   const ro = new ResizeObserver(() => {
     const w = svg.clientWidth, h = svg.clientHeight;
     if (!w || !h || (w === lastW && h === lastH)) return;
@@ -141,8 +156,22 @@ function boot() {
     document.querySelector('.sky-wrap').hidden = list;
     document.querySelector('.listview').hidden = !list;
   }));
-  // esc closes inspector
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') insp.classList.remove('open'); });
+  // diff preview: click to enlarge, click again (or backdrop / Esc) to shrink
+  const backdrop = document.querySelector('.diff-backdrop');
+  const unzoom = () => { insp.querySelectorAll('.diff.zoom').forEach((d) => d.classList.remove('zoom')); backdrop.hidden = true; };
+  const toggleZoom = (diff) => { backdrop.hidden = !diff.classList.toggle('zoom'); };
+  insp.addEventListener('click', (e) => { const d = e.target.closest('.diff'); if (d) toggleZoom(d); });
+  insp.addEventListener('keydown', (e) => {
+    const d = e.target.closest('.diff');
+    if (d && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleZoom(d); }
+  });
+  backdrop.addEventListener('click', unzoom);
+
+  // esc shrinks an enlarged diff first, otherwise closes the inspector
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!backdrop.hidden) unzoom(); else insp.classList.remove('open');
+  });
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
