@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<!-- ABOUTME: Explore zone prototype page (fixture-fed); becomes templates/explore.html under FastAPI. -->
+<!-- ABOUTME: Embeds fork data as JSON the same way Jinja will, then boots the constellation module. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Explore · ForkHub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="static/css/forkhub.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg></div>
+        <div class="word">ForkHub</div>
+      </div>
+      <button class="repo-switch">
+        <span class="gh"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+        <span class="name">tldr-pages/tldr</span>
+        <span class="stars">★ 52.1k</span>
+        <span class="chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+      </button>
+      <div class="spacer"></div>
+      <div class="cost-meter"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg><span>today</span> <b>$0.114</b></div>
+      <button class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>Sync</button>
+    </header>
+
+    <nav class="rail">
+      <a class="active" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16.2 7.8-2.9 6.4-6.4 2.9 2.9-6.4z"/></svg><span>Explore</span></a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>Digest</span></a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span>Control</span></a>
+    </nav>
+
+    <main class="zone">
+      <div class="explore">
+        <div class="zone-head">
+          <h1>Explore</h1>
+          <span class="sub">14 forks · 3 clusters · synced 6 min ago</span>
+          <div class="tools">
+            <div class="seg">
+              <button class="on" data-view="map">Map</button>
+              <button data-view="list">List</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sky-wrap">
+          <svg class="starfield" aria-hidden="true"></svg>
+          <div class="sky-glow"></div>
+          <svg class="constellation" role="img" aria-label="Fork constellation. Use Tab to move between forks, Enter to inspect."></svg>
+          <div class="legend">
+            <span class="item"><span class="dot" style="background:var(--sig-feature)"></span>feature</span>
+            <span class="item"><span class="dot" style="background:var(--sig-fix)"></span>fix</span>
+            <span class="item"><span class="dot" style="background:var(--sig-refactor)"></span>refactor</span>
+            <span class="item"><span class="dot" style="background:var(--sig-adaptation)"></span>adaptation</span>
+            <span class="item"><span class="dot" style="background:var(--sig-dependency)"></span>dependency</span>
+            <span class="item"><span class="dot" style="background:var(--accent)"></span>live</span>
+          </div>
+          <div class="hint">larger = higher significance · linked = cluster</div>
+        </div>
+
+        <div class="listview" hidden></div>
+      </div>
+
+      <aside class="inspector" aria-label="Fork inspector">
+        <div class="insp-head"></div>
+        <div class="insp-body"></div>
+      </aside>
+    </main>
+  </div>
+
+  <script id="forkhub-data" type="application/json">
+  {
+    "repo": { "name": "tldr", "full_name": "tldr-pages/tldr", "stars": "52.1k", "fork_count": 14, "last_sync": "6 min ago" },
+    "clusters": [
+      { "id": "dark-mode", "label": "dark-mode theming", "members": ["alice","carol","grace"],
+        "summary": "Three forks independently added a dark color theme with dimmed ANSI output. Strong convergence — a clean candidate to upstream." },
+      { "id": "wasm", "label": "wasm build target", "members": ["dan","heidi"],
+        "summary": "Two forks compile tldr to WebAssembly so the client runs in a browser. Different approaches, same goal." },
+      { "id": "i18n", "label": "locale support", "members": ["ivan","judy","karl"],
+        "summary": "Three forks add language locales upstream doesn't ship (fr, de, ja). Low conflict, high demand signal." }
+    ],
+    "forks": [
+      { "id": "alice", "owner": "alice", "sha": "7b2e004", "signal": { "category": "feature", "significance": 8,
+        "summary": "Adds a dark-mode color theme with a dimmed ANSI palette and a config switch.",
+        "reasoning": "Two commits introduce a complete theme system: a new dark.css token set plus a config flag. Self-contained, no upstream conflicts — the most polished of the three dark-mode forks.",
+        "files": ["themes/dark.css", "src/config.js"], "cost_usd": 0.012,
+        "diff": ["  :root {", "+   --bg: #0d1117;", "+   --fg: #e6edf3;", "-   --bg: #ffffff;", "  }"] } },
+      { "id": "carol", "owner": "carol", "sha": "c40aa12", "signal": { "category": "feature", "significance": 7,
+        "summary": "Adds dark theme support for terminal output.",
+        "reasoning": "Overlaps heavily with alice's theme tokens, reached independently — the core of the dark-mode cluster.",
+        "files": ["themes/dark.css"], "cost_usd": 0.009 } },
+      { "id": "grace", "owner": "grace", "sha": "9af0c31", "signal": { "category": "feature", "significance": 6,
+        "summary": "Dark theme plus a short docs note on enabling it.",
+        "reasoning": "Same theme direction with documentation added — rounds out the cluster.",
+        "files": ["themes/dark.css", "docs/themes.md"], "cost_usd": 0.010 } },
+      { "id": "dan", "owner": "dan", "sha": "1c7be90", "signal": { "category": "feature", "significance": 7,
+        "summary": "Compiles the renderer to WebAssembly for an in-browser tldr.",
+        "reasoning": "Adds a wasm build step and a JS loader. Ambitious; would need a build-pipeline discussion to upstream.",
+        "files": ["build/wasm.js", "package.json"], "cost_usd": 0.014 } },
+      { "id": "heidi", "owner": "heidi", "sha": "b53d227", "signal": { "category": "config", "significance": 6,
+        "summary": "Tweaks the build matrix to emit a wasm artifact.",
+        "reasoning": "Build-config sibling to dan's wasm work; same goal via CI config.",
+        "files": ["build/wasm.js"], "cost_usd": 0.008 } },
+      { "id": "ivan", "owner": "ivan", "sha": "44e1a08", "signal": { "category": "adaptation", "significance": 5,
+        "summary": "Adds a French locale for command descriptions.",
+        "reasoning": "New locale file, no code changes — easy to adopt.",
+        "files": ["locale/fr.json"], "cost_usd": 0.007 } },
+      { "id": "judy", "owner": "judy", "sha": "77c0d14", "signal": { "category": "adaptation", "significance": 6,
+        "summary": "German locale plus a small i18n loader refactor.",
+        "reasoning": "Goes a step beyond a locale file by generalizing the loader — the most reusable of the i18n forks.",
+        "files": ["locale/de.json", "src/i18n.js"], "cost_usd": 0.009 } },
+      { "id": "karl", "owner": "karl", "sha": "2ee9f63", "signal": { "category": "adaptation", "significance": 5,
+        "summary": "Adds a Japanese locale.",
+        "reasoning": "Locale-only addition, mirrors ivan — completes the locale cluster.",
+        "files": ["locale/ja.json"], "cost_usd": 0.007 } },
+      { "id": "bob", "owner": "bob", "sha": "d91f7a3", "signal": { "category": "fix", "significance": 5,
+        "summary": "Fixes column alignment for wide CJK characters.",
+        "reasoning": "Corrects a real width-calculation bug in the renderer; a clear upstream candidate.",
+        "files": ["src/render.py"], "cost_usd": 0.006,
+        "diff": ["- width = len(text)", "+ width = wcswidth(text)", "  pad = column - width"] } },
+      { "id": "frank", "owner": "frank", "sha": "f2b0c55", "signal": { "category": "refactor", "significance": 4,
+        "summary": "Extracts the page parser into its own module.",
+        "reasoning": "Internal restructuring, no behavior change. Useful but not urgent.",
+        "files": ["src/parser.py", "src/index.py"], "cost_usd": 0.008 } },
+      { "id": "dave", "owner": "dave", "sha": "5e7c118", "signal": { "category": "dependency", "significance": 2,
+        "summary": "Routine dependency version bumps.",
+        "reasoning": "Lockfile churn only — low significance, filtered from digests by default.",
+        "files": ["package.json"], "cost_usd": 0.003 } },
+      { "id": "mallory", "owner": "mallory", "sha": "8b1f4a0", "signal": { "category": "removal", "significance": 3,
+        "summary": "Drops the Python 2 compatibility shim.",
+        "reasoning": "Removes dead legacy code. Safe, but a deliberate upstream policy call.",
+        "files": ["src/py2compat.py"], "cost_usd": 0.004 } },
+      { "id": "niaj", "owner": "niaj", "sha": "0d77e21", "signal": { "category": "release", "significance": 6,
+        "summary": "Cuts a tagged v2 release off the fork with a changelog.",
+        "reasoning": "Fork is being maintained as its own release line — worth watching for divergence.",
+        "files": ["CHANGELOG.md"], "cost_usd": 0.009 } },
+      { "id": "erin", "owner": "erin", "sha": "a1f3c9d", "live": true }
+    ]
+  }
+  </script>
+  <script type="module" src="static/js/explore.js"></script>
+</body>
+</html>
