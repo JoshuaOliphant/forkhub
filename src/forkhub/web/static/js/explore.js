@@ -46,7 +46,16 @@ function renderDiff(diff) {
   return `<div><div class="insp-label">Diff preview <span class="zoom-hint">click to enlarge</span></div><div class="diff" role="button" tabindex="0" aria-label="Enlarge diff preview">${rows}</div></div>`;
 }
 
+// Reset any enlarged diff to compact and hide the backdrop. Called on every new
+// selection and on close so the full-screen overlay can never be orphaned.
+function clearDiffZoom() {
+  document.querySelectorAll('.diff.zoom').forEach((d) => d.classList.remove('zoom'));
+  const b = document.querySelector('.diff-backdrop');
+  if (b) b.hidden = true;
+}
+
 function populateFork(insp, f) {
+  clearDiffZoom();
   const gh = ghUrls(f.owner);
   insp.querySelector('.insp-head').innerHTML =
     `${avatar(f.owner)}<div class="who-block">` +
@@ -72,7 +81,9 @@ function populateFork(insp, f) {
 }
 
 function populateCluster(insp, c) {
-  const col = CATCOLOR(c.members_meta?.[0]?.category || 'feature');
+  clearDiffZoom();
+  const first = DATA.forks.find((x) => x.id === c.members[0]);
+  const col = CATCOLOR(first?.signal?.category || 'feature');
   insp.querySelector('.insp-head').innerHTML =
     `<div class="av" style="background:color-mix(in oklch, ${col} 20%, transparent);color:${col}">${svgIcon('M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5', 18)}</div>` +
     `<div><div class="who">${c.label}</div><div class="sha">${c.members.length} forks converged</div></div>` +
@@ -94,6 +105,7 @@ function populateCluster(insp, c) {
 
 function bindClose(insp) {
   insp.querySelector('.close').addEventListener('click', () => {
+    clearDiffZoom();
     insp.classList.remove('open');
     document.querySelectorAll('.node-hit.sel').forEach((x) => x.classList.remove('sel'));
   });
@@ -158,19 +170,18 @@ function boot() {
   }));
   // diff preview: click to enlarge, click again (or backdrop / Esc) to shrink
   const backdrop = document.querySelector('.diff-backdrop');
-  const unzoom = () => { insp.querySelectorAll('.diff.zoom').forEach((d) => d.classList.remove('zoom')); backdrop.hidden = true; };
   const toggleZoom = (diff) => { backdrop.hidden = !diff.classList.toggle('zoom'); };
   insp.addEventListener('click', (e) => { const d = e.target.closest('.diff'); if (d) toggleZoom(d); });
   insp.addEventListener('keydown', (e) => {
     const d = e.target.closest('.diff');
     if (d && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleZoom(d); }
   });
-  backdrop.addEventListener('click', unzoom);
+  backdrop.addEventListener('click', clearDiffZoom);
 
   // esc shrinks an enlarged diff first, otherwise closes the inspector
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (!backdrop.hidden) unzoom(); else insp.classList.remove('open');
+    if (!backdrop.hidden) clearDiffZoom(); else insp.classList.remove('open');
   });
 }
 

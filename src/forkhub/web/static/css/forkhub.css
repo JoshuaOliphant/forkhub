@@ -76,6 +76,7 @@ a { color: var(--accent); text-decoration: none; }
 
 .repo-switch {
   display: flex; align-items: center; gap: 9px; padding: 7px 12px; border-radius: 10px;
+  color: var(--ink); /* it's an <a> now; keep the name ink, not the global anchor accent */
   background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); transition: background 0.15s var(--ease);
 }
 .repo-switch:hover { background: var(--surface-2); }
