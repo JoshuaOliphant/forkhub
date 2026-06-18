@@ -2,10 +2,13 @@
 # ABOUTME: Verifies TOML loading, env var overrides, search order, defaults, and helper functions.
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from forkhub.config import (
     AnthropicSettings,
+    _find_dotenv_file,
+    load_dotenv_file,
     load_settings,
 )
 
@@ -63,3 +66,120 @@ class TestOAuthTokenSupport:
     def test_auth_method_detection(self) -> None:
         assert AnthropicSettings(api_key="sk-ant-test").auth_method == "api_key"
         assert AnthropicSettings(oauth_token="oauth-test").auth_method == "oauth"
+
+
+# ===========================================================================
+# Test: .env discovery (cwd > parent dirs > ~/.config/forkhub/.env)
+# ===========================================================================
+
+
+class TestDotenvDiscovery:
+    """load_dotenv_file should find .env outside cwd, like git/ruff search upward."""
+
+    def test_finds_dotenv_in_parent_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Running from a subdir without .env finds the .env in an ancestor dir."""
+        project = tmp_path / "project"
+        nested = project / "deep" / "nested"
+        nested.mkdir(parents=True)
+        (project / ".env").write_text("GITHUB_TOKEN=from-parent\n")
+        # No HOME .env to interfere.
+        monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.chdir(nested)
+
+        assert _find_dotenv_file() == project / ".env"
+
+    def test_finds_dotenv_in_config_dir_when_not_in_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no .env in cwd or ancestors, ~/.config/forkhub/.env is used."""
+        fakehome = tmp_path / "fakehome"
+        config_dir = fakehome / ".config" / "forkhub"
+        config_dir.mkdir(parents=True)
+        config_env = config_dir / ".env"
+        config_env.write_text("GITHUB_TOKEN=from-config\n")
+        workdir = tmp_path / "elsewhere"
+        workdir.mkdir()
+        monkeypatch.setenv("HOME", str(fakehome))
+        monkeypatch.chdir(workdir)
+
+        assert _find_dotenv_file() == config_env
+
+    def test_returns_none_when_no_dotenv_anywhere(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No .env in tree and none in config dir → None."""
+        fakehome = tmp_path / "fakehome"
+        fakehome.mkdir()
+        workdir = tmp_path / "barren"
+        workdir.mkdir()
+        monkeypatch.setenv("HOME", str(fakehome))
+        monkeypatch.chdir(workdir)
+
+        assert _find_dotenv_file() is None
+
+    def test_load_from_parent_populates_environ(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_dotenv_file() loads creds from an ancestor .env, not just cwd."""
+        project = tmp_path / "project"
+        nested = project / "sub"
+        nested.mkdir(parents=True)
+        (project / ".env").write_text("GITHUB_TOKEN=discovered-upward\n")
+        monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.chdir(nested)
+
+        load_dotenv_file()
+
+        assert load_settings().github.token == "discovered-upward"
+
+    def test_explicit_path_overrides_search(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicit dotenv_path is loaded directly without searching."""
+        explicit = tmp_path / "custom.env"
+        explicit.write_text("GITHUB_TOKEN=explicit\n")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        load_dotenv_file(dotenv_path=explicit)
+
+        assert load_settings().github.token == "explicit"
+
+    def test_logs_dotenv_source_and_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Startup logs which .env was loaded and which credential sources are present."""
+        (tmp_path / ".env").write_text("GITHUB_TOKEN=tok\n")
+        monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_ACCESS_TOKEN", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        with caplog.at_level(logging.INFO, logger="forkhub.config"):
+            load_dotenv_file()
+
+        text = caplog.text
+        assert str(tmp_path / ".env") in text
+        assert "GITHUB_TOKEN" in text
+
+    def test_logs_when_no_dotenv_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When no .env is found, a debug line says so rather than silently passing."""
+        fakehome = tmp_path / "fakehome"
+        fakehome.mkdir()
+        workdir = tmp_path / "nothing"
+        workdir.mkdir()
+        monkeypatch.setenv("HOME", str(fakehome))
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.chdir(workdir)
+
+        with caplog.at_level(logging.DEBUG, logger="forkhub.config"):
+            load_dotenv_file()
+
+        assert "No .env file found" in caplog.text

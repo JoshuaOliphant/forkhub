@@ -2,6 +2,7 @@
 # ABOUTME: Loads settings from TOML files and environment variables.
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from pathlib import Path
@@ -9,6 +10,13 @@ from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# Env vars that carry credentials, logged (by name only — never values) at
+# startup so a run can never silently proceed unauthenticated without a trace
+# of which credential sources were found.
+_CREDENTIAL_ENV_VARS = ("GITHUB_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_ACCESS_TOKEN")
 
 
 class GitHubSettings(BaseSettings):
@@ -123,16 +131,62 @@ class ForkHubSettings(BaseSettings):
     tracking: TrackingSettings = Field(default_factory=TrackingSettings)
 
 
-def load_dotenv_file(dotenv_path: Path | None = None) -> None:
-    """Load .env file into os.environ if it exists.
+def _find_dotenv_file() -> Path | None:
+    """Search for a .env file: cwd, then each ancestor dir, then ~/.config/forkhub/.
 
-    Searches cwd for .env by default. Pass dotenv_path to load a specific file.
-    Existing env vars are NOT overridden — .env values only fill in gaps.
+    Walks upward from the current working directory to the filesystem root the
+    way git and ruff resolve their config, so forkhub run from a subdirectory of
+    a project still picks up the project's .env. Falls back to the documented
+    global location ~/.config/forkhub/.env. Returns the first match, or None.
+    """
+    cwd = Path.cwd()
+    for directory in (cwd, *cwd.parents):
+        candidate = directory / ".env"
+        if candidate.is_file():
+            return candidate
+
+    home_env = Path.home() / ".config" / "forkhub" / ".env"
+    if home_env.is_file():
+        return home_env
+
+    return None
+
+
+def _log_credential_sources() -> None:
+    """Log which credential env vars are populated (names only, never values).
+
+    Surfaces at startup so an unauthenticated run leaves a visible trace instead
+    of silently failing later with empty tokens.
+    """
+    present = [name for name in _CREDENTIAL_ENV_VARS if os.environ.get(name)]
+    if present:
+        logger.info("Credential sources found: %s", ", ".join(present))
+    else:
+        logger.warning(
+            "No credential env vars set (%s) — requests will be unauthenticated",
+            ", ".join(_CREDENTIAL_ENV_VARS),
+        )
+
+
+def load_dotenv_file(dotenv_path: Path | None = None) -> None:
+    """Load a .env file into os.environ, then log which credentials were found.
+
+    With no explicit dotenv_path, searches cwd and ancestor dirs, then
+    ~/.config/forkhub/.env (see _find_dotenv_file), so forkhub run from any
+    directory still discovers credentials. Pass dotenv_path to load a specific
+    file. Existing env vars are NOT overridden — .env values only fill in gaps.
     Called once at CLI startup before any settings are loaded.
     """
     from dotenv import load_dotenv
 
-    load_dotenv(dotenv_path=dotenv_path, override=False)
+    resolved = dotenv_path if dotenv_path is not None else _find_dotenv_file()
+    if resolved is not None:
+        logger.info("Loading .env from %s", resolved)
+        load_dotenv(dotenv_path=resolved, override=False)
+    else:
+        logger.debug("No .env file found in cwd, ancestors, or ~/.config/forkhub/")
+
+    _log_credential_sources()
 
 
 def _find_config_file() -> Path | None:
