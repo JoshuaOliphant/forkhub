@@ -87,7 +87,11 @@ class DigestService:
                 by_repo.setdefault(repo_id, []).append(sig)
 
             for repo_id, sigs in by_repo.items():
-                body_lines.append(f"## Repository {repo_id}")
+                # Resolve the repo UUID to its human full_name for the header.
+                # Signals carry a FK to tracked_repos, so the repo always exists.
+                repo = await self._db.get_tracked_repo(repo_id)
+                assert repo is not None
+                body_lines.append(f"## Repository {repo['full_name']}")
                 body_lines.append("")
                 for sig in sigs:
                     cat = sig["category"]

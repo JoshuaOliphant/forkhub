@@ -186,6 +186,32 @@ class TestDigestGeneration:
         assert len(digest.signal_ids) == 1
         assert digest.signal_ids[0] == sig_src["id"]
 
+    async def test_header_shows_full_name_not_repo_id(
+        self,
+        db: Database,
+        stub_backend: StubNotificationBackend,
+        repo_in_db: dict,
+        fork_in_db: dict,
+    ):
+        """The repository section header uses the human full_name, not the raw repo UUID."""
+        signal = make_signal(
+            fork_in_db["id"],
+            repo_in_db["id"],
+            significance=8,
+            summary="Major feature",
+        )
+        await db.insert_signal(signal)
+
+        config = _make_pydantic_digest_config(
+            tracked_repo_id=repo_in_db["id"],
+            min_significance=5,
+        )
+        svc = DigestService(db, [stub_backend])
+        digest = await svc.generate_digest(config)
+
+        assert f"## Repository {repo_in_db['full_name']}" in digest.body
+        assert repo_in_db["id"] not in digest.body
+
 
 # ---------------------------------------------------------------------------
 # generate_and_deliver convenience method tests
