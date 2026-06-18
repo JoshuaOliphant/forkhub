@@ -108,6 +108,7 @@ class TestFork:
             commits_ahead=10,
             commits_behind=3,
             head_sha="abc123",
+            baseline_attempts=3,
             created_at=now,
             updated_at=now,
         )
@@ -117,6 +118,17 @@ class TestFork:
         assert fork.depth == 2
         assert fork.commits_ahead == 10
         assert fork.head_sha == "abc123"
+        assert fork.baseline_attempts == 3
+
+    def test_baseline_attempts_defaults_to_zero(self):
+        fork = Fork(
+            tracked_repo_id="repo-id",
+            github_id=1,
+            owner="dave",
+            full_name="dave/fork",
+            default_branch="main",
+        )
+        assert fork.baseline_attempts == 0
 
 
 # ── ClusterMember Tests ─────────────────────────────────────

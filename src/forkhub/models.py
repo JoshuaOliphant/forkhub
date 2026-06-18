@@ -117,6 +117,11 @@ class Fork(BaseModel):
     commits_ahead: int = Field(default=0)
     commits_behind: int = Field(default=0)
     head_sha: str | None = None
+    # Count of consecutive failed attempts to establish the head_sha baseline.
+    # A fork whose SHA fetch persistently fails keeps head_sha NULL, which would
+    # otherwise re-trigger a compare + head_sha fetch every sync forever. This
+    # counter caps those retries so we stop wasting API calls after N failures.
+    baseline_attempts: int = Field(default=0)
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
 
