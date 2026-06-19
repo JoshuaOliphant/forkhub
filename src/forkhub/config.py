@@ -131,19 +131,34 @@ class ForkHubSettings(BaseSettings):
     tracking: TrackingSettings = Field(default_factory=TrackingSettings)
 
 
-def _find_dotenv_file() -> Path | None:
-    """Search for a .env file: cwd, then each ancestor dir, then ~/.config/forkhub/.
+_PROJECT_ROOT_MARKERS = (".git", "pyproject.toml")
 
-    Walks upward from the current working directory to the filesystem root the
-    way git and ruff resolve their config, so forkhub run from a subdirectory of
-    a project still picks up the project's .env. Falls back to the documented
-    global location ~/.config/forkhub/.env. Returns the first match, or None.
+
+def _is_project_root(directory: Path) -> bool:
+    """Return True if the directory contains a project-root marker (.git/pyproject.toml)."""
+    return any((directory / marker).exists() for marker in _PROJECT_ROOT_MARKERS)
+
+
+def _find_dotenv_file() -> Path | None:
+    """Search for a .env file: cwd, then ancestors up to the project root, then ~/.config/.
+
+    Walks upward from the current working directory the way git and ruff resolve
+    their config, so forkhub run from a subdirectory of a project still picks up
+    the project's .env. The walk is bounded at the first directory containing a
+    project-root marker (.git or pyproject.toml): that directory is still
+    checked for a .env, but no directory above it is, so a stray ancestor .env
+    (e.g. ~/.env) can never be loaded as credentials by accident. Falls back to
+    the documented global location ~/.config/forkhub/.env. Returns the first
+    match, or None.
     """
     cwd = Path.cwd()
     for directory in (cwd, *cwd.parents):
         candidate = directory / ".env"
         if candidate.is_file():
             return candidate
+        # Stop once we've checked a project-root directory — do not climb above it.
+        if _is_project_root(directory):
+            break
 
     home_env = Path.home() / ".config" / "forkhub" / ".env"
     if home_env.is_file():
@@ -168,14 +183,18 @@ def _log_credential_sources() -> None:
         )
 
 
-def load_dotenv_file(dotenv_path: Path | None = None) -> None:
+def load_dotenv_file(dotenv_path: Path | None = None, log_credentials: bool = True) -> None:
     """Load a .env file into os.environ, then log which credentials were found.
 
-    With no explicit dotenv_path, searches cwd and ancestor dirs, then
-    ~/.config/forkhub/.env (see _find_dotenv_file), so forkhub run from any
-    directory still discovers credentials. Pass dotenv_path to load a specific
-    file. Existing env vars are NOT overridden — .env values only fill in gaps.
-    Called once at CLI startup before any settings are loaded.
+    With no explicit dotenv_path, searches cwd and ancestor dirs (bounded at the
+    project root), then ~/.config/forkhub/.env (see _find_dotenv_file), so
+    forkhub run from any directory still discovers credentials. Pass dotenv_path
+    to load a specific file. Existing env vars are NOT overridden — .env values
+    only fill in gaps. Called once at CLI startup before any settings are loaded.
+
+    Pass log_credentials=False to skip the credential-source log line entirely —
+    used by read-only invocations like `--version`/`--help` that never
+    authenticate, so they don't emit a spurious no-credentials WARNING.
     """
     from dotenv import load_dotenv
 
@@ -186,7 +205,8 @@ def load_dotenv_file(dotenv_path: Path | None = None) -> None:
     else:
         logger.debug("No .env file found in cwd, ancestors, or ~/.config/forkhub/")
 
-    _log_credential_sources()
+    if log_credentials:
+        _log_credential_sources()
 
 
 def _find_config_file() -> Path | None:

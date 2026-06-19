@@ -183,3 +183,103 @@ class TestDotenvDiscovery:
             load_dotenv_file()
 
         assert "No .env file found" in caplog.text
+
+    def test_walk_stops_at_project_root_marker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A .git/pyproject.toml marker bounds the walk; an ancestor .env above it is ignored."""
+        # tmp_path/.env sits ABOVE the project root and must NOT be picked up.
+        (tmp_path / ".env").write_text("GITHUB_TOKEN=stray-ancestor\n")
+        project = tmp_path / "project"
+        nested = project / "deep"
+        nested.mkdir(parents=True)
+        # Marker makes `project` the boundary; it has no .env of its own.
+        (project / "pyproject.toml").write_text("[project]\nname='x'\n")
+        monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.chdir(nested)
+
+        # Walk reaches the project root (boundary) without finding a .env and
+        # stops there, so the stray ancestor .env is never returned.
+        assert _find_dotenv_file() is None
+
+    def test_walk_includes_project_root_dotenv(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A .env in the project-root directory itself is found before the walk stops."""
+        project = tmp_path / "project"
+        nested = project / "deep"
+        nested.mkdir(parents=True)
+        (project / ".git").mkdir()
+        (project / ".env").write_text("GITHUB_TOKEN=at-root\n")
+        (tmp_path / ".env").write_text("GITHUB_TOKEN=stray-ancestor\n")
+        monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.chdir(nested)
+
+        assert _find_dotenv_file() == project / ".env"
+
+    def test_config_fallback_still_works_past_boundary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the bounded walk finds nothing, ~/.config/forkhub/.env is still used."""
+        fakehome = tmp_path / "fakehome"
+        config_dir = fakehome / ".config" / "forkhub"
+        config_dir.mkdir(parents=True)
+        config_env = config_dir / ".env"
+        config_env.write_text("GITHUB_TOKEN=from-config\n")
+        project = tmp_path / "project"
+        nested = project / "deep"
+        nested.mkdir(parents=True)
+        (project / "pyproject.toml").write_text("[project]\nname='x'\n")
+        monkeypatch.setenv("HOME", str(fakehome))
+        monkeypatch.chdir(nested)
+
+        assert _find_dotenv_file() == config_env
+
+
+# ===========================================================================
+# Test: credential logging is quiet for read-only invocations
+# ===========================================================================
+
+
+class TestCredentialLogging:
+    """The no-credentials WARNING should not fire for --version/--help runs."""
+
+    def test_no_creds_warns_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A normal credential-less run still emits the WARNING trace."""
+        fakehome = tmp_path / "fakehome"
+        fakehome.mkdir()
+        workdir = tmp_path / "barren"
+        workdir.mkdir()
+        monkeypatch.setenv("HOME", str(fakehome))
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_ACCESS_TOKEN", raising=False)
+        monkeypatch.chdir(workdir)
+
+        with caplog.at_level(logging.DEBUG, logger="forkhub.config"):
+            load_dotenv_file()
+
+        assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+    def test_log_credentials_false_suppresses_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """log_credentials=False skips the no-creds WARNING (used by --version/--help)."""
+        fakehome = tmp_path / "fakehome"
+        fakehome.mkdir()
+        workdir = tmp_path / "barren"
+        workdir.mkdir()
+        monkeypatch.setenv("HOME", str(fakehome))
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_ACCESS_TOKEN", raising=False)
+        monkeypatch.chdir(workdir)
+
+        with caplog.at_level(logging.DEBUG, logger="forkhub.config"):
+            load_dotenv_file(log_credentials=False)
+
+        assert not any(r.levelno == logging.WARNING for r in caplog.records)
