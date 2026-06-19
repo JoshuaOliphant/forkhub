@@ -354,8 +354,14 @@ class SyncService:
                             # the fork actually lacks a baseline (prior_sha is
                             # None). A SHA fetch failure on an already-baselined
                             # fork doesn't erode the baseline, so it must not
-                            # consume the cap.
-                            if prior_sha is None:
+                            # consume the cap. Only increment while below the
+                            # cap: a capped fork seeing real pushed_at advances
+                            # still compares (via `changed`), but the counter
+                            # must never grow past max_baseline_attempts.
+                            if (
+                                prior_sha is None
+                                and baseline_attempts < self._settings.max_baseline_attempts
+                            ):
                                 existing_row["baseline_attempts"] = baseline_attempts + 1
                         if diverged:
                             result.changed_forks.append(fork_info.full_name)

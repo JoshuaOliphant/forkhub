@@ -228,13 +228,23 @@ class Database:
 
         Table and column names are internal constants (never user input), so
         the f-string interpolation here carries no injection risk.
+
+        The PRAGMA-check-then-ALTER pattern is not atomic: a second process can
+        add the column between our check and our ALTER, leaving the loser with a
+        "duplicate column name" OperationalError. That specific race outcome is
+        swallowed (the column ends up present either way); any other
+        OperationalError is re-raised.
         """
         cursor = await self._db.execute(f"PRAGMA table_info({table})")
         rows = await cursor.fetchall()
         existing = {row["name"] for row in rows}
         if column not in existing:
-            await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-            await self._db.commit()
+            try:
+                await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                await self._db.commit()
+            except aiosqlite.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     async def _load_sqlite_vec(self) -> None:
         """Try to load the sqlite-vec extension for vector similarity."""

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import aiosqlite
+import pytest
 
 from forkhub.database import Database
 from tests.stubs import (
@@ -95,6 +96,52 @@ class TestMigration:
             assert "baseline_attempts" in cols
         finally:
             await db2.close()
+
+    async def test_concurrent_add_column_race_does_not_raise(self, tmp_path, monkeypatch):
+        """If a concurrent process adds the column between our check and our ALTER,
+        the losing process sees a duplicate-column OperationalError. The migration
+        must swallow that specific case rather than crashing on startup."""
+        # Legacy DB missing the column.
+        db_path = tmp_path / "race.db"
+        async with aiosqlite.connect(str(db_path)) as conn:
+            await conn.execute(_LEGACY_FORKS_DDL)
+            await conn.commit()
+
+        db = Database(str(db_path))
+        # connect() runs _migrate(), which has already added baseline_attempts —
+        # this stands in for the process that won the race.
+        await db.connect()
+        try:
+            real_execute = db._db.execute
+
+            async def fake_execute(sql, *args, **kwargs):
+                if sql.startswith("PRAGMA table_info"):
+                    # Pretend the column is not there yet (the race window).
+                    return await real_execute("PRAGMA table_info(nonexistent_table)")
+                return await real_execute(sql, *args, **kwargs)
+
+            monkeypatch.setattr(db._db, "execute", fake_execute)
+
+            # The losing process re-attempts the ALTER and must not raise.
+            await db._add_column_if_missing(
+                "forks", "baseline_attempts", "INTEGER NOT NULL DEFAULT 0"
+            )
+        finally:
+            await db.close()
+
+    async def test_add_column_reraises_unrelated_operational_error(self, tmp_path):
+        """Only the duplicate-column race is swallowed; other OperationalErrors
+        (e.g. an ALTER against a missing table) still propagate."""
+        db_path = tmp_path / "broken.db"
+        db = Database(str(db_path))
+        await db.connect()
+        try:
+            with pytest.raises(aiosqlite.OperationalError):
+                await db._add_column_if_missing(
+                    "no_such_table", "col", "INTEGER NOT NULL DEFAULT 0"
+                )
+        finally:
+            await db.close()
 
 
 class TestForkCRUD:

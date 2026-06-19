@@ -1043,9 +1043,7 @@ class TestLastPushedAtChangeDetection:
         assert row is not None
         assert row["baseline_attempts"] == 2
 
-    async def test_baseline_cap_stops_wasting_api_calls(
-        self, db: Database, settings: SyncSettings
-    ):
+    async def test_baseline_cap_stops_wasting_api_calls(self, db: Database, settings: SyncSettings):
         """Once baseline_attempts hits the cap, a NULL-baseline fork with an
         unchanged pushed_at stops being compared/SHA-fetched every sync — the
         2-calls-forever residual is bounded (forkhub-lgh)."""
@@ -1099,6 +1097,33 @@ class TestLastPushedAtChangeDetection:
 
         # pushed_at advanced → compare fires despite the cap.
         assert [c["head"] for c in provider.compare_calls] == [f"{self._FORK_OWNER}:main"]
+
+    async def test_capped_fork_with_real_changes_does_not_exceed_cap(
+        self, db: Database, settings: SyncSettings
+    ):
+        """A capped NULL-baseline fork that keeps seeing real pushed_at advances
+        (compare fires, SHA fetch keeps failing) must not grow baseline_attempts
+        past the cap — the counter only increments while below the cap."""
+        cap = settings.max_baseline_attempts
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=None,
+            last_pushed_at=_ACTIVE_DATE - timedelta(days=14),  # stale → pushed_at advances
+            baseline_attempts=cap,
+        )
+        # Each sync sees a newer pushed_at; SHA fetch always fails (none configured).
+        for offset in (10, 7, 3):
+            provider = self._make_provider(last_pushed_at=_ACTIVE_DATE - timedelta(days=offset))
+            sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+            await sync_service.sync_repo(repo.id)
+            row = await db.get_fork_by_name(self._FORK_FULL)
+            assert row is not None
+            assert row["baseline_attempts"] == cap
 
     async def test_baseline_attempts_resets_when_sha_finally_arrives(
         self, db: Database, settings: SyncSettings
