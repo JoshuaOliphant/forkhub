@@ -1,9 +1,9 @@
 {
   "feature": "explore-web-wiring",
   "request": "forkhub-87l",
-  "state": "INIT",
+  "state": "SPEC",
   "driver": "stop-hook",
-  "iteration": 1,
+  "iteration": 2,
   "budgets": {
     "max_iterations": 50,
     "max_attempts_per_task": 3,
@@ -18,8 +18,13 @@
       "at": "2026-06-19T22:14:47+00:00",
       "to": "INIT",
       "reason": "initialized"
+    },
+    {
+      "at": "2026-06-19T22:16:07+00:00",
+      "to": "SPEC",
+      "reason": "environment confirmed, branch + tooling ready"
     }
   ],
   "started": "2026-06-19T22:14:47+00:00",
-  "updated": "2026-06-19T22:16:07+00:00"
+  "updated": "2026-06-19T22:16:34+00:00"
 }
