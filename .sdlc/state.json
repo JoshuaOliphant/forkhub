@@ -1,9 +1,9 @@
 {
   "feature": "explore-web-wiring",
   "request": "forkhub-87l",
-  "state": "SPEC",
+  "state": "PLAN",
   "driver": "stop-hook",
-  "iteration": 2,
+  "iteration": 3,
   "budgets": {
     "max_iterations": 50,
     "max_attempts_per_task": 3,
@@ -12,7 +12,7 @@
   "in_flight": [],
   "wait_ticks": 0,
   "attempts": {},
-  "last_progress_iteration": 1,
+  "last_progress_iteration": 2,
   "history": [
     {
       "at": "2026-06-19T22:14:47+00:00",
@@ -23,8 +23,13 @@
       "at": "2026-06-19T22:16:07+00:00",
       "to": "SPEC",
       "reason": "environment confirmed, branch + tooling ready"
+    },
+    {
+      "at": "2026-06-19T22:17:46+00:00",
+      "to": "PLAN",
+      "reason": "spec written with 13 numbered AC"
     }
   ],
   "started": "2026-06-19T22:14:47+00:00",
-  "updated": "2026-06-19T22:16:34+00:00"
+  "updated": "2026-06-19T22:18:38+00:00"
 }

@@ -3,3 +3,4 @@
 {"at": "2026-06-19T22:17:45+00:00", "iteration": 2, "state": "SPEC", "decision": "forkhub web defaults host 127.0.0.1 port 8000", "why": "safe local default; overridable", "reversible": true}
 {"at": "2026-06-19T22:17:46+00:00", "iteration": 2, "state": "SPEC", "decision": "Move dev fixture to tests/fixtures/explore_sample.json, reused by tests", "why": "removes inline fixture from template, single source for dev+tests", "reversible": true}
 {"at": "2026-06-19T22:17:46+00:00", "iteration": 2, "state": "SPEC", "decision": "Drop per-fork cost from inspector (Signal has no cost field)", "why": "fixture invented cost_usd; real model lacks it", "reversible": true}
+{"at": "2026-06-19T22:19:44+00:00", "iteration": 3, "state": "PLAN", "decision": "Embodied Architect inline (no subagent) for PLAN", "why": "deep existing context of this codebase + detailed spec; avoids async-agent loop complexity", "reversible": true}
