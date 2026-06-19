@@ -212,6 +212,67 @@ class TestDigestGeneration:
         assert f"## Repository {repo_in_db['full_name']}" in digest.body
         assert repo_in_db["id"] not in digest.body
 
+    async def test_groups_multiple_repos_with_single_batch_lookup(
+        self,
+        db: Database,
+        stub_backend: StubNotificationBackend,
+    ):
+        """A global digest spanning several repos resolves all headers via one batch query."""
+        repo_a = make_tracked_repo(owner="alice", name="proj", full_name="alice/proj", github_id=1)
+        repo_b = make_tracked_repo(owner="bob", name="proj", full_name="bob/proj", github_id=2)
+        await db.insert_tracked_repo(repo_a)
+        await db.insert_tracked_repo(repo_b)
+        fork_a = make_fork(repo_a["id"], github_id=9001, owner="ca", full_name="ca/proj")
+        fork_b = make_fork(repo_b["id"], github_id=9002, owner="cb", full_name="cb/proj")
+        await db.insert_fork(fork_a)
+        await db.insert_fork(fork_b)
+        await db.insert_signal(
+            make_signal(fork_a["id"], repo_a["id"], significance=8, summary="A change")
+        )
+        await db.insert_signal(
+            make_signal(fork_b["id"], repo_b["id"], significance=8, summary="B change")
+        )
+
+        calls: list[list[str]] = []
+        original = db.get_tracked_repos
+
+        async def spy(ids: list[str]) -> dict:
+            calls.append(list(ids))
+            return await original(ids)
+
+        db.get_tracked_repos = spy  # type: ignore[method-assign]
+
+        config = _make_pydantic_digest_config(tracked_repo_id=None, min_significance=5)
+        svc = DigestService(db, [stub_backend])
+        digest = await svc.generate_digest(config)
+
+        assert "## Repository alice/proj" in digest.body
+        assert "## Repository bob/proj" in digest.body
+        # The N+1 fix means exactly one batch lookup, regardless of repo count.
+        assert len(calls) == 1
+        assert set(calls[0]) == {repo_a["id"], repo_b["id"]}
+
+    async def test_raises_when_repo_missing_violates_fk_invariant(
+        self,
+        db: Database,
+        stub_backend: StubNotificationBackend,
+        repo_in_db: dict,
+        fork_in_db: dict,
+    ):
+        """If a signal's repo is unexpectedly absent, generation raises (survives python -O)."""
+        signal = make_signal(fork_in_db["id"], repo_in_db["id"], significance=8, summary="Orphaned")
+        await db.insert_signal(signal)
+
+        async def empty_batch(ids: list[str]) -> dict:
+            return {}
+
+        db.get_tracked_repos = empty_batch  # type: ignore[method-assign]
+
+        config = _make_pydantic_digest_config(tracked_repo_id=repo_in_db["id"], min_significance=5)
+        svc = DigestService(db, [stub_backend])
+        with pytest.raises(LookupError, match=repo_in_db["id"]):
+            await svc.generate_digest(config)
+
 
 # ---------------------------------------------------------------------------
 # generate_and_deliver convenience method tests

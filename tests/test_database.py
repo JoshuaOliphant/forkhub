@@ -8,6 +8,7 @@ from tests.stubs import (
     make_cluster,
     make_cluster_member,
     make_signal,
+    make_tracked_repo,
 )
 
 # ---------------------------------------------------------------------------
@@ -22,6 +23,35 @@ class TestConnection:
         await db.connect()
         await db.connect()  # should be a no-op
         await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Tracked repo batch lookup
+# ---------------------------------------------------------------------------
+
+
+class TestGetTrackedReposBatch:
+    async def test_returns_dict_keyed_by_id(self, db: Database):
+        """get_tracked_repos fetches multiple repos in one query, keyed by id."""
+        repo_a = make_tracked_repo(owner="alice", name="proj", full_name="alice/proj", github_id=1)
+        repo_b = make_tracked_repo(owner="bob", name="proj", full_name="bob/proj", github_id=2)
+        await db.insert_tracked_repo(repo_a)
+        await db.insert_tracked_repo(repo_b)
+
+        result = await db.get_tracked_repos([repo_a["id"], repo_b["id"]])
+
+        assert set(result.keys()) == {repo_a["id"], repo_b["id"]}
+        assert result[repo_a["id"]]["full_name"] == "alice/proj"
+        assert result[repo_b["id"]]["full_name"] == "bob/proj"
+
+    async def test_empty_ids_returns_empty_dict(self, db: Database):
+        """An empty id list short-circuits to an empty dict without querying."""
+        assert await db.get_tracked_repos([]) == {}
+
+    async def test_missing_ids_omitted(self, db: Database, repo_in_db: dict):
+        """Unknown ids are simply absent from the result mapping."""
+        result = await db.get_tracked_repos([repo_in_db["id"], "does-not-exist"])
+        assert set(result.keys()) == {repo_in_db["id"]}
 
 
 # ---------------------------------------------------------------------------
