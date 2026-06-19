@@ -272,6 +272,21 @@ class Database:
         cursor = await self._db.execute("SELECT * FROM tracked_repos WHERE id = ?", (repo_id,))
         return await self._fetchone(cursor)
 
+    async def get_tracked_repos(self, ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Fetch many tracked repos in one query, keyed by id.
+
+        Avoids the N+1 pattern of calling get_tracked_repo per id. Unknown ids
+        are simply absent from the result. An empty id list short-circuits.
+        """
+        if not ids:
+            return {}
+        placeholders = ", ".join("?" for _ in ids)
+        cursor = await self._db.execute(
+            f"SELECT * FROM tracked_repos WHERE id IN ({placeholders})", ids
+        )
+        rows = await self._fetchall(cursor)
+        return {row["id"]: row for row in rows}
+
     async def get_tracked_repo_by_name(self, full_name: str) -> dict[str, Any] | None:
         cursor = await self._db.execute(
             "SELECT * FROM tracked_repos WHERE full_name = ?", (full_name,)

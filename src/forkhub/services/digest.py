@@ -86,8 +86,17 @@ class DigestService:
                 repo_id = sig["tracked_repo_id"]
                 by_repo.setdefault(repo_id, []).append(sig)
 
+            # Resolve all repo UUIDs to their human full_names in one query,
+            # avoiding an N+1 lookup inside the grouping loop below.
+            repos_by_id = await self._db.get_tracked_repos(list(by_repo))
+
             for repo_id, sigs in by_repo.items():
-                body_lines.append(f"## Repository {repo_id}")
+                # Signals carry a FK to tracked_repos, so the repo should always
+                # exist. Guard explicitly (not assert) so it survives python -O.
+                repo = repos_by_id.get(repo_id)
+                if repo is None:
+                    raise LookupError(f"tracked_repo_id {repo_id} referenced by signal not found")
+                body_lines.append(f"## Repository {repo['full_name']}")
                 body_lines.append("")
                 for sig in sigs:
                     cat = sig["category"]
