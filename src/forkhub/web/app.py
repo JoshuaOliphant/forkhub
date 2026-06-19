@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from forkhub import otel
 from forkhub.web.data import build_explore_data
 
 if TYPE_CHECKING:
@@ -61,10 +62,12 @@ def create_app(hub: ForkHub | None = None) -> FastAPI:
 
     @app.get("/{owner}/{repo}", response_class=HTMLResponse)
     async def explore(request: Request, owner: str, repo: str):
-        try:
-            data = await build_explore_data(request.app.state.hub, owner, repo)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return templates.TemplateResponse(request, "explore.html", {"data": data})
+        with otel.span("web.explore", repo=f"{owner}/{repo}") as s:
+            try:
+                data = await build_explore_data(request.app.state.hub, owner, repo)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            s.set_attribute("fork_count", data["repo"]["fork_count"])
+            return templates.TemplateResponse(request, "explore.html", {"data": data})
 
     return app

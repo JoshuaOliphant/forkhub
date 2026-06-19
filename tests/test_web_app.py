@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import httpx
@@ -92,3 +93,33 @@ class TestExploreApp:
         app = create_app(hub)
         async with app.router.lifespan_context(app):
             assert app.state.hub is hub
+
+    async def test_explore_route_emits_span_with_labels(
+        self, hub: ForkHub, db: Database, monkeypatch
+    ):
+        """The render path opens a 'web.explore' span carrying repo + fork_count (AC-13)."""
+        import forkhub.otel as otel
+
+        await _seed_repo(db)
+        recorded: list[dict] = []
+
+        @contextmanager
+        def fake_span(name, **attrs):
+            rec = {"name": name, "attrs": dict(attrs)}
+            recorded.append(rec)
+
+            class _S:
+                def set_attribute(self, k, v):
+                    rec["attrs"][k] = v
+
+            yield _S()
+
+        monkeypatch.setattr(otel, "span", fake_span)
+        app = create_app(hub)
+        app.state.hub = hub
+        async with _client(app) as client:
+            await client.get("/torvalds/linux")
+
+        assert recorded and recorded[0]["name"] == "web.explore"
+        assert recorded[0]["attrs"]["repo"] == "torvalds/linux"
+        assert recorded[0]["attrs"]["fork_count"] == 1
