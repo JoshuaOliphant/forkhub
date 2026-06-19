@@ -71,6 +71,7 @@ function clearDiffZoom() {
 const ICON_ANALYZING = svgIcon('M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4', 12);
 const ICON_PENDING = svgIcon('M12 6v6l4 2M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z', 12);
 const ICON_WHY = svgIcon('M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1h6c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z', 12);
+const CLOSE_BTN = `<button class="close" aria-label="Close inspector">${svgIcon('M18 6 6 18M6 6l12 12', 18)}</button>`;
 
 function shaLink(gh, sha) {
   return sha ? `<a class="sha mono" href="${esc(gh.commit(sha))}" target="_blank" rel="noopener">#${esc(sha)}</a>` : '';
@@ -84,7 +85,7 @@ function populateFork(insp, f) {
     `<a class="who" href="${esc(gh.repo)}" target="_blank" rel="noopener">${esc(f.owner)}/${esc(DATA.repo.name)}${EXT}</a>` +
     shaLink(gh, f.sha) +
     `</div>` +
-    `<button class="close" aria-label="Close inspector">${svgIcon('M18 6 6 18M6 6l12 12', 18)}</button>`;
+    CLOSE_BTN;
 
   const body = insp.querySelector('.insp-body');
   if (f.live) {
@@ -111,7 +112,7 @@ function populateCluster(insp, c) {
   insp.querySelector('.insp-head').innerHTML =
     `<div class="av" style="background:color-mix(in oklch, ${col} 20%, transparent);color:${col}">${svgIcon('M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5', 18)}</div>` +
     `<div><div class="who">${esc(c.label)}</div><div class="sha">${resolved.length} forks converged</div></div>` +
-    `<button class="close" aria-label="Close inspector">${svgIcon('M18 6 6 18M6 6l12 12', 18)}</button>`;
+    CLOSE_BTN;
   const rows = resolved
     .map((f) => {
       const gh = ghUrls(f);
