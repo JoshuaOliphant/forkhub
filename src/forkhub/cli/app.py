@@ -18,6 +18,7 @@ from forkhub.cli.track_cmd import (
     track_command,
     untrack_command,
 )
+from forkhub.cli.web_cmd import web_command
 
 app = typer.Typer(
     name="forkhub",
@@ -37,6 +38,7 @@ app.command("inspect")(inspect_command)
 app.command("clusters")(clusters_command)
 app.command("sync")(sync_command)
 app.command("digest")(digest_command)
+app.command("web")(web_command)
 
 # Register sub-apps (grouped commands)
 app.add_typer(config_app, name="config")
