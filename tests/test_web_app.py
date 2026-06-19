@@ -122,4 +122,4 @@ class TestExploreApp:
 
         assert recorded and recorded[0]["name"] == "web.explore"
         assert recorded[0]["attrs"]["repo"] == "torvalds/linux"
-        assert recorded[0]["attrs"]["fork_count"] == 1
+        assert recorded[0]["attrs"]["fork_count"] == "1"
