@@ -27,7 +27,7 @@ const EXT = svgIcon('M7 17 17 7M9 7h8v8', 11); // external-link arrow
 // forks link correctly instead of being reconstructed from the upstream name.
 function ghUrls(fork) {
   const repo = fork.html_url || '';
-  return { repo, commit: (sha) => (sha ? `${repo}/commit/${esc(sha)}` : repo) };
+  return { repo, commit: (sha) => (sha ? `${repo}/commit/${sha}` : repo) };
 }
 
 const initial = (owner) => esc((owner?.[0] || '?').toUpperCase());
@@ -35,7 +35,7 @@ const avatar = (owner) => `<div class="av">${initial(owner)}</div>`;
 
 function chip(cat, withScore = null) {
   const col = CATCOLOR(cat); // cat is a known SignalCategory enum value (server-controlled)
-  const label = withScore != null ? `${esc(cat)} · ${withScore}/10` : esc(cat);
+  const label = withScore != null ? `${esc(cat)} · ${esc(withScore)}/10` : esc(cat);
   const icon = ICONS[cat] ? svgIcon(ICONS[cat]) : '';
   return `<span class="chip" style="color:${col};background:color-mix(in oklch, ${col} 15%, transparent);box-shadow:inset 0 0 0 1px color-mix(in oklch, ${col} 32%, transparent)">${icon}${label}</span>`;
 }
@@ -73,7 +73,7 @@ const ICON_PENDING = svgIcon('M12 6v6l4 2M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20
 const ICON_WHY = svgIcon('M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1h6c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z', 12);
 
 function shaLink(gh, sha) {
-  return sha ? `<a class="sha mono" href="${gh.commit(sha)}" target="_blank" rel="noopener">#${esc(sha)}</a>` : '';
+  return sha ? `<a class="sha mono" href="${esc(gh.commit(sha))}" target="_blank" rel="noopener">#${esc(sha)}</a>` : '';
 }
 
 function populateFork(insp, f) {
@@ -81,7 +81,7 @@ function populateFork(insp, f) {
   const gh = ghUrls(f);
   insp.querySelector('.insp-head').innerHTML =
     `${avatar(f.owner)}<div class="who-block">` +
-    `<a class="who" href="${gh.repo}" target="_blank" rel="noopener">${esc(f.owner)}/${esc(DATA.repo.name)}${EXT}</a>` +
+    `<a class="who" href="${esc(gh.repo)}" target="_blank" rel="noopener">${esc(f.owner)}/${esc(DATA.repo.name)}${EXT}</a>` +
     shaLink(gh, f.sha) +
     `</div>` +
     `<button class="close" aria-label="Close inspector">${svgIcon('M18 6 6 18M6 6l12 12', 18)}</button>`;
@@ -118,7 +118,7 @@ function populateCluster(insp, c) {
       const right = f.signal ? chip(f.signal.category, f.signal.significance) : mutedChip('no signal');
       return (
         `<div class="frow"><div class="av">${initial(f.owner)}</div><div class="meta">` +
-        `<a class="who" href="${gh.repo}" target="_blank" rel="noopener">${esc(f.owner)}${EXT}</a>` +
+        `<a class="who" href="${esc(gh.repo)}" target="_blank" rel="noopener">${esc(f.owner)}${EXT}</a>` +
         shaLink(gh, f.sha) +
         `</div><div>${right}</div></div>`
       );
