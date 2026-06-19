@@ -94,8 +94,6 @@ a { color: var(--accent); text-decoration: none; }
 }
 .btn-primary { background: var(--primary); color: var(--ink); box-shadow: 0 0 24px oklch(0.580 0.185 262 / 0.3); }
 .btn-primary:hover { background: var(--primary-bright); }
-.btn-ghost { box-shadow: inset 0 0 0 1px var(--line); }
-.btn-ghost:hover { background: var(--surface); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn svg { width: 16px; height: 16px; }
 
@@ -150,18 +148,8 @@ a { color: var(--accent); text-decoration: none; }
   100% { r: 20; stroke-opacity: 0; }
 }
 
-.overlay { position: absolute; inset: 0; pointer-events: none; }
-.node-label {
-  position: absolute; transform: translate(-50%, 8px); font-family: var(--font-mono); font-size: 11px;
-  color: var(--muted); white-space: nowrap; opacity: 0; transition: opacity 0.18s var(--ease); padding-top: 2px;
-}
-.node-label.show { opacity: 1; }
-.cluster-tag {
-  position: absolute; transform: translate(-50%, -50%); font-family: var(--font-mono); font-size: 11px; font-weight: 500;
-  background: oklch(0.130 0.030 273 / 0.82); padding: 3px 10px; border-radius: 999px; white-space: nowrap; backdrop-filter: blur(2px);
-  pointer-events: auto; cursor: pointer; transition: transform 0.15s var(--ease);
-}
-.cluster-tag:hover { transform: translate(-50%, -50%) scale(1.04); }
+/* SVG node labels fade via this transition; positioning/font are set inline in JS. */
+.node-label { transition: opacity 0.18s var(--ease); }
 
 .legend { position: absolute; left: 16px; bottom: 14px; display: flex; flex-wrap: wrap; gap: 6px 14px; max-width: 60%; }
 .legend .item { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
@@ -233,13 +221,6 @@ a.who:hover svg { opacity: 1; }
 .frow .meta .sha { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
 .frow .sum { color: var(--muted); font-size: 13.5px; flex: 1; }
 
-.empty { display: grid; place-items: center; height: 100%; }
-.empty .card { text-align: center; max-width: 420px; padding: 40px; }
-.empty h2 { font-family: var(--font-display); font-weight: 600; font-size: 22px; margin-bottom: 10px; }
-.empty p { color: var(--muted); margin-bottom: 22px; }
-
-.skeleton .sk { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 37%, var(--surface) 63%); background-size: 400% 100%; animation: shimmer 1.4s linear infinite; border-radius: 999px; }
-@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
 @media (max-width: 1024px) { :root { --rail-w: 60px; } .rail a span { display: none; } }
 @media (max-width: 880px) { :root { --inspector-w: 100%; } }
