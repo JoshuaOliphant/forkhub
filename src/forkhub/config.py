@@ -75,6 +75,10 @@ class SyncSettings(BaseSettings):
     polling_interval: str = "6h"
     max_forks_per_repo: int = 5000
     max_github_requests_per_hour: int = 4000
+    # Cap on consecutive failed head_sha baseline attempts. Once a NULL-baseline
+    # fork has failed its SHA fetch this many times, we stop retrying — no more
+    # compare + head_sha calls every sync for a fork whose SHA never arrives.
+    max_baseline_attempts: int = 5
 
     model_config = SettingsConfigDict(env_prefix="FORKHUB_SYNC_")
 

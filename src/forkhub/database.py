@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS forks (
     commits_ahead INTEGER DEFAULT 0,
     commits_behind INTEGER DEFAULT 0,
     head_sha TEXT,
+    baseline_attempts INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -181,6 +182,7 @@ class Database:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._create_schema()
+        await self._migrate()
         await self._load_sqlite_vec()
 
     async def close(self) -> None:
@@ -208,6 +210,41 @@ class Database:
 
     async def _create_schema(self) -> None:
         await self._db.executescript(_SCHEMA_SQL)
+
+    async def _migrate(self) -> None:
+        """Apply additive schema migrations to pre-existing databases.
+
+        `_create_schema` uses CREATE TABLE IF NOT EXISTS, so a column added to
+        the schema only lands on fresh databases. Existing databases need an
+        ALTER TABLE to gain the column. These migrations are strictly additive
+        (ADD COLUMN with a default) so they are safe to run on every connect.
+        """
+        await self._add_column_if_missing(
+            "forks", "baseline_attempts", "INTEGER NOT NULL DEFAULT 0"
+        )
+
+    async def _add_column_if_missing(self, table: str, column: str, decl: str) -> None:
+        """Add `column` to `table` if it is not already present.
+
+        Table and column names are internal constants (never user input), so
+        the f-string interpolation here carries no injection risk.
+
+        The PRAGMA-check-then-ALTER pattern is not atomic: a second process can
+        add the column between our check and our ALTER, leaving the loser with a
+        "duplicate column name" OperationalError. That specific race outcome is
+        swallowed (the column ends up present either way); any other
+        OperationalError is re-raised.
+        """
+        cursor = await self._db.execute(f"PRAGMA table_info({table})")
+        rows = await cursor.fetchall()
+        existing = {row["name"] for row in rows}
+        if column not in existing:
+            try:
+                await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                await self._db.commit()
+            except aiosqlite.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     async def _load_sqlite_vec(self) -> None:
         """Try to load the sqlite-vec extension for vector similarity."""
@@ -358,12 +395,12 @@ class Database:
                 (id, tracked_repo_id, github_id, owner, full_name,
                  default_branch, description, vitality, stars, stars_previous,
                  parent_fork_id, depth, last_pushed_at, commits_ahead,
-                 commits_behind, head_sha, created_at, updated_at)
+                 commits_behind, head_sha, baseline_attempts, created_at, updated_at)
             VALUES
                 (:id, :tracked_repo_id, :github_id, :owner, :full_name,
                  :default_branch, :description, :vitality, :stars, :stars_previous,
                  :parent_fork_id, :depth, :last_pushed_at, :commits_ahead,
-                 :commits_behind, :head_sha, :created_at, :updated_at)
+                 :commits_behind, :head_sha, :baseline_attempts, :created_at, :updated_at)
             """,
             fork,
         )
@@ -400,6 +437,7 @@ class Database:
                 parent_fork_id = :parent_fork_id, depth = :depth,
                 last_pushed_at = :last_pushed_at, commits_ahead = :commits_ahead,
                 commits_behind = :commits_behind, head_sha = :head_sha,
+                baseline_attempts = :baseline_attempts,
                 updated_at = :updated_at
             WHERE id = :id
             """,

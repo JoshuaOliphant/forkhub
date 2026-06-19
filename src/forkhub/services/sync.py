@@ -286,12 +286,18 @@ class SyncService:
                 # row whose SHA fetch SUCCEEDS is populated and never
                 # re-triggers this branch — zero extra calls on later syncs
                 # (the /forks listing stays the only bulk call). A row whose
-                # SHA fetch PERSISTENTLY FAILS stays NULL and keeps re-comparing
-                # every sync (an accepted residual, see forkhub-lgh) — but it no
-                # longer re-triggers the analyzer: the compare-success path
-                # below only reports the fork as changed when there is real
-                # divergence evidence.
-                needs_baseline = existing_row.get("head_sha") is None
+                # SHA fetch PERSISTENTLY FAILS stays NULL; without a bound it
+                # would keep re-comparing every sync forever (forkhub-lgh). The
+                # baseline_attempts counter caps those retries: once it reaches
+                # max_baseline_attempts we stop trying to baseline this fork, so
+                # the 2-call/sync residual is paid at most N times, not forever.
+                # A real change (pushed_at advanced) still forces a compare via
+                # `changed`, regardless of the cap.
+                baseline_attempts = existing_row.get("baseline_attempts") or 0
+                needs_baseline = (
+                    existing_row.get("head_sha") is None
+                    and baseline_attempts < self._settings.max_baseline_attempts
+                )
 
                 # Update stars (always)
                 old_stars = existing_row["stars"]
@@ -327,6 +333,10 @@ class SyncService:
                         new_sha = await self._fetch_head_sha(fork_info)
                         if new_sha is not None:
                             existing_row["head_sha"] = new_sha
+                            # Baseline established — clear the failure counter so
+                            # a fork that recovers after some failures starts
+                            # fresh next time it needs baselining.
+                            existing_row["baseline_attempts"] = 0
                             # The SHA is the authoritative change-detector:
                             # report only when it actually moved.
                             diverged = new_sha != prior_sha
@@ -340,6 +350,19 @@ class SyncService:
                             # every sync. commits_ahead is persisted below, so
                             # the next sync compares against this run's value.
                             diverged = changed or compare_result.ahead_by != prior_ahead
+                            # Count this as a failed baseline attempt only when
+                            # the fork actually lacks a baseline (prior_sha is
+                            # None). A SHA fetch failure on an already-baselined
+                            # fork doesn't erode the baseline, so it must not
+                            # consume the cap. Only increment while below the
+                            # cap: a capped fork seeing real pushed_at advances
+                            # still compares (via `changed`), but the counter
+                            # must never grow past max_baseline_attempts.
+                            if (
+                                prior_sha is None
+                                and baseline_attempts < self._settings.max_baseline_attempts
+                            ):
+                                existing_row["baseline_attempts"] = baseline_attempts + 1
                         if diverged:
                             result.changed_forks.append(fork_info.full_name)
 

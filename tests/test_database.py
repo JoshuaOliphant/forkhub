@@ -3,10 +3,14 @@
 
 from __future__ import annotations
 
+import aiosqlite
+import pytest
+
 from forkhub.database import Database
 from tests.stubs import (
     make_cluster,
     make_cluster_member,
+    make_fork,
     make_signal,
     make_tracked_repo,
 )
@@ -23,6 +27,138 @@ class TestConnection:
         await db.connect()
         await db.connect()  # should be a no-op
         await db.close()
+
+
+# Legacy forks table DDL — the schema before baseline_attempts was added.
+# Used to verify the additive migration backfills the column on existing DBs.
+_LEGACY_FORKS_DDL = """
+CREATE TABLE forks (
+    id TEXT PRIMARY KEY,
+    tracked_repo_id TEXT NOT NULL,
+    github_id INTEGER UNIQUE NOT NULL,
+    owner TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    default_branch TEXT NOT NULL DEFAULT 'main',
+    description TEXT,
+    vitality TEXT NOT NULL DEFAULT 'unknown',
+    stars INTEGER NOT NULL DEFAULT 0,
+    stars_previous INTEGER NOT NULL DEFAULT 0,
+    parent_fork_id TEXT,
+    depth INTEGER NOT NULL DEFAULT 1,
+    last_pushed_at TEXT,
+    commits_ahead INTEGER DEFAULT 0,
+    commits_behind INTEGER DEFAULT 0,
+    head_sha TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+
+class TestMigration:
+    async def test_adds_baseline_attempts_to_legacy_db(self, tmp_path):
+        """A pre-existing database whose forks table predates baseline_attempts
+        gains the column (defaulting to 0) when reopened — without dropping the
+        legacy row's data."""
+        db_path = tmp_path / "legacy.db"
+        async with aiosqlite.connect(str(db_path)) as conn:
+            await conn.execute(_LEGACY_FORKS_DDL)
+            await conn.execute(
+                "INSERT INTO forks (id, tracked_repo_id, github_id, owner, full_name) "
+                "VALUES ('f1', 'r1', 1, 'dave', 'dave/fork')"
+            )
+            await conn.commit()
+
+        db = Database(str(db_path))
+        await db.connect()
+        try:
+            cursor = await db._db.execute("PRAGMA table_info(forks)")
+            cols = {row["name"] for row in await cursor.fetchall()}
+            assert "baseline_attempts" in cols
+            row = await db.get_fork("f1")
+            assert row is not None
+            assert row["baseline_attempts"] == 0
+        finally:
+            await db.close()
+
+    async def test_migration_is_idempotent(self, tmp_path):
+        """Reopening a database that already has baseline_attempts is a no-op —
+        the migration must not error when the column already exists."""
+        db_path = tmp_path / "current.db"
+        db = Database(str(db_path))
+        await db.connect()
+        await db.close()
+        # Second connect: schema already current, migration should skip cleanly.
+        db2 = Database(str(db_path))
+        await db2.connect()
+        try:
+            cursor = await db2._db.execute("PRAGMA table_info(forks)")
+            cols = {row["name"] for row in await cursor.fetchall()}
+            assert "baseline_attempts" in cols
+        finally:
+            await db2.close()
+
+    async def test_concurrent_add_column_race_does_not_raise(self, tmp_path, monkeypatch):
+        """If a concurrent process adds the column between our check and our ALTER,
+        the losing process sees a duplicate-column OperationalError. The migration
+        must swallow that specific case rather than crashing on startup."""
+        # Legacy DB missing the column.
+        db_path = tmp_path / "race.db"
+        async with aiosqlite.connect(str(db_path)) as conn:
+            await conn.execute(_LEGACY_FORKS_DDL)
+            await conn.commit()
+
+        db = Database(str(db_path))
+        # connect() runs _migrate(), which has already added baseline_attempts —
+        # this stands in for the process that won the race.
+        await db.connect()
+        try:
+            real_execute = db._db.execute
+
+            async def fake_execute(sql, *args, **kwargs):
+                if sql.startswith("PRAGMA table_info"):
+                    # Pretend the column is not there yet (the race window).
+                    return await real_execute("PRAGMA table_info(nonexistent_table)")
+                return await real_execute(sql, *args, **kwargs)
+
+            monkeypatch.setattr(db._db, "execute", fake_execute)
+
+            # The losing process re-attempts the ALTER and must not raise.
+            await db._add_column_if_missing(
+                "forks", "baseline_attempts", "INTEGER NOT NULL DEFAULT 0"
+            )
+        finally:
+            await db.close()
+
+    async def test_add_column_reraises_unrelated_operational_error(self, tmp_path):
+        """Only the duplicate-column race is swallowed; other OperationalErrors
+        (e.g. an ALTER against a missing table) still propagate."""
+        db_path = tmp_path / "broken.db"
+        db = Database(str(db_path))
+        await db.connect()
+        try:
+            with pytest.raises(aiosqlite.OperationalError):
+                await db._add_column_if_missing(
+                    "no_such_table", "col", "INTEGER NOT NULL DEFAULT 0"
+                )
+        finally:
+            await db.close()
+
+
+class TestForkCRUD:
+    async def test_baseline_attempts_round_trips(self, db: Database, repo_in_db: dict):
+        """baseline_attempts persists through insert and update_fork."""
+        fork = make_fork(repo_in_db["id"], baseline_attempts=2)
+        await db.insert_fork(fork)
+        row = await db.get_fork(fork["id"])
+        assert row is not None
+        assert row["baseline_attempts"] == 2
+
+        row["baseline_attempts"] = 4
+        await db.update_fork(row)
+        updated = await db.get_fork(fork["id"])
+        assert updated is not None
+        assert updated["baseline_attempts"] == 4
 
 
 # ---------------------------------------------------------------------------

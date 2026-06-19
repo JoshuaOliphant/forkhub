@@ -311,6 +311,7 @@ async def _insert_fork_in_db(
     head_sha: str | None = None,
     stars: int = 0,
     last_pushed_at: datetime | None = None,
+    baseline_attempts: int = 0,
 ) -> dict:
     """Helper to insert a fork record directly into the database."""
     from forkhub.models import Fork
@@ -324,6 +325,7 @@ async def _insert_fork_in_db(
         head_sha=head_sha,
         stars=stars,
         last_pushed_at=last_pushed_at,
+        baseline_attempts=baseline_attempts,
     )
     d = fork.model_dump()
     d["created_at"] = fork.created_at.isoformat()
@@ -1011,6 +1013,177 @@ class TestLastPushedAtChangeDetection:
             1 for call in analyzer.calls if self._FORK_FULL in call["changed_fork_names"]
         )
         assert analyze_count == 1
+
+    async def test_baseline_attempts_increment_on_persistent_failure(
+        self, db: Database, settings: SyncSettings
+    ):
+        """Each sync whose head_sha fetch fails on a NULL-baseline fork bumps
+        baseline_attempts, so the cap can eventually fire (forkhub-lgh)."""
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=None,
+            last_pushed_at=_ACTIVE_DATE,
+        )
+        # Compare succeeds, head_sha fetch always fails (no head_shas configured).
+        provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+
+        await sync_service.sync_repo(repo.id)
+        row = await db.get_fork_by_name(self._FORK_FULL)
+        assert row is not None
+        assert row["baseline_attempts"] == 1
+
+        await sync_service.sync_repo(repo.id)
+        row = await db.get_fork_by_name(self._FORK_FULL)
+        assert row is not None
+        assert row["baseline_attempts"] == 2
+
+    async def test_baseline_cap_stops_wasting_api_calls(self, db: Database, settings: SyncSettings):
+        """Once baseline_attempts hits the cap, a NULL-baseline fork with an
+        unchanged pushed_at stops being compared/SHA-fetched every sync — the
+        2-calls-forever residual is bounded (forkhub-lgh)."""
+        cap = settings.max_baseline_attempts
+        repo = await self._insert_repo(db)
+        # Seed the fork already at the cap (as if it had failed `cap` times).
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=None,
+            last_pushed_at=_ACTIVE_DATE,
+            baseline_attempts=cap,
+        )
+        provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        result = await sync_service.sync_repo(repo.id)
+
+        # Capped: no compare, no head_sha fetch — zero wasted calls.
+        assert provider.compare_calls == []
+        assert provider.head_sha_calls == []
+        assert result.changed_forks == []
+        # The counter stays at the cap (not incremented further).
+        row = await db.get_fork_by_name(self._FORK_FULL)
+        assert row is not None
+        assert row["baseline_attempts"] == cap
+
+    async def test_real_change_still_compares_past_the_cap(
+        self, db: Database, settings: SyncSettings
+    ):
+        """The cap only suppresses the baseline-catchup compare. A genuine
+        change (pushed_at advanced) still forces a compare even when the fork
+        is capped — the cap must not blind us to real divergence."""
+        cap = settings.max_baseline_attempts
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=None,
+            last_pushed_at=_ACTIVE_DATE - timedelta(days=7),  # stale → pushed_at advances
+            baseline_attempts=cap,
+        )
+        provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        await sync_service.sync_repo(repo.id)
+
+        # pushed_at advanced → compare fires despite the cap.
+        assert [c["head"] for c in provider.compare_calls] == [f"{self._FORK_OWNER}:main"]
+
+    async def test_capped_fork_with_real_changes_does_not_exceed_cap(
+        self, db: Database, settings: SyncSettings
+    ):
+        """A capped NULL-baseline fork that keeps seeing real pushed_at advances
+        (compare fires, SHA fetch keeps failing) must not grow baseline_attempts
+        past the cap — the counter only increments while below the cap."""
+        cap = settings.max_baseline_attempts
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=None,
+            last_pushed_at=_ACTIVE_DATE - timedelta(days=14),  # stale → pushed_at advances
+            baseline_attempts=cap,
+        )
+        # Each sync sees a newer pushed_at; SHA fetch always fails (none configured).
+        for offset in (10, 7, 3):
+            provider = self._make_provider(last_pushed_at=_ACTIVE_DATE - timedelta(days=offset))
+            sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+            await sync_service.sync_repo(repo.id)
+            row = await db.get_fork_by_name(self._FORK_FULL)
+            assert row is not None
+            assert row["baseline_attempts"] == cap
+
+    async def test_baseline_attempts_resets_when_sha_finally_arrives(
+        self, db: Database, settings: SyncSettings
+    ):
+        """A fork that failed baselining a few times but then gets its SHA must
+        reset baseline_attempts to 0 — it has a real baseline now."""
+        repo = await self._insert_repo(db)
+        recovered_sha = "recovered-sha-999"
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=None,
+            last_pushed_at=_ACTIVE_DATE,
+            baseline_attempts=2,  # two prior failures, below the cap
+        )
+        provider = self._make_provider(
+            last_pushed_at=_ACTIVE_DATE,
+            head_shas={self._FORK_FULL: recovered_sha},
+        )
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        result = await sync_service.sync_repo(repo.id)
+
+        row = await db.get_fork_by_name(self._FORK_FULL)
+        assert row is not None
+        assert row["head_sha"] == recovered_sha
+        assert row["baseline_attempts"] == 0
+        # New SHA vs the (NULL) prior → counts as changed.
+        assert self._FORK_FULL in result.changed_forks
+
+    async def test_sha_failure_on_baselined_fork_does_not_consume_cap(
+        self, db: Database, settings: SyncSettings
+    ):
+        """A SHA fetch failure on an ALREADY-baselined fork (head_sha set) must
+        not increment baseline_attempts — the fork still has a valid baseline,
+        so the cap only applies to genuine NULL-baseline catchup."""
+        repo = await self._insert_repo(db)
+        await _insert_fork_in_db(
+            db,
+            tracked_repo_id=repo.id,
+            github_id=self._FORK_GITHUB_ID,
+            owner=self._FORK_OWNER,
+            full_name=self._FORK_FULL,
+            head_sha=self._BASELINE_SHA,  # already baselined
+            last_pushed_at=_ACTIVE_DATE - timedelta(days=7),  # stale → pushed_at advances
+            baseline_attempts=0,
+        )
+        # pushed_at advances → compare fires; head_sha fetch fails (none configured).
+        provider = self._make_provider(last_pushed_at=_ACTIVE_DATE)
+        sync_service = SyncService(db=db, provider=provider, settings=settings, clock=_NOW)
+        await sync_service.sync_repo(repo.id)
+
+        row = await db.get_fork_by_name(self._FORK_FULL)
+        assert row is not None
+        # SHA fetch failed → head_sha unchanged, and the counter stays 0
+        # because this fork was never a baseline-catchup case.
+        assert row["head_sha"] == self._BASELINE_SHA
+        assert row["baseline_attempts"] == 0
 
     async def test_none_pushed_at_both_sides_skips_compare(
         self, db: Database, settings: SyncSettings

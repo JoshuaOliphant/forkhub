@@ -84,6 +84,7 @@ def make_fork(tracked_repo_id: str, **overrides: object) -> dict:
         "commits_ahead": 10,
         "commits_behind": 5,
         "head_sha": "abc123def456",
+        "baseline_attempts": 0,
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
