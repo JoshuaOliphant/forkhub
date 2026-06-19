@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         DeliveryResult,
         Digest,
         Fork,
+        Signal,
         TrackedRepo,
         TrackingMode,
     )
@@ -275,6 +276,41 @@ class ForkHub:
         if repo_row is None:
             raise ValueError(f"Repository {full_name} is not tracked")
         return await self._cluster.get_clusters(repo_row["id"], min_size=min_size)
+
+    async def get_signals(self, owner: str, repo: str) -> list[Signal]:
+        """Get classified signals for a tracked repository."""
+        import json
+
+        from forkhub.models import Signal as _Signal
+
+        full_name = f"{owner}/{repo}"
+        repo_row = await self._db.get_tracked_repo_by_name(full_name)
+        if repo_row is None:
+            raise ValueError(f"Repository {full_name} is not tracked")
+        rows = await self._db.list_signals(repo_row["id"])
+        # files_involved is JSON TEXT in the DB; decode it before validation.
+        return [
+            _Signal(
+                **{
+                    **row,
+                    "files_involved": json.loads(row["files_involved"])
+                    if row["files_involved"]
+                    else [],
+                }
+            )
+            for row in rows
+        ]
+
+    async def get_cluster_members(self, owner: str, repo: str) -> dict[str, list[str]]:
+        """Map each cluster id to its member fork ids for a tracked repository."""
+        full_name = f"{owner}/{repo}"
+        repo_row = await self._db.get_tracked_repo_by_name(full_name)
+        if repo_row is None:
+            raise ValueError(f"Repository {full_name} is not tracked")
+        members: dict[str, list[str]] = {}
+        for row in await self._db.list_cluster_members(repo_row["id"]):
+            members.setdefault(row["cluster_id"], []).append(row["fork_id"])
+        return members
 
     async def generate_digest(
         self,

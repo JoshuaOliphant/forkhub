@@ -8,7 +8,16 @@ import pytest
 from forkhub.config import ForkHubSettings
 from forkhub.database import Database
 from forkhub.models import Digest
-from tests.stubs import StubEmbeddingProvider, StubGitProvider, StubNotificationBackend
+from tests.stubs import (
+    StubEmbeddingProvider,
+    StubGitProvider,
+    StubNotificationBackend,
+    make_cluster,
+    make_cluster_member,
+    make_fork,
+    make_signal,
+    make_tracked_repo,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -107,3 +116,59 @@ class TestPublicAPIMethods:
         # reconcile
         result = await hub.reconcile()
         assert isinstance(result, ReconcileResult)
+
+
+# ---------------------------------------------------------------------------
+# Signal + cluster-membership accessors (web data path)
+# ---------------------------------------------------------------------------
+
+
+class TestSignalAndClusterAccessors:
+    async def test_get_signals_returns_repo_signals(self, hub, db: Database):
+        """get_signals returns the repo's signals, decoding files_involved JSON."""
+        repo = make_tracked_repo()
+        await db.insert_tracked_repo(repo)
+        fork = make_fork(repo["id"])
+        await db.insert_fork(fork)
+        await db.insert_signal(make_signal(fork["id"], repo["id"]))
+        # A signal with empty files_involved exercises the falsy-decode branch.
+        await db.insert_signal(make_signal(fork["id"], repo["id"], files_involved=""))
+
+        owner, name = repo["full_name"].split("/")
+        signals = await hub.get_signals(owner, name)
+
+        assert len(signals) == 2
+        files = {tuple(s.files_involved) for s in signals}
+        assert ("src/gpu.py", "src/train.py") in files
+        assert () in files  # the empty-files signal decoded to []
+
+    async def test_get_signals_untracked_raises(self, hub):
+        with pytest.raises(ValueError, match="not tracked"):
+            await hub.get_signals("nobody", "nothing")
+
+    async def test_get_cluster_members_maps_clusters_to_fork_ids(self, hub, db: Database):
+        """get_cluster_members maps each cluster id to its member fork ids."""
+        repo = make_tracked_repo()
+        await db.insert_tracked_repo(repo)
+        f1 = make_fork(repo["id"], github_id=111, full_name="alice/linux")
+        f2 = make_fork(repo["id"], github_id=222, full_name="bob/linux")
+        await db.insert_fork(f1)
+        await db.insert_fork(f2)
+        s1 = make_signal(f1["id"], repo["id"])
+        s2 = make_signal(f2["id"], repo["id"])
+        await db.insert_signal(s1)
+        await db.insert_signal(s2)
+        cluster = make_cluster(repo["id"])
+        await db.insert_cluster(cluster)
+        await db.add_cluster_member(make_cluster_member(cluster["id"], s1["id"], f1["id"]))
+        await db.add_cluster_member(make_cluster_member(cluster["id"], s2["id"], f2["id"]))
+
+        owner, name = repo["full_name"].split("/")
+        members = await hub.get_cluster_members(owner, name)
+
+        assert set(members) == {cluster["id"]}
+        assert set(members[cluster["id"]]) == {f1["id"], f2["id"]}
+
+    async def test_get_cluster_members_untracked_raises(self, hub):
+        with pytest.raises(ValueError, match="not tracked"):
+            await hub.get_cluster_members("nobody", "nothing")
