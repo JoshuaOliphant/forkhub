@@ -54,7 +54,9 @@ def main(
     import forkhub.otel as otel
     from forkhub.config import load_dotenv_file
 
-    load_dotenv_file()
+    # `--version` is a read-only invocation that never authenticates, so skip
+    # the credential-source logging to avoid a spurious no-credentials WARNING.
+    load_dotenv_file(log_credentials=not show_version)
     otel.configure()
 
     if show_version:
