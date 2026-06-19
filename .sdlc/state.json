@@ -1,0 +1,25 @@
+{
+  "feature": "explore-web-wiring",
+  "request": "forkhub-87l",
+  "state": "INIT",
+  "driver": "stop-hook",
+  "iteration": 1,
+  "budgets": {
+    "max_iterations": 50,
+    "max_attempts_per_task": 3,
+    "max_wait_ticks": 200
+  },
+  "in_flight": [],
+  "wait_ticks": 0,
+  "attempts": {},
+  "last_progress_iteration": 1,
+  "history": [
+    {
+      "at": "2026-06-19T22:14:47+00:00",
+      "to": "INIT",
+      "reason": "initialized"
+    }
+  ],
+  "started": "2026-06-19T22:14:47+00:00",
+  "updated": "2026-06-19T22:16:07+00:00"
+}

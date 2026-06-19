@@ -1,0 +1,1 @@
+{"at": "2026-06-19T22:16:07+00:00", "iteration": 1, "state": "INIT", "decision": "Reuse existing observability harness + otel.py; add a web-surface instrumentation task in PLAN", "why": "harness already present (lite Vector stack) and src/forkhub/otel.py exists; no new harness setup warranted", "reversible": true}
