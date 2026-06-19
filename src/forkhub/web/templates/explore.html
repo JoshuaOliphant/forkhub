@@ -18,7 +18,7 @@
         <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg></div>
         <div class="word">ForkHub</div>
       </div>
-      <a class="repo-switch" href="https://github.com/{{ data.repo.full_name }}" target="_blank" rel="noopener" title="Open on GitHub">
+      <a class="repo-switch"{% if "/" in data.repo.full_name %} href="https://github.com/{{ data.repo.full_name }}" target="_blank" rel="noopener"{% endif %} title="Open on GitHub">
         <span class="gh"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
         <span class="name">{{ data.repo.full_name }}</span>
         <span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg></span>

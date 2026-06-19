@@ -122,4 +122,22 @@ class TestExploreApp:
 
         assert recorded and recorded[0]["name"] == "web.explore"
         assert recorded[0]["attrs"]["repo"] == "torvalds/linux"
-        assert recorded[0]["attrs"]["fork_count"] == "1"
+        assert recorded[0]["attrs"]["fork_count"] == 1
+
+    async def test_explore_escapes_html_in_embedded_data(self, hub: ForkHub, db: Database):
+        """tojson escapes untrusted markup so it can't break out of the <script> block."""
+        repo = make_tracked_repo()
+        await db.insert_tracked_repo(repo)
+        fork = make_fork(repo["id"])
+        await db.insert_fork(fork)
+        await db.insert_signal(
+            make_signal(fork["id"], repo["id"], summary="</script><img src=x onerror=alert(1)>")
+        )
+        app = create_app(hub)
+        app.state.hub = hub
+        async with _client(app) as client:
+            resp = await client.get("/torvalds/linux")
+
+        assert resp.status_code == 200
+        assert "<img src=x" not in resp.text  # the injected tag never appears raw
+        assert "u003cimg" in resp.text  # it's present, but unicode-escaped by tojson

@@ -54,7 +54,7 @@ def create_app(hub: ForkHub | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
-        repos = await request.app.state.hub.get_repos()
+        repos = [r for r in await request.app.state.hub.get_repos() if not r.excluded]
         if not repos:
             return templates.TemplateResponse(request, "explore.html", {"data": _EMPTY})
         first = repos[0]
@@ -62,13 +62,13 @@ def create_app(hub: ForkHub | None = None) -> FastAPI:
 
     @app.get("/{owner}/{repo}", response_class=HTMLResponse)
     async def explore(request: Request, owner: str, repo: str):
-        try:
-            data = await build_explore_data(request.app.state.hub, owner, repo)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        with otel.span(
-            "web.explore", repo=f"{owner}/{repo}", fork_count=str(data["repo"]["fork_count"])
-        ):
+        # The span wraps the whole handler so the DB work (and any failure) is traced.
+        with otel.span("web.explore", repo=f"{owner}/{repo}") as s:
+            try:
+                data = await build_explore_data(request.app.state.hub, owner, repo)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            s.set_attribute("fork_count", data["repo"]["fork_count"])
             return templates.TemplateResponse(request, "explore.html", {"data": data})
 
     return app
