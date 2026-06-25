@@ -31,14 +31,12 @@ def _make_service(
     *,
     repo_path: str | None = None,
     test_command: str | None = None,
-    **kwargs: object,
+    min_significance: int = 5,
+    max_attempts: int = 10,
+    auto_fix_tests: bool = False,
+    test_fixer: TestFixer | None = None,
 ) -> BackfillService:
-    """Build a BackfillService, adapting CLI inputs to the service contract.
-
-    Converts the CLI's string ``repo_path`` to a ``Path`` and forwards
-    ``None`` defaults so the service layer owns the actual defaults (cwd and
-    :data:`~forkhub.services.backfill.DEFAULT_TEST_COMMAND`).
-    """
+    """Build a BackfillService, converting the CLI's str repo_path to a Path."""
     from forkhub.services.backfill import BackfillService
 
     return BackfillService(
@@ -46,7 +44,10 @@ def _make_service(
         provider=provider,
         repo_path=Path(repo_path) if repo_path else None,
         test_command=test_command,
-        **kwargs,  # type: ignore[arg-type]
+        min_significance=min_significance,
+        max_attempts=max_attempts,
+        auto_fix_tests=auto_fix_tests,
+        test_fixer=test_fixer,
     )
 
 

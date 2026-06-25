@@ -16,24 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 class GitRepo:
-    """An async command/git runner bound to a working-copy directory.
+    """Async subprocess/git runner bound to one working-copy directory.
 
-    Owns the "how to run a command/git in this repo" mechanics so callers can
-    express git operations as named methods instead of inline subprocess
-    plumbing. Every command runs with the repo directory as its cwd.
-
-    Two primitives back everything else:
-
-    - :meth:`run` — generic, never raises; returns a ``CompletedProcess`` with a
-      synthesized ``returncode = -1`` on spawn failure or timeout. Callers that
-      must distinguish "command ran and said no" from "command couldn't run at
-      all" inspect ``returncode < 0``. Also used for non-git commands (tests).
-    - :meth:`git` — the must-succeed wrapper that raises
-      ``subprocess.CalledProcessError`` on a non-zero exit.
-
-    The remaining methods name a single git operation each, so the git
-    knowledge (flags, ordering, which calls may fail) lives here rather than
-    sprinkled through the domain layer.
+    Two primitives back everything else: ``run`` (never raises; returncode -1
+    on spawn failure or timeout) and ``git`` (raises on a non-zero exit). The
+    remaining methods each name a single git operation so the git knowledge
+    lives here rather than scattered through the domain layer.
     """
 
     def __init__(self, repo_path: Path) -> None:
@@ -48,11 +36,7 @@ class GitRepo:
         stdin_data: bytes | None = None,
         timeout: int = 120,
     ) -> subprocess.CompletedProcess:
-        """Run a command as an argument list via ``subprocess_exec`` (no shell).
-
-        Returns a ``CompletedProcess`` with synthesized ``returncode = -1`` on
-        spawn failure (missing binary, permission denied) or timeout.
-        """
+        """Run a command (no shell); returncode -1 on spawn failure or timeout."""
         args = list(args)
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -92,10 +76,7 @@ class GitRepo:
         )
 
     async def git(self, *args: str) -> str:
-        """Run a git command and return stdout; raise on a non-zero exit.
-
-        Raises ``subprocess.CalledProcessError`` if the command exits non-zero.
-        """
+        """Run a git command, return stdout; raise CalledProcessError on non-zero."""
         result = await self.run(["git", *args])
         if result.returncode != 0:
             raise subprocess.CalledProcessError(
@@ -113,11 +94,7 @@ class GitRepo:
         return await self.run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
 
     async def verify_branch(self, name: str) -> subprocess.CompletedProcess:
-        """``git rev-parse --verify <name>`` — returncode 0=exists, 1=missing.
-
-        A spawn failure or timeout yields ``returncode = -1`` ("unknown").
-        Use :meth:`branch_exists` when the unknown case can be treated as absent.
-        """
+        """``git rev-parse --verify <name>``: returncode 0=exists, 1=missing, -1=unknown."""
         return await self.run(["git", "rev-parse", "--verify", name])
 
     async def branch_exists(self, name: str) -> bool:

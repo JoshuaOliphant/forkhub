@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from forkhub.database import Database
-    from forkhub.interfaces import GitProvider, TestFixer
+    from forkhub.interfaces import GitProvider, GitRepoProtocol, TestFixer
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +59,12 @@ class BackfillService:
         max_attempts: int = 10,
         auto_fix_tests: bool = False,
         test_fixer: TestFixer | None = None,
-        git_repo: GitRepo | None = None,
+        git_repo: GitRepoProtocol | None = None,
     ) -> None:
         self._db = db
         self._provider = provider
         self._repo_path = repo_path or Path.cwd()
-        self._git = git_repo or GitRepo(self._repo_path)
+        self._git: GitRepoProtocol = git_repo or GitRepo(self._repo_path)
         self._test_command = test_command or DEFAULT_TEST_COMMAND
         self._min_significance = min_significance
         self._max_attempts = max_attempts

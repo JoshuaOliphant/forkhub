@@ -774,10 +774,10 @@ class TestBackfillModels:
 # ---------------------------------------------------------------------------
 
 
-class TestRunSafeCmd:
-    # The run/git command primitives moved to GitRepo; their behavior is now
-    # tested directly in tests/test_git_repo.py. These guards remain to prevent
-    # a regression back to a shell-based runner on the service.
+class TestRemovedShellHelpers:
+    # Guards against re-introduction of shell-based execution on BackfillService.
+    # The exec-based primitives (run/git) now live in GitRepo and are tested in
+    # tests/test_git_repo.py.
 
     async def test_run_shell_no_longer_exists(self, db, provider):
         """_run_shell must be removed — exec-based approach replaces it."""

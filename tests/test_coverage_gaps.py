@@ -524,6 +524,20 @@ class TestServiceHelpers:
             assert db is not None
             assert provider is not None
 
+    async def test_open_services_builds_provider_when_db_injected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, db: Database
+    ):
+        """open_services(db=stub) builds only a provider — doesn't touch the injected db."""
+        from forkhub.cli.helpers import open_services
+
+        self._patch_settings(monkeypatch, tmp_path)
+        async with open_services(db=db) as (settings, yielded_db, provider):
+            assert yielded_db is db  # injected db passed through unchanged
+            assert settings is None  # only populated on the auto-build path
+            assert provider is not None
+        # The injected db was not ours to close — it stays usable afterward.
+        assert await db.list_tracked_repos() == []
+
 
 # ---------------------------------------------------------------------------
 # cli/clusters_cmd.py — db is None branch + console output branch
