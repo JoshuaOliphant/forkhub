@@ -33,16 +33,11 @@ async def _digest_impl(
     capture_output: list[str] | None = None,
 ) -> None:
     """Core digest generation logic."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_db
     from forkhub.notifications.console import ConsoleBackend
     from forkhub.services.digest import DigestService
 
-    owns_db = False
-    if db is None:
-        settings, db, _ = await get_services()
-        owns_db = True
-
-    try:
+    async with open_db(db) as db:
         # Parse since date
         since_dt = None
         if since is not None:
@@ -83,9 +78,6 @@ async def _digest_impl(
                 else:
                     status = f"[red]FAILED: {result.error}[/red]"
                 _output(f"  {result.backend_name}: {status}", capture_output)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @async_command

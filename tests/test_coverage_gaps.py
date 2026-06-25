@@ -462,6 +462,70 @@ def patched_get_services(monkeypatch: pytest.MonkeyPatch, db: Database):
 
 
 # ---------------------------------------------------------------------------
+# cli/helpers.py — real get_services + open_db/open_services lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestServiceHelpers:
+    """Exercise the real service-construction helpers without touching $HOME.
+
+    ``load_settings`` is patched to point the database at a temp file, so the
+    real ``get_db_path`` (mkdir/expanduser) and ``Database`` connection run.
+    """
+
+    @staticmethod
+    def _patch_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        from forkhub import config as config_mod
+        from forkhub.config import DatabaseSettings, ForkHubSettings
+
+        settings = ForkHubSettings(
+            database=DatabaseSettings(path=str(tmp_path / "fh.db")),
+        )
+        monkeypatch.setattr(config_mod, "load_settings", lambda *_a, **_k: settings)
+        return settings
+
+    async def test_get_services_builds_and_connects(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        """Real get_services loads settings, resolves the db path, and connects."""
+        from forkhub.cli.helpers import get_services
+
+        settings = self._patch_settings(monkeypatch, tmp_path)
+        returned_settings, db, provider = await get_services()
+        try:
+            assert returned_settings is settings
+            assert provider is not None
+            assert (tmp_path / "fh.db").parent.exists()
+        finally:
+            await db.close()
+
+    async def test_open_db_builds_and_closes_when_not_injected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        """open_db() with no db builds one via get_services and closes it on exit."""
+        from forkhub.cli.helpers import open_db
+
+        self._patch_settings(monkeypatch, tmp_path)
+        async with open_db() as db:
+            assert db is not None
+            opened = db
+        # Database was closed on exit; a second close is a harmless no-op.
+        await opened.close()
+
+    async def test_open_services_builds_both_when_not_injected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        """open_services() with nothing injected yields real settings/db/provider."""
+        from forkhub.cli.helpers import open_services
+
+        settings = self._patch_settings(monkeypatch, tmp_path)
+        async with open_services() as (returned_settings, db, provider):
+            assert returned_settings is settings
+            assert db is not None
+            assert provider is not None
+
+
+# ---------------------------------------------------------------------------
 # cli/clusters_cmd.py — db is None branch + console output branch
 # ---------------------------------------------------------------------------
 

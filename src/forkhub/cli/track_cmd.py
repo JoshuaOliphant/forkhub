@@ -32,15 +32,10 @@ async def _track_impl(
     capture_output: list[str] | None = None,
 ) -> None:
     """Core track logic, testable without CLI boilerplate."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.tracker import TrackerService
 
-    owns_db = False
-    if db is None or provider is None:
-        settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         parts = repo.split("/")
         if len(parts) != 2:
             msg = f"[red]Error: Invalid repo format '{repo}'. Use owner/repo.[/red]"
@@ -59,32 +54,19 @@ async def _track_impl(
             )
         except ValueError as exc:
             _output(f"[red]Error: {exc}[/red]", capture_output)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 async def _untrack_impl(
     repo: str,
     db: Database | None = None,
+    provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> None:
     """Core untrack logic."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.tracker import TrackerService
 
-    owns_db = False
-    provider = None
-    if db is None:
-        settings, db, provider = await get_services()
-        owns_db = True
-
-    if provider is None:
-        from forkhub.cli.helpers import get_services as gs
-
-        settings, _, provider = await gs()
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         parts = repo.split("/")
         if len(parts) != 2:
             msg = f"[red]Error: Invalid repo format '{repo}'. Use owner/repo.[/red]"
@@ -95,67 +77,38 @@ async def _untrack_impl(
         tracker = TrackerService(db=db, provider=provider)
         await tracker.untrack_repo(owner, name)
         _output(f"[yellow]Untracked[/yellow] {repo}", capture_output)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 async def _exclude_impl(
     repo: str,
     db: Database | None = None,
+    provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> None:
     """Core exclude logic."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.tracker import TrackerService
 
-    owns_db = False
-    provider = None
-    if db is None:
-        settings, db, provider = await get_services()
-        owns_db = True
-
-    if provider is None:
-        from forkhub.cli.helpers import get_services as gs
-
-        settings, _, provider = await gs()
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         tracker = TrackerService(db=db, provider=provider)
         await tracker.exclude_repo(repo)
         _output(f"[yellow]Excluded[/yellow] {repo} from sync", capture_output)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 async def _include_impl(
     repo: str,
     db: Database | None = None,
+    provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> None:
     """Core include logic."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.tracker import TrackerService
 
-    owns_db = False
-    provider = None
-    if db is None:
-        settings, db, provider = await get_services()
-        owns_db = True
-
-    if provider is None:
-        from forkhub.cli.helpers import get_services as gs
-
-        settings, _, provider = await gs()
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         tracker = TrackerService(db=db, provider=provider)
         await tracker.include_repo(repo)
         _output(f"[green]Included[/green] {repo} in sync", capture_output)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @async_command

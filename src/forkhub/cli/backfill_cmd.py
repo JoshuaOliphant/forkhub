@@ -165,16 +165,10 @@ async def _backfill_impl(
     test_fixer: TestFixer | None = None,
 ) -> BackfillResult | None:
     """Core autonomous backfill logic (the `run` subcommand)."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.backfill import BackfillService
 
-    owns_db = False
-    settings = None
-    if db is None or provider is None:
-        settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (settings, db, provider):
         # Resolve the target repo
         repo_id = None
         if repo is not None:
@@ -257,9 +251,6 @@ async def _backfill_impl(
                 _output(f"  [green]{branch}[/green]", capture_output)
 
         return combined
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("run")
@@ -324,15 +315,10 @@ async def _backfill_list_impl(
     capture_output: list[str] | None = None,
 ) -> None:
     """List previous backfill attempts."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.backfill import BackfillService
 
-    owns_db = False
-    if db is None or provider is None:
-        _settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         repo_id = None
         if repo is not None:
             repo_row = await db.get_tracked_repo_by_name(repo)
@@ -387,9 +373,6 @@ async def _backfill_list_impl(
             )
 
         console.print(table)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("list")
@@ -420,15 +403,10 @@ async def _candidates_impl(
     provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> None:
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.backfill import BackfillService
 
-    owns_db = False
-    if db is None or provider is None:
-        _settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         # Resolve repo ids (one or all)
         if repo is not None:
             repo_row = await db.get_tracked_repo_by_name(repo)
@@ -491,9 +469,6 @@ async def _candidates_impl(
                 "yes" if c.already_attempted else "-",
             )
         console.print(table)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("candidates")
@@ -559,15 +534,10 @@ async def _apply_impl(
     provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> int:
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.backfill import BackfillService
 
-    owns_db = False
-    if db is None or provider is None:
-        _settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         effective_test_cmd = test_command or "uv run pytest -x --tb=short -q"
         effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
 
@@ -601,9 +571,6 @@ async def _apply_impl(
                 _output(f"  error: {attempt.error}", capture_output)
 
         return exit_code
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("apply")
@@ -649,15 +616,10 @@ async def _status_impl(
     provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> int:
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.backfill import BackfillService
 
-    owns_db = False
-    if db is None or provider is None:
-        _settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         service = BackfillService(db=db, provider=provider)
         attempt = await service.get_attempt(attempt_id)
         if attempt is None:
@@ -678,9 +640,6 @@ async def _status_impl(
                 capture_output,
             )
         return 0
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("status")
@@ -709,7 +668,7 @@ async def _record_impl(
     provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> int:
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.models import BackfillStatus
     from forkhub.services.backfill import BackfillService
 
@@ -730,12 +689,7 @@ async def _record_impl(
         )
         return 2
 
-    owns_db = False
-    if db is None or provider is None:
-        _settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         service = BackfillService(db=db, provider=provider)
         try:
             attempt = await service.record_outcome(
@@ -754,9 +708,6 @@ async def _record_impl(
                 capture_output,
             )
         return 0
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("record")
@@ -795,15 +746,10 @@ async def _cleanup_impl(
     provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> int:
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.backfill import BackfillService
 
-    owns_db = False
-    if db is None or provider is None:
-        _settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
         service = BackfillService(db=db, provider=provider, repo_path=effective_repo_path)
 
@@ -830,9 +776,6 @@ async def _cleanup_impl(
         # Non-zero exit when any git op was swallowed so callers can detect
         # partial failures (stranded branches, failed checkouts, etc.)
         return 2 if response.warnings else 0
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("cleanup")
@@ -868,15 +811,10 @@ async def _read_failures_impl(
     provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> int:
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.backfill import BackfillService
 
-    owns_db = False
-    if db is None or provider is None:
-        _settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         effective_test_cmd = test_command or "uv run pytest -x --tb=short -q"
         effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
 
@@ -907,9 +845,6 @@ async def _read_failures_impl(
         if response.returncode < 0:
             return 124  # convention for timeout / spawn failure
         return 1
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("read-failures")
@@ -943,7 +878,7 @@ async def _write_test_impl(
     capture_output: list[str] | None = None,
     stdin_content: str | None = None,
 ) -> int:
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.backfill import BackfillService
 
     # Resolve content
@@ -960,12 +895,7 @@ async def _write_test_impl(
         else:
             content = sys.stdin.read()
 
-    owns_db = False
-    if db is None or provider is None:
-        _settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
         service = BackfillService(db=db, provider=provider, repo_path=effective_repo_path)
 
@@ -984,9 +914,6 @@ async def _write_test_impl(
         else:
             _output(f"Wrote {response.bytes_written} bytes to {response.path}", capture_output)
         return 0
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("write-test")
@@ -1025,15 +952,10 @@ async def _run_tests_impl(
     provider: GitProvider | None = None,
     capture_output: list[str] | None = None,
 ) -> int:
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.services.backfill import BackfillService
 
-    owns_db = False
-    if db is None or provider is None:
-        _settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         effective_test_cmd = test_command or "uv run pytest -x --tb=short -q"
         effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
 
@@ -1063,9 +985,6 @@ async def _run_tests_impl(
         if response.returncode < 0:
             return 124
         return min(255, response.returncode)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @backfill_app.command("run-tests")

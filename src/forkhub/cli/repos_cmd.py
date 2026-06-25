@@ -33,16 +33,11 @@ async def _repos_impl(
     capture_output: list[str] | None = None,
 ) -> None:
     """Core repos listing logic, testable without CLI boilerplate."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.models import TrackingMode
     from forkhub.services.tracker import TrackerService
 
-    owns_db = False
-    if db is None or provider is None:
-        settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         tracker = TrackerService(db=db, provider=provider)
         mode_enum = TrackingMode(mode) if mode else None
         repos = await tracker.list_tracked_repos(
@@ -69,9 +64,6 @@ async def _repos_impl(
                 )
         else:
             render_repo_table(console, repos)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @async_command

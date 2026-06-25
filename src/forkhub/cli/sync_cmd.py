@@ -39,40 +39,32 @@ async def _sync_impl(
 ) -> None:
     """Core sync logic."""
     from forkhub import _build_default_analyzer
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.config import SyncSettings as SyncSettingsImpl
     from forkhub.config import load_settings
     from forkhub.services.sync import SyncService
     from forkhub.services.tracker import TrackerService
 
-    owns_db = False
-    settings = None
-    if db is None or provider is None:
-        settings, db, provider = await get_services()
-        owns_db = True
+    async with open_services(db, provider) as (settings, db, provider):
         if sync_settings is None:
-            sync_settings = settings.sync
+            sync_settings = settings.sync if settings is not None else SyncSettingsImpl()
 
-    if sync_settings is None:
-        sync_settings = SyncSettingsImpl()
-
-    # Build the analyzer via the shared factory when the caller opted in
-    # and didn't inject one. The factory owns graceful degradation for a
-    # missing [claude] extra so the CLI stays thin.
-    if analyzer is None and auto_analyze:
-        analyzer_settings = settings if settings is not None else load_settings()
-        analyzer = _build_default_analyzer(
-            db=db,
-            provider=provider,
-            settings=analyzer_settings,
-        )
-        if analyzer is None:
-            _output(
-                "Analyzer skipped: [claude] extra not installed",
-                capture_output,
+        # Build the analyzer via the shared factory when the caller opted in
+        # and didn't inject one. The factory owns graceful degradation for a
+        # missing [claude] extra so the CLI stays thin.
+        if analyzer is None and auto_analyze:
+            analyzer_settings = settings if settings is not None else load_settings()
+            analyzer = _build_default_analyzer(
+                db=db,
+                provider=provider,
+                settings=analyzer_settings,
             )
+            if analyzer is None:
+                _output(
+                    "Analyzer skipped: [claude] extra not installed",
+                    capture_output,
+                )
 
-    try:
         sync_service = SyncService(
             db=db, provider=provider, settings=sync_settings, analyzer=analyzer
         )
@@ -160,9 +152,6 @@ async def _sync_impl(
                 _output(f"\n  [yellow]Warnings: {len(result.errors)}[/yellow]", capture_output)
                 for err in result.errors:
                     _output(f"    ! {err}", capture_output)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @async_command

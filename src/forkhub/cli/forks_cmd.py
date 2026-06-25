@@ -35,14 +35,9 @@ async def _forks_impl(
     capture_output: list[str] | None = None,
 ) -> None:
     """Core forks listing logic."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_db
 
-    owns_db = False
-    if db is None:
-        settings, db, _ = await get_services()
-        owns_db = True
-
-    try:
+    async with open_db(db) as db:
         repo_row = await db.get_tracked_repo_by_name(repo)
         if repo_row is None:
             msg = f"[red]Error: Repository '{repo}' not found or not tracked.[/red]"
@@ -80,9 +75,6 @@ async def _forks_impl(
                 )
         else:
             render_fork_table(console, forks)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 async def _inspect_impl(
@@ -91,14 +83,9 @@ async def _inspect_impl(
     capture_output: list[str] | None = None,
 ) -> None:
     """Core inspect logic for a single fork."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_db
 
-    owns_db = False
-    if db is None:
-        settings, db, _ = await get_services()
-        owns_db = True
-
-    try:
+    async with open_db(db) as db:
         fork_row = await db.get_fork_by_name(fork_name)
         if fork_row is None:
             _output(f"[red]Error: Fork '{fork_name}' not found.[/red]", capture_output)
@@ -141,9 +128,6 @@ async def _inspect_impl(
                     render_signal(console, sig)
         else:
             _output("\n  No signals recorded for this fork.", capture_output)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @async_command
