@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sys
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.table import Table
 
+from forkhub.cli.formatting import emit
 from forkhub.cli.helpers import async_command
 
 if TYPE_CHECKING:
@@ -68,11 +70,7 @@ backfill_app = typer.Typer(
 # ---------------------------------------------------------------------------
 
 
-def _output(line: str, capture: list[str] | None = None) -> None:
-    if capture is not None:
-        capture.append(line)
-    else:
-        console.print(line)
+_output = partial(emit, console)
 
 
 def _emit_json(data: BaseModel | dict | list, capture: list[str] | None = None) -> None:

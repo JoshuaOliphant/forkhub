@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
 
-from forkhub.cli.formatting import render_cluster
+from forkhub.cli.formatting import emit, render_cluster
 from forkhub.cli.helpers import async_command
 from forkhub.models import Cluster
 
@@ -19,11 +20,7 @@ if TYPE_CHECKING:
 console = Console()
 
 
-def _output(line: str, capture: list[str] | None = None) -> None:
-    if capture is not None:
-        capture.append(line)
-    else:
-        console.print(line)
+_output = partial(emit, console)
 
 
 async def _clusters_impl(

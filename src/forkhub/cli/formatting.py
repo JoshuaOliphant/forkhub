@@ -23,6 +23,20 @@ from forkhub.models import (
 if TYPE_CHECKING:
     from rich.console import Console
 
+
+def emit(console: Console, line: str, capture: list[str] | None = None) -> None:
+    """Write one output line: to ``capture`` (tests) or the ``console``.
+
+    The single implementation behind each command module's ``_output``; bind
+    the module console with ``functools.partial(emit, console)`` so call sites
+    stay ``_output(line, capture)``.
+    """
+    if capture is not None:
+        capture.append(line)
+    else:
+        console.print(line)
+
+
 # Category display configuration: (color, emoji)
 CATEGORY_STYLES: dict[SignalCategory, tuple[str, str]] = {
     SignalCategory.FEATURE: ("green", "+"),

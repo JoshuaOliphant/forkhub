@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
 
+from forkhub.cli.formatting import emit
 from forkhub.cli.helpers import async_command
 from forkhub.models import DigestConfig
 
@@ -19,11 +21,7 @@ if TYPE_CHECKING:
 console = Console()
 
 
-def _output(line: str, capture: list[str] | None = None) -> None:
-    if capture is not None:
-        capture.append(line)
-    else:
-        console.print(line)
+_output = partial(emit, console)
 
 
 async def _digest_impl(

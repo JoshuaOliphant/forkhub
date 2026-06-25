@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING
 
 import typer
+
+from forkhub.cli.formatting import emit
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -21,11 +24,7 @@ config_app = typer.Typer(
 )
 
 
-def _output(line: str, capture: list[str] | None = None) -> None:
-    if capture is not None:
-        capture.append(line)
-    else:
-        console.print(line)
+_output = partial(emit, console)
 
 
 async def _config_show_impl(
