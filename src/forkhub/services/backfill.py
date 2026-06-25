@@ -30,6 +30,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Single source of truth for the suite that gates backfill acceptance. The
+# library default; the public API and CLI forward None and let it resolve here.
+DEFAULT_TEST_COMMAND = "uv run pytest -x --tb=short -q"
+
 
 class BackfillService:
     """Evaluates fork signals and attempts to backfill valuable changes.
@@ -50,7 +54,7 @@ class BackfillService:
         provider: GitProvider,
         *,
         repo_path: Path | None = None,
-        test_command: str = "uv run pytest -x --tb=short -q",
+        test_command: str | None = None,
         min_significance: int = 5,
         max_attempts: int = 10,
         auto_fix_tests: bool = False,
@@ -59,7 +63,7 @@ class BackfillService:
         self._db = db
         self._provider = provider
         self._repo_path = repo_path or Path.cwd()
-        self._test_command = test_command
+        self._test_command = test_command or DEFAULT_TEST_COMMAND
         self._min_significance = min_significance
         self._max_attempts = max_attempts
         self._auto_fix_tests = auto_fix_tests

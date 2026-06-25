@@ -20,6 +20,33 @@ if TYPE_CHECKING:
     from forkhub.database import Database
     from forkhub.interfaces import GitProvider, TestFixer
     from forkhub.models import BackfillAttempt, BackfillResult
+    from forkhub.services.backfill import BackfillService
+
+
+def _make_service(
+    db: Database,
+    provider: GitProvider,
+    *,
+    repo_path: str | None = None,
+    test_command: str | None = None,
+    **kwargs: object,
+) -> BackfillService:
+    """Build a BackfillService, adapting CLI inputs to the service contract.
+
+    Converts the CLI's string ``repo_path`` to a ``Path`` and forwards
+    ``None`` defaults so the service layer owns the actual defaults (cwd and
+    :data:`~forkhub.services.backfill.DEFAULT_TEST_COMMAND`).
+    """
+    from forkhub.services.backfill import BackfillService
+
+    return BackfillService(
+        db=db,
+        provider=provider,
+        repo_path=Path(repo_path) if repo_path else None,
+        test_command=test_command,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
 
 console = Console()
 
@@ -166,7 +193,6 @@ async def _backfill_impl(
 ) -> BackfillResult | None:
     """Core autonomous backfill logic (the `run` subcommand)."""
     from forkhub.cli.helpers import open_services
-    from forkhub.services.backfill import BackfillService
 
     async with open_services(db, provider) as (settings, db, provider):
         # Resolve the target repo
@@ -188,9 +214,6 @@ async def _backfill_impl(
 
         since = datetime.now(UTC) - timedelta(days=since_days)
 
-        effective_test_cmd = test_command or "uv run pytest -x --tb=short -q"
-        effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
-
         # Wire up the test fixer via the shared factory when the caller
         # opted in and didn't inject one. The factory owns graceful
         # degradation for a missing [claude] extra so the CLI stays thin.
@@ -206,11 +229,11 @@ async def _backfill_impl(
                     capture_output,
                 )
 
-        backfill = BackfillService(
-            db=db,
-            provider=provider,
-            repo_path=effective_repo_path,
-            test_command=effective_test_cmd,
+        backfill = _make_service(
+            db,
+            provider,
+            repo_path=repo_path,
+            test_command=test_command,
             min_significance=min_significance,
             max_attempts=max_attempts,
             auto_fix_tests=auto_fix_tests,
@@ -316,7 +339,6 @@ async def _backfill_list_impl(
 ) -> None:
     """List previous backfill attempts."""
     from forkhub.cli.helpers import open_services
-    from forkhub.services.backfill import BackfillService
 
     async with open_services(db, provider) as (_settings, db, provider):
         repo_id = None
@@ -327,7 +349,7 @@ async def _backfill_list_impl(
                 return
             repo_id = repo_row["id"]
 
-        service = BackfillService(db=db, provider=provider)
+        service = _make_service(db, provider)
         attempts = await service.list_attempts(repo_id=repo_id, status=status)
 
         if as_json:
@@ -404,7 +426,6 @@ async def _candidates_impl(
     capture_output: list[str] | None = None,
 ) -> None:
     from forkhub.cli.helpers import open_services
-    from forkhub.services.backfill import BackfillService
 
     async with open_services(db, provider) as (_settings, db, provider):
         # Resolve repo ids (one or all)
@@ -420,7 +441,7 @@ async def _candidates_impl(
 
         since = datetime.now(UTC) - timedelta(days=since_days)
 
-        service = BackfillService(db=db, provider=provider, min_significance=min_significance)
+        service = _make_service(db, provider, min_significance=min_significance)
 
         all_candidates: list[CandidateDTO] = []
         for rid in repo_ids:
@@ -535,18 +556,9 @@ async def _apply_impl(
     capture_output: list[str] | None = None,
 ) -> int:
     from forkhub.cli.helpers import open_services
-    from forkhub.services.backfill import BackfillService
 
     async with open_services(db, provider) as (_settings, db, provider):
-        effective_test_cmd = test_command or "uv run pytest -x --tb=short -q"
-        effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
-
-        service = BackfillService(
-            db=db,
-            provider=provider,
-            repo_path=effective_repo_path,
-            test_command=effective_test_cmd,
-        )
+        service = _make_service(db, provider, repo_path=repo_path, test_command=test_command)
 
         try:
             attempt = await service.apply_signal(
@@ -617,10 +629,9 @@ async def _status_impl(
     capture_output: list[str] | None = None,
 ) -> int:
     from forkhub.cli.helpers import open_services
-    from forkhub.services.backfill import BackfillService
 
     async with open_services(db, provider) as (_settings, db, provider):
-        service = BackfillService(db=db, provider=provider)
+        service = _make_service(db, provider)
         attempt = await service.get_attempt(attempt_id)
         if attempt is None:
             _output(f"[red]Attempt not found: {attempt_id}[/red]", capture_output)
@@ -670,7 +681,6 @@ async def _record_impl(
 ) -> int:
     from forkhub.cli.helpers import open_services
     from forkhub.models import BackfillStatus
-    from forkhub.services.backfill import BackfillService
 
     try:
         status_enum = BackfillStatus(status)
@@ -690,7 +700,7 @@ async def _record_impl(
         return 2
 
     async with open_services(db, provider) as (_settings, db, provider):
-        service = BackfillService(db=db, provider=provider)
+        service = _make_service(db, provider)
         try:
             attempt = await service.record_outcome(
                 attempt_id, status=status_enum, score=score, notes=notes
@@ -747,11 +757,9 @@ async def _cleanup_impl(
     capture_output: list[str] | None = None,
 ) -> int:
     from forkhub.cli.helpers import open_services
-    from forkhub.services.backfill import BackfillService
 
     async with open_services(db, provider) as (_settings, db, provider):
-        effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
-        service = BackfillService(db=db, provider=provider, repo_path=effective_repo_path)
+        service = _make_service(db, provider, repo_path=repo_path)
 
         try:
             result = await service.cleanup_attempt(attempt_id, keep_branch=keep_branch)
@@ -812,18 +820,9 @@ async def _read_failures_impl(
     capture_output: list[str] | None = None,
 ) -> int:
     from forkhub.cli.helpers import open_services
-    from forkhub.services.backfill import BackfillService
 
     async with open_services(db, provider) as (_settings, db, provider):
-        effective_test_cmd = test_command or "uv run pytest -x --tb=short -q"
-        effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
-
-        service = BackfillService(
-            db=db,
-            provider=provider,
-            repo_path=effective_repo_path,
-            test_command=effective_test_cmd,
-        )
+        service = _make_service(db, provider, repo_path=repo_path, test_command=test_command)
 
         result = await service.read_failing_test_files()
         response = ReadFailuresResponse(**result)
@@ -879,7 +878,6 @@ async def _write_test_impl(
     stdin_content: str | None = None,
 ) -> int:
     from forkhub.cli.helpers import open_services
-    from forkhub.services.backfill import BackfillService
 
     # Resolve content
     if content is None:
@@ -896,8 +894,7 @@ async def _write_test_impl(
             content = sys.stdin.read()
 
     async with open_services(db, provider) as (_settings, db, provider):
-        effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
-        service = BackfillService(db=db, provider=provider, repo_path=effective_repo_path)
+        service = _make_service(db, provider, repo_path=repo_path)
 
         try:
             target = service.write_test_file(path, content)
@@ -953,18 +950,9 @@ async def _run_tests_impl(
     capture_output: list[str] | None = None,
 ) -> int:
     from forkhub.cli.helpers import open_services
-    from forkhub.services.backfill import BackfillService
 
     async with open_services(db, provider) as (_settings, db, provider):
-        effective_test_cmd = test_command or "uv run pytest -x --tb=short -q"
-        effective_repo_path = Path(repo_path) if repo_path else Path.cwd()
-
-        service = BackfillService(
-            db=db,
-            provider=provider,
-            repo_path=effective_repo_path,
-            test_command=effective_test_cmd,
-        )
+        service = _make_service(db, provider, repo_path=repo_path, test_command=test_command)
         result = await service.run_test_command()
         response = RunTestsResponse(
             returncode=result.returncode,
