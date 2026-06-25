@@ -772,21 +772,7 @@ class TestAttemptTestFixGitCommitFails:
         assert any("Git commit failed" in r.message for r in caplog.records)
 
 
-# ---------------------------------------------------------------------------
-# _run_safe_cmd — lines 625-627 (spawn failure)
-# ---------------------------------------------------------------------------
-
-
-class TestRunSafeCmdSpawnFailure:
-    async def test_spawn_failure_returns_minus_one_returncode(
-        self, tmp_path: Path, db: Database, provider: StubGitProvider
-    ) -> None:
-        """When the binary does not exist, _run_safe_cmd returns returncode=-1."""
-        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_safe_cmd(["/nonexistent_binary_xyz_abc_123"])
-
-        assert result.returncode == -1
-        assert "nonexistent_binary" in result.stderr
+# The GitRepo.run spawn-failure path is covered directly in tests/test_git_repo.py.
 
 
 # ---------------------------------------------------------------------------

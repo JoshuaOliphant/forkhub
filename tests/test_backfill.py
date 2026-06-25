@@ -775,40 +775,15 @@ class TestBackfillModels:
 
 
 class TestRunSafeCmd:
-    async def test_run_safe_cmd_runs_command_and_returns_stdout(self, tmp_path, db, provider):
-        """_run_safe_cmd should run a command and capture stdout without shell."""
-        import subprocess
-
-        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_safe_cmd(["echo", "hello"], cwd=tmp_path)
-        assert isinstance(result, subprocess.CompletedProcess)
-        assert result.stdout.strip() == "hello"
-        assert result.returncode == 0
-
-    async def test_run_safe_cmd_does_not_expand_shell_metacharacters(self, tmp_path, db, provider):
-        """_run_safe_cmd must not expand shell metacharacters — args are literal."""
-        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_safe_cmd(["echo", "$HOME"], cwd=tmp_path)
-        assert result.stdout.strip() == "$HOME"
-
-    async def test_run_safe_cmd_passes_stdin_data(self, tmp_path, db, provider):
-        """_run_safe_cmd should pass stdin_data bytes to the process stdin."""
-        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_safe_cmd(["cat"], cwd=tmp_path, stdin_data=b"patch content")
-        assert result.stdout == "patch content"
-
-    async def test_run_safe_cmd_times_out_and_returns_error(self, tmp_path, db, provider):
-        """_run_safe_cmd should return returncode -1 when command times out."""
-        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        result = await service._run_safe_cmd(["sleep", "10"], cwd=tmp_path, timeout=1)
-        assert result.returncode == -1
-        assert "timed out" in result.stderr.lower()
+    # The run/git command primitives moved to GitRepo; their behavior is now
+    # tested directly in tests/test_git_repo.py. These guards remain to prevent
+    # a regression back to a shell-based runner on the service.
 
     async def test_run_shell_no_longer_exists(self, db, provider):
         """_run_shell must be removed — exec-based approach replaces it."""
         service = BackfillService(db=db, provider=provider)
         assert not hasattr(service, "_run_shell"), (
-            "_run_shell must be deleted; use _run_safe_cmd instead"
+            "_run_shell must be deleted; use GitRepo.run instead"
         )
 
     async def test_shell_quote_no_longer_exists(self, db, provider):
@@ -861,27 +836,33 @@ class TestBranchLeakOnException:
 
 
 class TestTargetedGitAdd:
-    async def test_run_git_uses_exec_not_shell(self, tmp_path, db, provider):
-        """_run_git must delegate to _run_exec, not _run_shell."""
+    async def test_git_wrapper_uses_exec_not_shell(self):
+        """GitRepo.git must delegate to the exec-based run(), not a shell."""
         import inspect
 
-        service = BackfillService(db=db, provider=provider, repo_path=tmp_path)
-        source = inspect.getsource(service._run_git)
-        assert "_run_exec" in source or "_run_safe_cmd" in source, (
-            "_run_git must call _run_exec or _run_safe_cmd"
-        )
-        assert "_run_shell" not in source, "_run_git must not call _run_shell"
+        from forkhub.services.git_repo import GitRepo
 
-    async def test_apply_and_test_uses_targeted_add(self, db, provider):
-        """_apply_and_test must stage only files_patched, not git add -A."""
+        source = inspect.getsource(GitRepo.git)
+        assert "self.run" in source, "GitRepo.git must call the exec-based run()"
+        assert "_run_shell" not in source, "GitRepo.git must not call a shell"
+
+    async def test_apply_and_test_uses_targeted_add(self):
+        """Staging must target only files_patched, never `git add -A`."""
         import inspect
 
-        service = BackfillService(db=db, provider=provider)
-        source = inspect.getsource(service._apply_and_test)
-        assert '"add", "--"' in source or '"add", "--", *' in source, (
-            "_apply_and_test must use 'git add -- <files>' not 'git add -A'"
+        from forkhub.services.git_repo import GitRepo
+
+        # The service stages via GitRepo.stage(files_patched) — not git add -A.
+        apply_src = inspect.getsource(BackfillService._apply_and_test)
+        assert "self._git.stage(attempt.files_patched)" in apply_src, (
+            "_apply_and_test must stage exactly files_patched via GitRepo.stage"
         )
-        assert '"add", "-A"' not in source, "_apply_and_test must not use 'git add -A'"
+        assert '"-A"' not in apply_src, "_apply_and_test must not use 'git add -A'"
+
+        # And GitRepo.stage uses the targeted `git add -- <paths>` form.
+        stage_src = inspect.getsource(GitRepo.stage)
+        assert '"add", "--"' in stage_src, "GitRepo.stage must use 'git add -- <paths>'"
+        assert '"-A"' not in stage_src, "GitRepo.stage must not use 'git add -A'"
 
 
 # ---------------------------------------------------------------------------
@@ -1419,19 +1400,25 @@ class TestResetFailureObservability:
         )
         provider.set_file_diff("forker1", "src/cache.py", diff)
 
-        class ResetFailingService(BackfillService):
-            async def _run_safe_cmd(self, args, **kwargs):
-                if args[:3] == ["git", "reset", "--hard"]:
+        from forkhub.services.git_repo import GitRepo
+
+        class ResetFailingGitRepo(GitRepo):
+            async def run(self, args, **kwargs):
+                if list(args)[:3] == ["git", "reset", "--hard"]:
                     return sp.CompletedProcess(
-                        args=args,
+                        args=list(args),
                         returncode=1,
                         stdout="",
                         stderr="fatal: simulated reset failure",
                     )
-                return await super()._run_safe_cmd(args, **kwargs)
+                return await super().run(args, **kwargs)
 
-        service = ResetFailingService(
-            db=db, provider=provider, repo_path=tmp_path, min_significance=5
+        service = BackfillService(
+            db=db,
+            provider=provider,
+            repo_path=tmp_path,
+            min_significance=5,
+            git_repo=ResetFailingGitRepo(tmp_path),
         )
         attempt = await service.apply_signal(signal["id"], keep_branch_on_failure=True)
 
