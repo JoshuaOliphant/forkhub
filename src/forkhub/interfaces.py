@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    import subprocess
+    from collections.abc import Sequence
     from datetime import datetime
 
     from forkhub.models import (
@@ -115,3 +117,34 @@ class Analyzer(Protocol):
         changed_forks: list[Fork],
         new_releases: list[Release],
     ) -> list[Signal]: ...
+
+
+@runtime_checkable
+class GitRepoProtocol(Protocol):
+    """Interface for running git/subprocess operations in a working-copy directory."""
+
+    async def run(
+        self, args: Sequence[str], *, stdin_data: bytes | None = None, timeout: int = 120
+    ) -> subprocess.CompletedProcess: ...
+
+    async def git(self, *args: str) -> str: ...
+
+    async def head_branch(self) -> subprocess.CompletedProcess: ...
+
+    async def verify_branch(self, name: str) -> subprocess.CompletedProcess: ...
+
+    async def branch_exists(self, name: str) -> bool: ...
+
+    async def apply_3way(self, patch: bytes) -> subprocess.CompletedProcess: ...
+
+    async def reset_hard(self) -> subprocess.CompletedProcess: ...
+
+    async def create_branch(self, name: str) -> None: ...
+
+    async def checkout(self, ref: str) -> None: ...
+
+    async def stage(self, paths: Sequence[str]) -> None: ...
+
+    async def commit(self, message: str) -> None: ...
+
+    async def delete_branch(self, name: str) -> None: ...
