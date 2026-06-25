@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -21,14 +20,19 @@ from forkhub.models import (
     BackfillStatus,
     Signal,
 )
+from forkhub.services.git_repo import GitRepo
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from forkhub.database import Database
-    from forkhub.interfaces import GitProvider, TestFixer
+    from forkhub.interfaces import GitProvider, GitRepoProtocol, TestFixer
 
 logger = logging.getLogger(__name__)
+
+# Single source of truth for the suite that gates backfill acceptance. The
+# library default; the public API and CLI forward None and let it resolve here.
+DEFAULT_TEST_COMMAND = "uv run pytest -x --tb=short -q"
 
 
 class BackfillService:
@@ -50,16 +54,18 @@ class BackfillService:
         provider: GitProvider,
         *,
         repo_path: Path | None = None,
-        test_command: str = "uv run pytest -x --tb=short -q",
+        test_command: str | None = None,
         min_significance: int = 5,
         max_attempts: int = 10,
         auto_fix_tests: bool = False,
         test_fixer: TestFixer | None = None,
+        git_repo: GitRepoProtocol | None = None,
     ) -> None:
         self._db = db
         self._provider = provider
         self._repo_path = repo_path or Path.cwd()
-        self._test_command = test_command
+        self._git: GitRepoProtocol = git_repo or GitRepo(self._repo_path)
+        self._test_command = test_command or DEFAULT_TEST_COMMAND
         self._min_significance = min_significance
         self._max_attempts = max_attempts
         self._auto_fix_tests = auto_fix_tests
@@ -397,11 +403,7 @@ class BackfillService:
         attempt.branch_name = branch_name
 
         # Check for branch collision before attempting to create it
-        existing = await self._run_safe_cmd(
-            ["git", "rev-parse", "--verify", branch_name],
-            cwd=self._repo_path,
-        )
-        if existing.returncode == 0:
+        if await self._git.branch_exists(branch_name):
             attempt.status = BackfillStatus.CONFLICT
             attempt.error = (
                 f"Candidate branch '{branch_name}' already exists. "
@@ -425,22 +427,16 @@ class BackfillService:
             # exists precisely so a human can inspect the patch + test edits, so
             # its branch is never deleted even under keep_branch_on_failure=False.
             try:
-                current = (
-                    await self._run_safe_cmd(
-                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                        cwd=self._repo_path,
-                    )
-                ).stdout.strip()
+                current = (await self._git.head_branch()).stdout.strip()
                 if current == branch_name:
-                    await self._run_git("checkout", "-")
+                    await self._git.checkout("-")
                 kept_statuses = (BackfillStatus.ACCEPTED, BackfillStatus.NEEDS_REVIEW)
-                if attempt.status not in kept_statuses and not keep_branch_on_failure:
-                    check = await self._run_safe_cmd(
-                        ["git", "rev-parse", "--verify", branch_name],
-                        cwd=self._repo_path,
-                    )
-                    if check.returncode == 0:
-                        await self._run_git("branch", "-D", branch_name)
+                if (
+                    attempt.status not in kept_statuses
+                    and not keep_branch_on_failure
+                    and await self._git.branch_exists(branch_name)
+                ):
+                    await self._git.delete_branch(branch_name)
             except Exception as cleanup_exc:  # pragma: no cover — double-exception during cleanup
                 logger.error(
                     "Failed to clean up after backfill attempt for signal %s: %s",
@@ -465,7 +461,7 @@ class BackfillService:
         Modifies the attempt in-place with results.
         """
         # Create the candidate branch
-        await self._run_git("checkout", "-b", branch_name)
+        await self._git.create_branch(branch_name)
 
         # Apply each patch via stdin to avoid shell injection
         combined_patch = "\n".join(patches)
@@ -475,11 +471,7 @@ class BackfillService:
         # and the local tree resolves where possible. The reconstructed diffs
         # carry index blob ids, so git can merge against the recorded base; when
         # the merge can't resolve, git writes conflict markers and exits non-zero.
-        apply_result = await self._run_safe_cmd(
-            ["git", "apply", "--3way", "-"],
-            cwd=self._repo_path,
-            stdin_data=patch_bytes,
-        )
+        apply_result = await self._git.apply_3way(patch_bytes)
 
         if apply_result.returncode != 0:
             # A failed 3-way leaves conflict markers and unmerged index entries
@@ -488,10 +480,7 @@ class BackfillService:
             # reclassify this CONFLICT via the outer except.
             attempt.status = BackfillStatus.CONFLICT
             attempt.error = f"Patch conflict: {apply_result.stderr}"
-            reset_result = await self._run_safe_cmd(
-                ["git", "reset", "--hard"],
-                cwd=self._repo_path,
-            )
+            reset_result = await self._git.reset_hard()
             if reset_result.returncode != 0:
                 # The tree could not be reset; conflict markers / unmerged
                 # entries may linger. Surface it so the dirty state is visible.
@@ -501,12 +490,12 @@ class BackfillService:
             return
 
         # Stage only the files touched by this patch (not all working-tree changes)
-        await self._run_git("add", "--", *attempt.files_patched)
+        await self._git.stage(attempt.files_patched)
         commit_msg = (
             f"backfill: {attempt.patch_summary}\n\n"
             f"Signal: {attempt.signal_id}\nFork: {attempt.fork_id}"
         )
-        await self._run_git("commit", "-m", commit_msg)
+        await self._git.commit(commit_msg)
 
         # Run the test suite (the "score")
         test_result = await self._run_tests()
@@ -636,10 +625,8 @@ class BackfillService:
 
             # 6. Stage, commit, and re-run tests
             try:
-                await self._run_git("add", "--", *applied_files)
-                await self._run_git(
-                    "commit", "-m", f"test: fix tests for backfill (round {fix_round + 1})"
-                )
+                await self._git.stage(applied_files)
+                await self._git.commit(f"test: fix tests for backfill (round {fix_round + 1})")
             except subprocess.CalledProcessError as exc:
                 logger.error("Git commit failed after test fix: %s", exc)
                 continue
@@ -657,78 +644,7 @@ class BackfillService:
 
     async def _run_tests(self) -> subprocess.CompletedProcess:
         """Run the project test suite and return the result."""
-        args = shlex.split(self._test_command)
-        return await self._run_safe_cmd(args, cwd=self._repo_path, timeout=300)
-
-    async def _run_git(self, *args: str) -> str:
-        """Run a git command in the repo directory and return stdout.
-
-        Raises subprocess.CalledProcessError if the command exits non-zero.
-        """
-        result = await self._run_safe_cmd(
-            ["git", *args],
-            cwd=self._repo_path,
-        )
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(
-                result.returncode,
-                ["git", *args],
-                output=result.stdout,
-                stderr=result.stderr,
-            )
-        return result.stdout or ""
-
-    async def _run_safe_cmd(
-        self,
-        args: list[str],
-        *,
-        cwd: Path | None = None,
-        stdin_data: bytes | None = None,
-        timeout: int = 120,
-    ) -> subprocess.CompletedProcess:
-        """Run a command as an argument list using subprocess_exec (no shell interpolation).
-
-        Returns a CompletedProcess with synthesized returncode=-1 on spawn
-        failure (missing binary, permission denied) or timeout. Callers that
-        need to distinguish "command ran and said no" from "command couldn't
-        run at all" should inspect stderr and check for returncode < 0.
-        """
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdin=asyncio.subprocess.PIPE if stdin_data else None,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(cwd or self._repo_path),
-            )
-        except (FileNotFoundError, PermissionError, OSError) as exc:
-            logger.error("Failed to spawn %s: %s", args[0] if args else "<empty>", exc)
-            return subprocess.CompletedProcess(
-                args=args,
-                returncode=-1,
-                stdout="",
-                stderr=f"failed to spawn {args[0] if args else '<empty>'}: {exc}",
-            )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(input=stdin_data), timeout=timeout
-            )
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            logger.error("Command timed out after %ds: %s", timeout, " ".join(str(a) for a in args))
-            return subprocess.CompletedProcess(
-                args=args,
-                returncode=-1,
-                stdout="",
-                stderr=f"Command timed out after {timeout}s",
-            )
-        return subprocess.CompletedProcess(
-            args=args,
-            returncode=proc.returncode if proc.returncode is not None else -1,
-            stdout=stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else "",
-            stderr=stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else "",
-        )
+        return await self._git.run(shlex.split(self._test_command), timeout=300)
 
     async def _record_attempt(self, attempt: BackfillAttempt) -> None:
         """Persist a backfill attempt to the database (the trace)."""
@@ -837,10 +753,7 @@ class BackfillService:
             return result
 
         # Return to original branch if we're currently on the candidate
-        current_proc = await self._run_safe_cmd(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=self._repo_path,
-        )
+        current_proc = await self._git.head_branch()
         if current_proc.returncode != 0:
             msg = f"rev-parse HEAD failed: {current_proc.stderr.strip() or current_proc.stdout}"
             logger.error(msg)
@@ -850,11 +763,8 @@ class BackfillService:
         current = current_proc.stdout.strip()
         if current == branch_name:
             try:
-                await self._run_git("checkout", "-")
-                post = await self._run_safe_cmd(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    cwd=self._repo_path,
-                )
+                await self._git.checkout("-")
+                post = await self._git.head_branch()
                 if post.returncode == 0:
                     result["checked_out"] = post.stdout.strip()
                 else:  # pragma: no cover — post-checkout rev-parse fails after successful checkout
@@ -872,15 +782,12 @@ class BackfillService:
             return result
 
         # Delete the candidate branch if it still exists
-        check = await self._run_safe_cmd(
-            ["git", "rev-parse", "--verify", branch_name],
-            cwd=self._repo_path,
-        )
+        check = await self._git.verify_branch(branch_name)
         # rev-parse --verify exits 0 on existence, 1 on missing. A timeout or
         # spawn failure returns -1; treat that as "unknown" (warn, don't touch).
         if check.returncode == 0:
             try:
-                await self._run_git("branch", "-D", branch_name)
+                await self._git.delete_branch(branch_name)
                 result["branch_deleted"] = True
             except subprocess.CalledProcessError as exc:  # pragma: no cover — branch -D failure
                 msg = f"delete candidate branch {branch_name} failed: {exc.stderr or exc}"

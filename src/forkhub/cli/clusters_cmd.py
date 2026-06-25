@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
 
-from forkhub.cli.formatting import render_cluster
+from forkhub.cli.formatting import emit, render_cluster
 from forkhub.cli.helpers import async_command
 from forkhub.models import Cluster
 
@@ -19,11 +20,7 @@ if TYPE_CHECKING:
 console = Console()
 
 
-def _output(line: str, capture: list[str] | None = None) -> None:
-    if capture is not None:
-        capture.append(line)
-    else:
-        console.print(line)
+_output = partial(emit, console)
 
 
 async def _clusters_impl(
@@ -33,14 +30,9 @@ async def _clusters_impl(
     capture_output: list[str] | None = None,
 ) -> None:
     """Core clusters listing logic."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_db
 
-    owns_db = False
-    if db is None:
-        settings, db, _ = await get_services()
-        owns_db = True
-
-    try:
+    async with open_db(db) as db:
         repo_row = await db.get_tracked_repo_by_name(repo)
         if repo_row is None:
             msg = f"[red]Error: Repository '{repo}' not found or not tracked.[/red]"
@@ -78,9 +70,6 @@ async def _clusters_impl(
         else:
             for cluster in clusters:
                 render_cluster(console, cluster)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @async_command

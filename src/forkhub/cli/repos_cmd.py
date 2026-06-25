@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
 
-from forkhub.cli.formatting import render_repo_table
+from forkhub.cli.formatting import emit, render_repo_table
 from forkhub.cli.helpers import async_command
 
 if TYPE_CHECKING:
@@ -18,11 +19,7 @@ if TYPE_CHECKING:
 console = Console()
 
 
-def _output(line: str, capture: list[str] | None = None) -> None:
-    if capture is not None:
-        capture.append(line)
-    else:
-        console.print(line)
+_output = partial(emit, console)
 
 
 async def _repos_impl(
@@ -33,16 +30,11 @@ async def _repos_impl(
     capture_output: list[str] | None = None,
 ) -> None:
     """Core repos listing logic, testable without CLI boilerplate."""
-    from forkhub.cli.helpers import get_services
+    from forkhub.cli.helpers import open_services
     from forkhub.models import TrackingMode
     from forkhub.services.tracker import TrackerService
 
-    owns_db = False
-    if db is None or provider is None:
-        settings, db, provider = await get_services()
-        owns_db = True
-
-    try:
+    async with open_services(db, provider) as (_settings, db, provider):
         tracker = TrackerService(db=db, provider=provider)
         mode_enum = TrackingMode(mode) if mode else None
         repos = await tracker.list_tracked_repos(
@@ -69,9 +61,6 @@ async def _repos_impl(
                 )
         else:
             render_repo_table(console, repos)
-    finally:
-        if owns_db:
-            await db.close()
 
 
 @async_command

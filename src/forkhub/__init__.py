@@ -342,7 +342,7 @@ class ForkHub:
         min_significance: int = 5,
         max_attempts: int = 10,
         auto_fix_tests: bool = False,  # Enable when agentic test fixer is implemented
-        test_command: str = "uv run pytest -x --tb=short -q",
+        test_command: str | None = None,
     ) -> BackfillResult:
         """Run the agentic backfill loop to cherry-pick valuable fork changes.
 
