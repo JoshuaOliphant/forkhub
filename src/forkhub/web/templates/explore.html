@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<!-- ABOUTME: Jinja template for the Explore zone, served by the FastAPI app. -->
+<!-- ABOUTME: Embeds the mapped fork data as JSON, then boots the constellation module. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Explore · ForkHub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', path='css/forkhub.css') }}">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg></div>
+        <div class="word">ForkHub</div>
+      </div>
+      <a class="repo-switch"{% if "/" in data.repo.full_name %} href="https://github.com/{{ data.repo.full_name }}" target="_blank" rel="noopener"{% endif %} title="Open on GitHub">
+        <span class="gh"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+        <span class="name">{{ data.repo.full_name }}</span>
+        <span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg></span>
+      </a>
+      <div class="spacer"></div>
+      <button class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>Sync</button>
+    </header>
+
+    <nav class="rail">
+      <a class="active" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16.2 7.8-2.9 6.4-6.4 2.9 2.9-6.4z"/></svg><span>Explore</span></a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>Digest</span></a>
+      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span>Control</span></a>
+    </nav>
+
+    <main class="zone">
+      <div class="explore">
+        <div class="zone-head">
+          <h1>Explore</h1>
+          <span class="sub">{{ data.forks | length }} forks · {{ data.clusters | length }} clusters</span>
+          <div class="tools">
+            <div class="seg">
+              <button class="on" data-view="map">Map</button>
+              <button data-view="list">List</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sky-wrap">
+          <svg class="starfield" aria-hidden="true"></svg>
+          <div class="sky-glow"></div>
+          <svg class="constellation" role="img" aria-label="Fork constellation. Use Tab to move between forks, Enter to inspect."></svg>
+          <div class="legend">
+            <span class="item"><span class="dot" style="background:var(--sig-feature)"></span>feature</span>
+            <span class="item"><span class="dot" style="background:var(--sig-fix)"></span>fix</span>
+            <span class="item"><span class="dot" style="background:var(--sig-refactor)"></span>refactor</span>
+            <span class="item"><span class="dot" style="background:var(--sig-adaptation)"></span>adaptation</span>
+            <span class="item"><span class="dot" style="background:var(--sig-dependency)"></span>dependency</span>
+            <span class="item"><span class="dot" style="background:var(--accent)"></span>live</span>
+          </div>
+          <div class="hint">larger = higher significance · linked = cluster</div>
+        </div>
+
+        <div class="listview" hidden></div>
+      </div>
+
+      <aside class="inspector" aria-label="Fork inspector">
+        <div class="insp-head"></div>
+        <div class="insp-body"></div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="diff-backdrop" hidden></div>
+
+  <script id="forkhub-data" type="application/json">{{ data | tojson }}</script>
+  <script type="module" src="{{ url_for('static', path='js/explore.js') }}"></script>
+</body>
+</html>

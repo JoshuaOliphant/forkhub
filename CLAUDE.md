@@ -13,9 +13,10 @@ ForkHub monitors the constellation of forks around GitHub repositories, uses a C
 uv sync                          # Install dependencies
 uv add <package>                 # Add dependency
 uv run forkhub <command>         # Run CLI
+uv run forkhub web               # Serve the Explore web UI (FastAPI → http://127.0.0.1:8000)
 
 # Testing
-uv run pytest                    # Run all tests (450 tests)
+uv run pytest                    # Run all tests (590 tests)
 uv run pytest tests/test_foo.py  # Single file
 uv run pytest -k "test_name"    # Single test by name
 uv run pytest -x                # Stop on first failure
@@ -58,11 +59,16 @@ src/forkhub/
 │   ├── agents.py        # diff_analyst, digest_writer AgentDefinitions
 │   ├── hooks.py         # Cost tracker + rate limit guard hooks
 │   └── runner.py        # ClaudeAnalyzer (Analyzer protocol, batching)
-└── cli/
-    ├── app.py           # Root Typer app (11 commands)
-    ├── helpers.py       # async_command decorator, get_services()
-    ├── formatting.py    # Rich tables, panels, significance bars
-    └── *_cmd.py         # One module per command group
+├── cli/
+│   ├── app.py           # Root Typer app (12 commands)
+│   ├── helpers.py       # async_command decorator, get_services()
+│   ├── formatting.py    # Rich tables, panels, significance bars
+│   └── *_cmd.py         # One module per command group
+└── web/                 # FastAPI Explore UI (consumes the library)
+    ├── app.py           # create_app(): routes + Jinja2Templates + StaticFiles
+    ├── data.py          # build_explore_data() — library models → frontend JSON
+    ├── templates/       # explore.html (server data injected via {{ data|tojson }})
+    └── static/          # Observatory CSS + constellation/inspector JS (vanilla)
 ```
 
 ### Library-first with Protocol-based plugins
@@ -91,6 +97,20 @@ forkhub sync  →  discover forks (GitHub API)  →  compare (HEAD SHA changed?)
 
 forkhub digest  →  query signals since last digest  →  digest-writer agent  →  deliver via backends
 ```
+
+### Web UI (Explore zone)
+
+`forkhub web` launches a FastAPI app (`web/app.py`) that serves the **Explore**
+zone — an interactive SVG "fork constellation" (the Observatory identity, see
+`PRODUCT.md`/`DESIGN.md`). It is a **library consumer**, not a separate data
+path: `web/data.py:build_explore_data()` maps `Fork` + `Signal` + cluster
+members (via `ForkHub.get_signals`/`get_cluster_members`) into the JSON the
+frontend reads, server-injected into `templates/explore.html` as
+`{{ data|tojson }}` (Jinja autoescaped). `GET /{owner}/{repo}` renders a tracked
+repo; `GET /` redirects to the first tracked repo (empty state if none). The
+vanilla-JS frontend (`static/js/`) escapes all untrusted fields and is null-safe
+for unanalyzed forks (`signal: None`). The render path emits a `web.explore`
+otel span. Don't put data logic in the web layer — add it to the library.
 
 ### Database
 

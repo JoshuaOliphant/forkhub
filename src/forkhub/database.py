@@ -552,6 +552,24 @@ class Database:
         # last-write-wins outcome deterministic.
         return {row["signal_id"]: row["cluster_id"] for row in rows}
 
+    async def list_cluster_members(self, repo_id: str) -> list[dict[str, Any]]:
+        """List (cluster_id, fork_id) for every cluster member in a repo.
+
+        cluster_members already carries fork_id, so this needs no signal join.
+        Ordered for deterministic grouping by consumers.
+        """
+        cursor = await self._db.execute(
+            """
+            SELECT cm.cluster_id, cm.fork_id
+            FROM cluster_members cm
+            JOIN clusters c ON cm.cluster_id = c.id
+            WHERE c.tracked_repo_id = ?
+            ORDER BY cm.cluster_id, cm.fork_id
+            """,
+            (repo_id,),
+        )
+        return await self._fetchall(cursor)
+
     # ------------------------------------------------------------------
     # DigestConfig & Digest CRUD
     # ------------------------------------------------------------------

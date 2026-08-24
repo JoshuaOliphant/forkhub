@@ -31,6 +31,11 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+    from typing import Protocol
+
+    class _SpanLike(Protocol):
+        def set_attribute(self, key: str, value: object) -> None: ...
+
 
 _logger = logging.getLogger("forkhub")
 
@@ -155,7 +160,7 @@ def configure(endpoint: str | None = None) -> bool:
 
 
 @contextmanager
-def span(name: str, **attrs: str) -> Iterator[object]:
+def span(name: str, **attrs: str) -> Iterator[_SpanLike]:
     """Convenience span with string attributes. No-op when OTel is absent."""
     with tracer.start_as_current_span(name) as s:
         for k, v in attrs.items():

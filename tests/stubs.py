@@ -92,7 +92,7 @@ def make_fork(tracked_repo_id: str, **overrides: object) -> dict:
     return defaults
 
 
-def make_signal(fork_id: str, tracked_repo_id: str, **overrides: object) -> dict:
+def make_signal(fork_id: str | None, tracked_repo_id: str, **overrides: object) -> dict:
     defaults: dict = {
         "id": make_id(),
         "fork_id": fork_id,

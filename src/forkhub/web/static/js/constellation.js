@@ -5,18 +5,24 @@ const SVGNS = 'http://www.w3.org/2000/svg';
 const VW = 1000, VH = 600, PAD = 70; // fixed virtual canvas — layout is stable across resizes
 const GOLDEN = 137.50776;
 
-let COLORS = {};
-let LAYOUT = null;      // computed once; render only rescales it
+let COLORS = {};        // cache: category -> resolved color
+let ACCENT = '';        // resolved --accent (live nodes)
+let LAYOUT = null;      // computed per data; render only rescales it
+let LAST_DATA = null;   // identity of the data LAYOUT was built from
 let SELECTED = null;    // fork id, re-applied after a rescale render
 
-function colorMap() {
-  const cs = getComputedStyle(document.documentElement);
-  const get = (n) => cs.getPropertyValue(n).trim();
-  return {
-    feature: get('--sig-feature'), fix: get('--sig-fix'), refactor: get('--sig-refactor'),
-    config: get('--sig-config'), dependency: get('--sig-dependency'), adaptation: get('--sig-adaptation'),
-    release: get('--sig-release'), removal: get('--sig-removal'), accent: get('--accent'),
-  };
+// Resolve category colours from the same CSS custom properties the inspector
+// chips use (var(--sig-<category>)), so the map and the inspector never diverge.
+function resolveColors() {
+  ACCENT = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  COLORS = {};
+}
+function catColor(cat) {
+  if (!(cat in COLORS)) {
+    const cs = getComputedStyle(document.documentElement);
+    COLORS[cat] = cs.getPropertyValue(`--sig-${cat}`).trim() || cs.getPropertyValue('--sig-dependency').trim();
+  }
+  return COLORS[cat];
 }
 
 function el(name, attrs = {}) {
@@ -35,7 +41,7 @@ function goldenPos(k, total) {
 }
 
 function sigRadius(sig) { return 5 + sig * 1.1; }
-function sigColorFor(f) { return f.live ? COLORS.accent : (COLORS[f.signal?.category] || COLORS.dependency); }
+function sigColorFor(f) { return f.live ? ACCENT : catColor(f.signal?.category ?? 'dependency'); }
 function makeNode(f, x, y, clusterId = null) {
   return { id: f.id, x, y, r: f.live ? 7 : sigRadius(f.signal?.significance || 3), color: sigColorFor(f), fork: f, clusterId };
 }
@@ -109,8 +115,14 @@ function computeLayout(data) {
 }
 
 export function renderConstellation(svg, data, { onSelect } = {}) {
-  COLORS = colorMap();
-  if (!LAYOUT) LAYOUT = computeLayout(data);
+  resolveColors();
+  // Recompute layout only when a new data object arrives (Sync / repo switch);
+  // a resize re-render reuses the cached layout. Drop a selection that's gone.
+  if (data !== LAST_DATA) {
+    LAYOUT = computeLayout(data);
+    LAST_DATA = data;
+    if (SELECTED && !data.forks.some((f) => f.id === SELECTED)) SELECTED = null;
+  }
 
   const rect = svg.getBoundingClientRect();
   const w = Math.max(360, Math.round(rect.width)), h = Math.max(260, Math.round(rect.height));
@@ -148,8 +160,13 @@ export function renderConstellation(svg, data, { onSelect } = {}) {
 
   for (const n of LAYOUT.nodes) {
     const cx = X(n.x), cy = Y(n.y);
-    const g = el('g', { class: 'node-hit', tabindex: '0', role: 'button',
-      'aria-label': `${n.fork.owner}, ${n.fork.live ? 'syncing now' : (n.fork.signal.category + ' significance ' + n.fork.signal.significance + ' of 10')}` });
+    const f = n.fork;
+    const desc = f.live
+      ? 'syncing now'
+      : f.signal
+        ? `${f.signal.category} significance ${f.signal.significance} of 10`
+        : 'not analyzed yet';
+    const g = el('g', { class: 'node-hit', tabindex: '0', role: 'button', 'aria-label': `${f.owner}, ${desc}` });
     g.dataset.id = n.id;
 
     if (n.fork.live) g.appendChild(el('circle', { cx, cy, r: n.r, fill: 'none', stroke: n.color, 'stroke-width': 1.5, class: 'pulse' }));
