@@ -138,13 +138,59 @@ class ClaudeAnalyzer:
                 if isinstance(msg, ResultMessage):
                     otel.record_session(msg.total_cost_usd or 0.0, msg.num_turns)
                     usage = msg.usage or {}
-                    otel.record_cache_usage(
-                        usage.get("cache_read_input_tokens", 0),
-                        usage.get("cache_creation_input_tokens", 0),
+                    cache_read = usage.get("cache_read_input_tokens", 0)
+                    cache_creation = usage.get("cache_creation_input_tokens", 0)
+                    otel.record_cache_usage(cache_read, cache_creation)
+                    self._log_cache_metrics(
+                        cache_read, cache_creation, msg.total_cost_usd, msg.num_turns
                     )
                     break
         finally:
             await client.disconnect()
+
+    def _log_cache_metrics(
+        self,
+        cache_read: int,
+        cache_creation: int,
+        cost_usd: float | None,
+        turns: int,
+    ) -> None:
+        """Log prompt caching metrics from session-end ResultMessage.usage.
+
+        The SDK is assumed to auto-cache the stable prefix (system prompt +
+        tool definitions) when it exceeds Anthropic's token threshold. This
+        method surfaces the aggregate cache metrics from a completed session
+        so operators can verify caching is active:
+
+        - cache_read > 0 confirms tokens were served from cache
+        - cache_creation > 0 confirms tokens were written to cache
+        - Both zero means the SDK omitted cache metrics (caching may be
+          disabled, unsupported, or the prefix was below threshold)
+
+        To live-verify caching: run a multi-turn analyzer session and check
+        for cache_read_input_tokens > 0 in INFO logs or OTel metrics.
+        """
+        turns_word = "turn" if turns == 1 else "turns"
+        total_cached = cache_read + cache_creation
+        if total_cached > 0:
+            hit_rate = cache_read / total_cached if total_cached else 0.0
+            logger.info(
+                "Session complete: %d %s, $%.4f. Cache: %d read, %d created (%.0f%% hit rate)",
+                turns,
+                turns_word,
+                cost_usd or 0.0,
+                cache_read,
+                cache_creation,
+                hit_rate * 100,
+            )
+        else:
+            # SDK omitted cache metrics — caching may be disabled or unsupported
+            logger.info(
+                "Session complete: %d %s, $%.4f. Cache metrics unavailable.",
+                turns,
+                turns_word,
+                cost_usd or 0.0,
+            )
 
     def _create_tools(self) -> list[Any]:
         """Create the MCP tools for the analysis session.

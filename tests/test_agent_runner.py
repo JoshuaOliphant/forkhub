@@ -1,7 +1,9 @@
 # ABOUTME: Tests for the ClaudeAnalyzer orchestration layer.
-# ABOUTME: Covers prompt building, batching logic, and options configuration.
+# ABOUTME: Covers prompt building, batching logic, options configuration, and cache metrics logging.
 
 from __future__ import annotations
+
+import logging
 
 import pytest
 
@@ -64,6 +66,82 @@ class TestBuildOptionsModelWiring:
         assert options.model == "claude-sonnet-4-6"
         assert options.agents is not None
         assert options.agents["diff-analyst"].model == "inherit"
+
+
+# ---------------------------------------------------------------------------
+# _log_cache_metrics — log formatting tests (not caching verification)
+# ---------------------------------------------------------------------------
+
+
+class TestLogCacheMetrics:
+    """Tests for _log_cache_metrics INFO log formatting.
+
+    These tests verify logger output formatting only — they do NOT verify
+    that the SDK actually caches prompts. To live-verify caching, run a
+    multi-turn analyzer session and check for cache_read_input_tokens > 0
+    in INFO logs or the forkhub.agent.session.cache_read_tokens OTel counter.
+    """
+
+    def test_logs_cache_hit_rate_when_metrics_present(self, runner, caplog):
+        """When cache metrics are present, logs hit rate percentage."""
+        with caplog.at_level(logging.INFO, logger="forkhub.agent.runner"):
+            runner._log_cache_metrics(
+                cache_read=900,
+                cache_creation=100,
+                cost_usd=0.05,
+                turns=3,
+            )
+        assert "3 turns" in caplog.text
+        assert "$0.0500" in caplog.text
+        assert "900 read" in caplog.text
+        assert "100 created" in caplog.text
+        assert "90% hit rate" in caplog.text
+
+    def test_logs_zero_hit_rate_when_only_creation(self, runner, caplog):
+        """When only cache_creation is reported, logs 0% hit rate."""
+        with caplog.at_level(logging.INFO, logger="forkhub.agent.runner"):
+            runner._log_cache_metrics(
+                cache_read=0,
+                cache_creation=1500,
+                cost_usd=0.10,
+                turns=1,
+            )
+        assert "1 turn," in caplog.text  # Proper singular
+        assert "0 read" in caplog.text
+        assert "1500 created" in caplog.text
+        assert "0% hit rate" in caplog.text
+
+    def test_logs_unavailable_when_no_cache_metrics(self, runner, caplog):
+        """When SDK omits cache metrics (both zero), logs unavailable."""
+        with caplog.at_level(logging.INFO, logger="forkhub.agent.runner"):
+            runner._log_cache_metrics(
+                cache_read=0,
+                cache_creation=0,
+                cost_usd=0.02,
+                turns=1,
+            )
+        assert "Cache metrics unavailable" in caplog.text
+
+    def test_handles_none_cost(self, runner, caplog):
+        """Gracefully handles None cost_usd (defaults to 0.0)."""
+        with caplog.at_level(logging.INFO, logger="forkhub.agent.runner"):
+            runner._log_cache_metrics(
+                cache_read=500,
+                cache_creation=500,
+                cost_usd=None,
+                turns=2,
+            )
+        assert "$0.0000" in caplog.text
+
+    def test_pluralizes_turns_correctly(self, runner, caplog):
+        """Uses 'turn' for 1, 'turns' for 2+."""
+        with caplog.at_level(logging.INFO, logger="forkhub.agent.runner"):
+            runner._log_cache_metrics(cache_read=100, cache_creation=0, cost_usd=0.01, turns=1)
+        assert "1 turn," in caplog.text
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="forkhub.agent.runner"):
+            runner._log_cache_metrics(cache_read=100, cache_creation=0, cost_usd=0.01, turns=2)
+        assert "2 turns," in caplog.text
 
 
 # ---------------------------------------------------------------------------
