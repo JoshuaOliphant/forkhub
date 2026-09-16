@@ -3,7 +3,11 @@
 **Goal**: run the real CLI against real GitHub data, exercising every common
 command, and verify observed behavior matches the documented contracts
 (spec.md §16, README, --help text). This doubles as the first data feed for
-the forkhub-dvi measurement harness.
+the decision measurement harness.
+
+Historical note: This plan originally used beads for finding tracking. All
+findings referenced below by `forkhub-xxx` IDs have been either fixed (closed)
+or migrated to GitHub Issues. See `docs/beads-migration.md` for the mapping.
 
 ## Ground rules
 
@@ -14,7 +18,7 @@ the forkhub-dvi measurement harness.
 - **Backfill mutates a git repo**: all backfill commands run inside a scratch
   clone under `/tmp/forkhub-uat/target-repo/` — never this workspace.
 - **Honest scoring**: each step has an expected outcome written BEFORE running.
-  A mismatch is a finding (bead), not a reason to bend the expectation.
+  A mismatch is a finding, not a reason to bend the expectation.
 - **Budget**: Tier 3 makes real Anthropic API calls. Capped via
   `analysis_budget_usd` in the scratch TOML; do not exceed without approval.
 
@@ -79,7 +83,7 @@ textual change).
 
 - Results table appended to this file as each tier completes
   (command, expected, observed, PASS/FAIL, notes).
-- Every FAIL → a bead with `discovered-from:<uat-bead>`.
+- Every FAIL → open a GitHub issue (optionally note `discovered-from: UAT plan` in the body).
 - Tier 3 outcomes additionally logged against specs/backfill-ai-decision.md.
 
 ## Results

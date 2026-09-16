@@ -1,7 +1,0 @@
-{
-  "database": "forkhub",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "forkhub",
-  "project_id": "ee4315f5-3a16-4f6c-9cd0-6b381e79f4d5"
-}

@@ -1328,9 +1328,9 @@ Parallelism requires the caller to manage separate checkouts via `--repo-path`.
 - External-agent primitives: designed for future AI-driven test-fixing
 
 **Pointers to future work:**
-- **forkhub-7k1** (true per-commit scoping): Signal model carries commit SHAs so backfill
+- **[#35](https://github.com/JoshuaOliphant/forkhub/issues/35)** (true per-commit scoping): Signal model carries commit SHAs so backfill
   can diff against exact commits, not just HEAD.
-- **specs/backfill-ai-decision.md** & **forkhub-dvi** (AI layer go/no-go): Evaluate
+- **specs/backfill-ai-decision.md** (AI layer go/no-go): Evaluate
   when to pursue AI-driven test fixing vs. surfacing failures to the user.
 
 ---

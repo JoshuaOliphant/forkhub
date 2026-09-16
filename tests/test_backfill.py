@@ -1485,7 +1485,7 @@ class TestPartialFetch:
         """A file whose diff fetch raises a ProviderError (e.g. a deleted
         fork's 404) is counted as a failed fetch — PATCH_FAILED with a
         "Partial fetch" error naming the file — instead of crashing apply_signal
-        with an unhandled traceback. Regression for forkhub-cml.
+        with an unhandled traceback (formerly forkhub-cml).
         """
         _init_git_repo_sync(tmp_path)
 

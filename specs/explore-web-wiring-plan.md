@@ -1,4 +1,4 @@
-# Plan — Wire Explore web UI to FastAPI + library (forkhub-87l)
+# Plan — Wire Explore web UI to FastAPI + library
 
 Implements [explore-web-wiring-spec.md](explore-web-wiring-spec.md). Library-first:
 data access + mapping live in the library/web package; the frontend is hardened to
@@ -38,7 +38,7 @@ frontend hardening (static/js/explore.js, constellation.js, static/css/forkhub.c
 - `tests/stubs.py` (`StubGitProvider`, factories) + `tests/conftest.py` (`db`, fixtures).
 - `otel.py` for the instrumentation span (AC-13).
 
-## Tasks (Beads) — every AC mapped
+## Tasks — every AC mapped
 
 | Task | Covers | Depends on |
 |------|--------|-----------|
