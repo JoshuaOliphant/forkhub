@@ -1,7 +1,8 @@
-# Backfill AI Layer: Go/No-Go Decision Framework (forkhub-dvi)
+# Backfill AI Layer: Go/No-Go Decision Framework
 
 **Status**: NO-GO accepted 2026-09-16 — decision closed.
-**Blocked by**: deterministic path landing (forkhub-1u6, ntr, slh, 2oc).
+
+Historical note: This was formerly tracked as bead forkhub-dvi.
 
 ## The question
 
@@ -39,7 +40,7 @@ Ranked by expected value, with the risk each carries:
 |------|------------------|------|
 | (a) Pre-apply candidate scoring (the original BACKFILL_EVALUATOR_PROMPT intent: value/quality/security of a candidate before applying) | Saves wasted apply/test cycles on junk candidates; adds a quality screen ranking can't express | Cost per candidate; false negatives screen out good changes; judgment is opaque |
 | (b) Repairing the fork's **production** code conflicts (resolve `--3way` conflict markers in the imported change — never touching upstream tests) | Converts CONFLICT outcomes into candidates; conflicts are expected to be a large outcome bucket | Semantic mistakes in conflict resolution land in production code; needs strong test gate after |
-| (c) Test-fixer (exists today behind `auto_fix_tests`, gated to NEEDS_REVIEW per forkhub-2oc) | Already built; surfaces "tests need updating for valid new behavior" cases for human review | Known oracle-editing hazard — permanently constrained to never auto-accept |
+| (c) Test-fixer (exists today behind `auto_fix_tests`, gated to NEEDS_REVIEW) | Already built; surfaces "tests need updating for valid new behavior" cases for human review | Known oracle-editing hazard — permanently constrained to never auto-accept |
 
 ## Decision criteria (proposed)
 

@@ -1,4 +1,4 @@
-# Plan — Wire Explore web UI to FastAPI + library (forkhub-87l)
+# Plan — Wire Explore web UI to FastAPI + library
 
 Implements [explore-web-wiring-spec.md](explore-web-wiring-spec.md). Library-first:
 data access + mapping live in the library/web package; the frontend is hardened to

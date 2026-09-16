@@ -31,8 +31,6 @@ htmlcov/
 # Database
 *.db
 
-# Dolt database files (added by bd init)
-.dolt/
 
 # OS
 .DS_Store
@@ -50,9 +48,6 @@ forkhub.toml
 results.tsv
 run.log
 
-# Beads / Dolt files (added by bd init)
-.beads-credential-key
-.beads/proxieddb/
 
 # Observability harness runtime artifacts (binaries, pids, logs, telemetry data)
 .claude/harness/observability/bin/

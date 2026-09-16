@@ -1,11 +1,11 @@
-# Spec — Wire Explore web UI to FastAPI + library (forkhub-87l)
+# Spec — Wire Explore web UI to FastAPI + library
 
 Make the fixture-fed Explore zone (`src/forkhub/web/`) consume **real** data from the
 ForkHub library, served by FastAPI, hardened against the live-data gaps the code review
 surfaced. Library-first: data access lives in the library, the web layer only maps +
 serves.
 
-Source: bead `forkhub-87l` (description + review hardening notes). PRODUCT.md / DESIGN.md
+Historical note: This was formerly tracked as bead forkhub-87l (shipped). PRODUCT.md / DESIGN.md
 define the Observatory identity; the frontend already reads a
 `<script id="forkhub-data" type="application/json">` block — the same shape Jinja injects.
 
