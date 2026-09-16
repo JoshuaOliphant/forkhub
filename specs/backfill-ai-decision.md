@@ -1,6 +1,6 @@
 # Backfill AI Layer: Go/No-Go Decision Framework (forkhub-dvi)
 
-**Status**: prep for La Boeuf's decision — DO NOT decide here.
+**Status**: NO-GO accepted 2026-09-16 — decision closed.
 **Blocked by**: deterministic path landing (forkhub-1u6, ntr, slh, 2oc).
 
 ## The question
