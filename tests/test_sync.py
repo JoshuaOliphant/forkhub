@@ -439,7 +439,7 @@ class TestReconciliation:
 
 
 # ---------------------------------------------------------------------------
-# Analyzer integration
+# Analyzer integration (formerly forkhub-hgm)
 # ---------------------------------------------------------------------------
 
 
@@ -713,7 +713,7 @@ class TestSyncAnalyzerIntegration:
 
 
 # ---------------------------------------------------------------------------
-# New-fork compare-on-first-discovery fix
+# New-fork compare-on-first-discovery fix (formerly forkhub-0tf)
 # ---------------------------------------------------------------------------
 
 
@@ -808,7 +808,7 @@ class TestSyncNewForkCompare:
 
 
 # ---------------------------------------------------------------------------
-# last_pushed_at fallback change detection
+# last_pushed_at fallback change detection (formerly forkhub-99c)
 # ---------------------------------------------------------------------------
 
 
@@ -968,7 +968,8 @@ class TestLastPushedAtChangeDetection:
     ):
         """A NULL-baseline fork that is genuinely ahead but whose head_sha
         fetch keeps failing must be analyzed at most once, not re-sent to the
-        analyzer on every sync (guards against unbounded Claude spend).
+        analyzer on every sync (guards against unbounded Claude spend;
+        formerly forkhub-zaa, see docs/beads-migration.md).
 
         Differential failure: compare succeeds (fork is ahead_by=5) while
         get_head_sha persistently fails, so head_sha never populates and
@@ -1018,7 +1019,7 @@ class TestLastPushedAtChangeDetection:
         self, db: Database, settings: SyncSettings
     ):
         """Each sync whose head_sha fetch fails on a NULL-baseline fork bumps
-        baseline_attempts, so the cap can eventually fire."""
+        baseline_attempts, so the cap can eventually fire (formerly forkhub-lgh)."""
         repo = await self._insert_repo(db)
         await _insert_fork_in_db(
             db,
@@ -1046,7 +1047,7 @@ class TestLastPushedAtChangeDetection:
     async def test_baseline_cap_stops_wasting_api_calls(self, db: Database, settings: SyncSettings):
         """Once baseline_attempts hits the cap, a NULL-baseline fork with an
         unchanged pushed_at stops being compared/SHA-fetched every sync — the
-        2-calls-forever residual is bounded."""
+        2-calls-forever residual is bounded (formerly forkhub-lgh)."""
         cap = settings.max_baseline_attempts
         repo = await self._insert_repo(db)
         # Seed the fork already at the cap (as if it had failed `cap` times).

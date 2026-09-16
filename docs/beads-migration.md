@@ -28,12 +28,37 @@ The following beads were migrated to GitHub Issues:
 | forkhub-ddb | [#43](https://github.com/JoshuaOliphant/forkhub/issues/43) | Multi-platform support (GitLab, Gitea/Forgejo) |
 | forkhub-m7y | [#44](https://github.com/JoshuaOliphant/forkhub/issues/44) | GitHub App (OAuth-based setup) |
 
-## Dropped Beads (Not Migrated)
+## Shipped / Completed (Not Migrated)
 
-The following beads were intentionally not migrated:
+The following beads represent work that shipped or was completed before migration:
 
-- **forkhub-87l** — Explore web UI wiring. Already shipped to main.
-- **forkhub-qqm** — Web UI. Superseded by other work.
+| Bead ID | Status | Description |
+|---------|--------|-------------|
+| forkhub-87l | Shipped | Explore web UI wiring — now on main |
+| forkhub-qqm | Superseded | Web UI — superseded by other work |
+| forkhub-14u | Done | Backfill deterministic path epic |
+| forkhub-dvi | Closed | AI layer go/no-go decision — NO-GO accepted |
+| forkhub-hgm | Done | Analyzer integration |
+| forkhub-0tf | Fixed | New-fork compare-on-first-discovery |
+| forkhub-99c | Done | last_pushed_at fallback change detection |
+| forkhub-lgh | Done | baseline_attempts cap to bound API calls |
+
+## UAT Findings (Fixed)
+
+The following beads were filed during UAT and subsequently fixed:
+
+| Bead ID | Status | Description |
+|---------|--------|-------------|
+| forkhub-p18 | Fixed | GitHubProvider lacked get_head_sha |
+| forkhub-9ey | Fixed | Vitality gate starved compare on dormant-upstream constellations |
+| forkhub-cml | Fixed | ProviderError hierarchy for deleted-fork 404s |
+| forkhub-flk | Fixed | store_signal schema validation (files_involved as list) |
+| forkhub-sqw | Fixed | Empty GITHUB_TOKEN sent malformed header |
+| forkhub-9mv | Fixed | dotenv only loaded from cwd |
+| forkhub-zaa | Fixed | Unbounded baseline retry on persistent SHA-fetch failure |
+| forkhub-dom | Fixed | Digest showed repo UUID instead of full_name |
+| forkhub-r1d | Done | Observability call-site wiring |
+| forkhub-m1m | Retracted | False finding (harness error reading $? after pipe) |
 
 ## Historical References
 
@@ -41,7 +66,12 @@ Some spec documents and test files contain historical references to bead IDs
 (e.g., `forkhub-xyz`). These references are preserved for historical context in:
 
 - `specs/uat-plan.md` — UAT findings originally tracked as beads
-- `specs/backfill-ai-decision.md` — Decision framework originally tracked as forkhub-dvi
-- `specs/explore-web-wiring-spec.md` — Completed feature spec
+- `specs/backfill-ai-decision.md` — Decision framework (forkhub-dvi)
+- `specs/backfill-deterministic-plan.md` — Epic (forkhub-14u)
+- `specs/explore-web-wiring-spec.md` — Shipped feature (forkhub-87l)
+- `tests/test_sync.py` — Test descriptions reference fixed beads
+- `tests/test_backfill.py` — Test descriptions reference fixed beads
+- `src/forkhub/services/sync.py` — Code comment references forkhub-lgh
+- `src/forkhub/services/backfill.py` — Code comment references forkhub-7k1
 
-These historical references are now closed/completed work and do not require action.
+These historical references document the origin of specific fixes and features.

@@ -38,7 +38,7 @@ frontend hardening (static/js/explore.js, constellation.js, static/css/forkhub.c
 - `tests/stubs.py` (`StubGitProvider`, factories) + `tests/conftest.py` (`db`, fixtures).
 - `otel.py` for the instrumentation span (AC-13).
 
-## Tasks (Beads) — every AC mapped
+## Tasks — every AC mapped
 
 | Task | Covers | Depends on |
 |------|--------|-----------|

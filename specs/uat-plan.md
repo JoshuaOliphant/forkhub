@@ -83,7 +83,7 @@ textual change).
 
 - Results table appended to this file as each tier completes
   (command, expected, observed, PASS/FAIL, notes).
-- Every FAIL → a bead with `discovered-from:<uat-bead>`.
+- Every FAIL → open a GitHub issue (optionally note `discovered-from: UAT plan` in the body).
 - Tier 3 outcomes additionally logged against specs/backfill-ai-decision.md.
 
 ## Results
