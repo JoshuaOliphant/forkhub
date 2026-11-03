@@ -74,6 +74,10 @@ metadata, but does not call an LLM. It is separate from the MCP read tools.
 
 ## ChatGPT connection gate
 
+See the [authenticated OAuth pilot](../docs/chatgpt-oauth-pilot.md) and
+[first-connection runbook](../docs/chatgpt-connection-runbook.md).
+
+
 OpenAI's current plugin setup uses a reachable HTTPS `/mcp` endpoint or
 secure MCP tunnel. Before attempting that:
 - replace the local-only preview with an authenticated MCP deployment;
