@@ -47,7 +47,11 @@ def test_valid_cimd_and_dcr_discovery():
         (RESOURCE_DOC, {**AUTH_DOC, "authorization_endpoint": None}, "Authorization endpoint"),
         (RESOURCE_DOC, {**AUTH_DOC, "token_endpoint": None}, "Token endpoint"),
         (RESOURCE_DOC, {**AUTH_DOC, "response_types_supported": ["token"]}, "response type code"),
-        (RESOURCE_DOC, {**AUTH_DOC, "grant_types_supported": ["client_credentials"]}, "authorization_code grant"),
+        (
+            RESOURCE_DOC,
+            {**AUTH_DOC, "grant_types_supported": ["client_credentials"]},
+            "authorization_code grant",
+        ),
         (
             RESOURCE_DOC,
             {**AUTH_DOC, "client_id_metadata_document_supported": False},
