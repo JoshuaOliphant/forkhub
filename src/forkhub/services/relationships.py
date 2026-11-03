@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from forkhub.interfaces import GitProvider
+from forkhub.interfaces import ProviderError
+
+if TYPE_CHECKING:
+    from forkhub.interfaces import GitProvider
 
 
 class RelationshipDirection(StrEnum):
@@ -17,6 +21,8 @@ class RelationshipDirection(StrEnum):
 
 
 class RepositoryRelationship(BaseModel):
+    # For all directions, source is the repo providing a potential change;
+    # target is the focus repo whose developer is evaluating that change.
     direction: RelationshipDirection
     source_repo: str
     target_repo: str
@@ -52,6 +58,7 @@ class RelationshipService:
         if repository.count("/") != 1 or not all(repository.split("/")):
             raise ValueError("repository must have the form owner/name")
 
+        # Unknown focus repositories propagate the provider error to the caller.
         user_repos = await self._provider.get_user_repos(username)
         mine = {repo.full_name.casefold() for repo in user_repos}
         focus = next(
@@ -66,7 +73,19 @@ class RelationshipService:
         if focus.is_fork and focus.parent_full_name:
             snapshot.upstream_repo = focus.parent_full_name
             owner, name = focus.parent_full_name.split("/", 1)
-            parent = await self._provider.get_repo(owner, name)
+            try:
+                parent = await self._provider.get_repo(owner, name)
+            except ProviderError as exc:
+                # GitHub may hide inaccessible repos as 404, or return 403.
+                # Do not disguise rate limits / transient server errors.
+                if getattr(exc, "status_code", None) not in (403, 404):
+                    raise
+                snapshot.complete = False
+                return snapshot
+            except ValueError:
+                # The shared stub uses ValueError for unknown repositories.
+                snapshot.complete = False
+                return snapshot
             snapshot.relationships.append(
                 RepositoryRelationship(
                     direction=RelationshipDirection.UPSTREAM,
@@ -94,7 +113,7 @@ class RelationshipService:
             )
             snapshot.pages_scanned += 1
             for fork in fork_page.forks:
-                if fork.github_id in seen or fork.full_name.casefold() == focus.full_name.casefold():
+                if (\n                    fork.github_id in seen\n                    or fork.full_name.casefold() == focus.full_name.casefold()\n                ):
                     continue
                 seen.add(fork.github_id)
                 snapshot.relationships.append(
