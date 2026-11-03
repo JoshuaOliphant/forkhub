@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         BackfillStatus as BackfillStatus,
     )
     from forkhub.services.sync import ReconcileResult, SyncResult
+    from forkhub.services.relationships import RelationshipSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,7 @@ class ForkHub:
         from forkhub.notifications.console import ConsoleBackend
         from forkhub.services.cluster import ClusterService
         from forkhub.services.digest import DigestService
+        from forkhub.services.relationships import RelationshipService
         from forkhub.services.sync import SyncService
         from forkhub.services.tracker import TrackerService
 
@@ -159,6 +161,7 @@ class ForkHub:
         self._analyzer: Analyzer | None = analyzer
 
         self._tracker = TrackerService(self._db, self._provider)
+        self._relationships = RelationshipService(self._provider)
         self._sync = SyncService(
             self._db, self._provider, self._settings.sync, analyzer=self._analyzer
         )
@@ -206,6 +209,29 @@ class ForkHub:
     async def untrack(self, owner: str, repo: str) -> None:
         """Stop tracking a repository."""
         await self._tracker.untrack_repo(owner, repo)
+
+    async def discover_relationships(
+        self, username: str, repository: str, *, max_pages: int = 3
+    ) -> RelationshipSnapshot:
+        """Refresh a bounded relationship snapshot and persist it for later queries."""
+        from forkhub.services.relationships import RelationshipSnapshot as _RelationshipSnapshot
+
+        snapshot = await self._relationships.discover(
+            username, repository, max_pages=max_pages
+        )
+        await self._db.save_relationship_snapshot(username, snapshot.model_dump())
+        return _RelationshipSnapshot.model_validate(snapshot)
+
+    async def get_cached_relationships(
+        self, username: str, repository: str
+    ) -> RelationshipSnapshot | None:
+        """Read the last discovered relationship snapshot without contacting GitHub."""
+        from forkhub.services.relationships import RelationshipSnapshot as _RelationshipSnapshot
+
+        data = await self._db.get_relationship_snapshot(username, repository)
+        if data is None:
+            return None
+        return _RelationshipSnapshot.model_validate(data)
 
     async def get_repos(self, mode: TrackingMode | None = None) -> list[TrackedRepo]:
         """List tracked repositories, optionally filtered by mode."""
