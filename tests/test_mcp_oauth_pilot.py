@@ -49,7 +49,7 @@ def claims():
     }
 
 
-def test_settings_normalizes_issuer(monkeypatch, settings):
+def test_settings_preserves_bare_origin_issuer(monkeypatch, settings):
     values = {
         "FORKHUB_OAUTH_ISSUER": ISSUER.rstrip("/"),
         "FORKHUB_OAUTH_RESOURCE": RESOURCE,
@@ -62,7 +62,7 @@ def test_settings_normalizes_issuer(monkeypatch, settings):
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
-    assert PilotSettings.from_env().issuer == ISSUER
+    assert PilotSettings.from_env().issuer == ISSUER.rstrip("/")
 
 
 def test_settings_rejects_missing_and_insecure_configuration(monkeypatch, settings):
@@ -176,3 +176,44 @@ async def test_http_without_token_is_rejected(settings):
             headers={"Accept": "application/json, text/event-stream"},
         )
     assert response.status_code == 401
+
+
+async def test_introspection_accepts_exact_bare_origin_issuer(settings, claims):
+    from dataclasses import replace
+
+    bare = ISSUER.rstrip("/")
+    pilot = replace(settings, issuer=bare)
+    claims["iss"] = bare
+    verifier = IntrospectionVerifier(
+        pilot,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=claims)),
+    )
+    access = await verifier.verify_token("opaque-token")
+    assert access is not None
+    assert access.subject == "pilot-user"
+
+
+async def test_tool_handler_rejects_wrong_subject_and_missing_scope(settings, monkeypatch):
+    import examples.chatgpt_mcp_oauth_pilot as pilot
+
+    server = create_server(settings)
+    tool = await server._tool_manager.get_tool("list_tracked_repositories")
+    assert tool is not None
+
+    for subject, scopes in [
+        ("another-user", ["forkhub:read"]),
+        ("pilot-user", ["profile"]),
+    ]:
+        token = pilot.PilotAccessToken(
+            token="opaque-token",
+            client_id="chatgpt-test-client",
+            scopes=scopes,
+            subject=subject,
+        )
+        monkeypatch.setattr(pilot, "get_access_token", lambda: token)
+        with pytest.raises(PermissionError):
+            await tool.fn(limit=1)
+
+    monkeypatch.setattr(pilot, "get_access_token", lambda: None)
+    with pytest.raises(PermissionError):
+        await tool.fn(limit=1)
