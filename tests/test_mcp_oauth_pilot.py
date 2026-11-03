@@ -129,8 +129,7 @@ async def test_introspection_preserves_scopes_and_authenticated_identity(setting
     assert access.expires_at == int(claims["exp"])
     assert requests[0].url == settings.introspection_url
     assert requests[0].headers["authorization"] == (
-        "Basic "
-        + base64.b64encode(b"pilot-service:test-secret").decode("ascii")
+        "Basic " + base64.b64encode(b"pilot-service:test-secret").decode("ascii")
     )
     assert "opaque-token" in requests[0].content.decode()
 
