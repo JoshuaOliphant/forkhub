@@ -315,9 +315,7 @@ class Database:
     # Cached relationship snapshots
     # ------------------------------------------------------------------
 
-    async def save_relationship_snapshot(
-        self, username: str, snapshot: dict[str, Any]
-    ) -> None:
+    async def save_relationship_snapshot(self, username: str, snapshot: dict[str, Any]) -> None:
         """Atomically replace a bounded snapshot, including its incomplete flag."""
         key = username.casefold()
         focus_id = snapshot["focus_github_id"]
