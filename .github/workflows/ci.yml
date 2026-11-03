@@ -13,7 +13,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --frozen --extra claude
       - run: uv run ruff check src/ tests/
-      - run: uv run ruff format --diff src/ tests/
       - run: uv run ruff format --check src/ tests/
 
   test:
