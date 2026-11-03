@@ -51,9 +51,8 @@ class PilotSettings:
             url = urlparse(values[field])
             if url.scheme != "https" or not url.hostname or url.username or url.password:
                 raise ValueError(f"{names[field]} must be an HTTPS URL")
-        # Match the URL serialized in MCP metadata to the issuer used for
-        # exact token-issuer verification. Configure the IdP's actual iss.
-        values["issuer"] = str(AnyHttpUrl(values["issuer"]))
+        # Preserve the identity provider's exact issuer for token validation.
+        # Pydantic may add a slash to a bare origin in MCP metadata only.
         if not values["resource"].endswith("/mcp"):
             raise ValueError("FORKHUB_OAUTH_RESOURCE must end with /mcp")
         if not Path(values["database_path"]).expanduser().is_file():
