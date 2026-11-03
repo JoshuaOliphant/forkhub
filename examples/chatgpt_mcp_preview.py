@@ -43,9 +43,7 @@ async def get_cached_relationships(repository: str) -> dict:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def list_cached_signals(
-    repository: str, min_significance: int = 5, limit: int = 20
-) -> dict:
+async def list_cached_signals(repository: str, min_significance: int = 5, limit: int = 20) -> dict:
     """Return existing classifications, not a fresh AI analysis."""
     return _queries().list_cached_signals(repository, min_significance, limit)
 
