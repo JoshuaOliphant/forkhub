@@ -21,7 +21,7 @@ class RepositoryRelationship(BaseModel):
     source_repo: str
     target_repo: str
     github_id: int
-    is_user_owned: bool = False
+    is_user_repository: bool = False
 
 
 class RelationshipSnapshot(BaseModel):
@@ -73,7 +73,7 @@ class RelationshipService:
                     source_repo=parent.full_name,
                     target_repo=focus.full_name,
                     github_id=parent.github_id,
-                    is_user_owned=parent.full_name.casefold() in mine,
+                    is_user_repository=parent.full_name.casefold() in mine,
                 )
             )
             fork_source = parent
@@ -103,7 +103,7 @@ class RelationshipService:
                         source_repo=fork.full_name,
                         target_repo=focus.full_name,
                         github_id=fork.github_id,
-                        is_user_owned=fork.full_name.casefold() in mine,
+                        is_user_repository=fork.full_name.casefold() in mine,
                     )
                 )
             if not fork_page.has_next:
