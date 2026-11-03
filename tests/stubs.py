@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from forkhub.models import (
@@ -23,7 +24,8 @@ from forkhub.models import (
     TrackedRepo,
 )
 from forkhub.providers.github import GitHubProviderError
-from forkhub.services.relationships import RelationshipSnapshot
+if TYPE_CHECKING:
+    from forkhub.services.relationships import RelationshipSnapshot
 
 # ---------------------------------------------------------------------------
 # Time constants used across tests
