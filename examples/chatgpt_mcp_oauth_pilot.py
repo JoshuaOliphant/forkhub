@@ -61,6 +61,12 @@ class PilotSettings:
         return cls(**values)
 
 
+class PilotAccessToken(AccessToken):
+    """Retain the verified subject on SDK versions predating native subject support."""
+
+    subject: str
+
+
 class IntrospectionVerifier(TokenVerifier):
     """Verify tokens with a trusted IdP, checking resource, scope and user."""
 
@@ -94,7 +100,7 @@ class IntrospectionVerifier(TokenVerifier):
             return None
         raw_scopes = claims["scope"]
         scopes = raw_scopes.split() if isinstance(raw_scopes, str) else raw_scopes
-        return AccessToken(
+        return PilotAccessToken(
             token=token,
             client_id=client_id,
             scopes=scopes,
