@@ -109,8 +109,7 @@ class PreviewQueries:
             raise ValueError("limit must be between 1 and 50")
         with closing(self._connect()) as conn:
             tracked = conn.execute(
-                "SELECT id FROM tracked_repos WHERE full_name = ? COLLATE NOCASE "
-                "AND excluded = 0",
+                "SELECT id FROM tracked_repos WHERE full_name = ? COLLATE NOCASE AND excluded = 0",
                 (repository,),
             ).fetchone()
             if tracked is None:
