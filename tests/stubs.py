@@ -24,6 +24,7 @@ from forkhub.models import (
     TrackedRepo,
 )
 from forkhub.providers.github import GitHubProviderError
+
 if TYPE_CHECKING:
     from forkhub.services.relationships import RelationshipSnapshot
 
