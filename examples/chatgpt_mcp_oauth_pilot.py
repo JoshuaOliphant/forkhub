@@ -51,6 +51,9 @@ class PilotSettings:
             url = urlparse(values[field])
             if url.scheme != "https" or not url.hostname or url.username or url.password:
                 raise ValueError(f"{names[field]} must be an HTTPS URL")
+        # Match the URL serialized in MCP metadata to the issuer used for
+        # exact token-issuer verification. Configure the IdP's actual iss.
+        values["issuer"] = str(AnyHttpUrl(values["issuer"]))
         if not values["resource"].endswith("/mcp"):
             raise ValueError("FORKHUB_OAUTH_RESOURCE must end with /mcp")
         if not Path(values["database_path"]).expanduser().is_file():
@@ -61,12 +64,15 @@ class PilotSettings:
 class IntrospectionVerifier(TokenVerifier):
     """Verify tokens with a trusted IdP, checking resource, scope and user."""
 
-    def __init__(self, settings: PilotSettings) -> None:
+    def __init__(
+        self, settings: PilotSettings, *, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
         self._settings = settings
+        self._transport = transport
 
     async def verify_token(self, token: str) -> AccessToken | None:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=5.0, transport=self._transport) as client:
                 response = await client.post(
                     self._settings.introspection_url,
                     data={"token": token, "token_type_hint": "access_token"},
@@ -86,10 +92,12 @@ class IntrospectionVerifier(TokenVerifier):
         client_id = claims.get("client_id")
         if not isinstance(client_id, str) or not client_id:
             return None
+        raw_scopes = claims["scope"]
+        scopes = raw_scopes.split() if isinstance(raw_scopes, str) else raw_scopes
         return AccessToken(
             token=token,
             client_id=client_id,
-            scopes=["forkhub:read"],
+            scopes=scopes,
             resource=self._settings.resource,
             subject=self._settings.subject,
             expires_at=int(claims["exp"]),
