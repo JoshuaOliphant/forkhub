@@ -216,9 +216,7 @@ class ForkHub:
         """Refresh a bounded relationship snapshot and persist it for later queries."""
         from forkhub.services.relationships import RelationshipSnapshot as _RelationshipSnapshot
 
-        snapshot = await self._relationships.discover(
-            username, repository, max_pages=max_pages
-        )
+        snapshot = await self._relationships.discover(username, repository, max_pages=max_pages)
         await self._db.save_relationship_snapshot(username, snapshot.model_dump())
         return _RelationshipSnapshot.model_validate(snapshot)
 
