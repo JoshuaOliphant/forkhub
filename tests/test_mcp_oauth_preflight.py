@@ -34,7 +34,11 @@ def test_valid_cimd_and_dcr_discovery():
 @pytest.mark.parametrize(
     "resource,auth,message",
     [
-        ({**RESOURCE_DOC, "resource": "https://wrong.example.com/mcp"}, AUTH_DOC, "exact configured"),
+        (
+            {**RESOURCE_DOC, "resource": "https://wrong.example.com/mcp"},
+            AUTH_DOC,
+            "exact configured",
+        ),
         ({**RESOURCE_DOC, "authorization_servers": []}, AUTH_DOC, "exact authorization"),
         (RESOURCE_DOC, {**AUTH_DOC, "issuer": ISSUER + "/"}, "issuer does not match"),
         (RESOURCE_DOC, {**AUTH_DOC, "code_challenge_methods_supported": ["plain"]}, "PKCE S256"),
