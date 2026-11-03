@@ -47,9 +47,7 @@ class TestRelationshipDiscovery:
             _fork(9999, "other/forked-lib"),
             _fork(9999, "other/forked-lib"),
         ]
-        result = await RelationshipService(provider).discover(
-            "testuser", "testuser/forked-lib"
-        )
+        result = await RelationshipService(provider).discover("testuser", "testuser/forked-lib")
         assert result.upstream_repo == "upstream-org/forked-lib"
         assert result.complete
         assert [r.direction for r in result.relationships] == [
@@ -64,15 +62,19 @@ class TestRelationshipDiscovery:
 
     async def test_missing_parent_marks_incomplete(self):
         parentless = RepoInfo(
-            github_id=20, owner="testuser", name="orphan",
-            full_name="testuser/orphan", default_branch="main",
-            is_fork=True, parent_full_name=None,
-            stars=0, forks_count=0, last_pushed_at=STUB_NOW,
+            github_id=20,
+            owner="testuser",
+            name="orphan",
+            full_name="testuser/orphan",
+            default_branch="main",
+            is_fork=True,
+            parent_full_name=None,
+            stars=0,
+            forks_count=0,
+            last_pushed_at=STUB_NOW,
         )
         provider = StubGitProvider(user_repos={"testuser": [parentless]})
-        result = await RelationshipService(provider).discover(
-            "testuser", "testuser/orphan"
-        )
+        result = await RelationshipService(provider).discover("testuser", "testuser/orphan")
         assert not result.complete
         assert result.relationships == []
         assert result.pages_scanned == 0
@@ -80,9 +82,7 @@ class TestRelationshipDiscovery:
     async def test_missing_named_upstream_returns_partial_snapshot(self):
         provider = StubGitProvider.with_testuser_data()
         del provider.repos["upstream-org/forked-lib"]
-        result = await RelationshipService(provider).discover(
-            "testuser", "testuser/forked-lib"
-        )
+        result = await RelationshipService(provider).discover("testuser", "testuser/forked-lib")
         assert result.upstream_repo == "upstream-org/forked-lib"
         assert not result.complete
         assert result.relationships == []
@@ -94,9 +94,7 @@ class TestRelationshipDiscovery:
             raise GitHubProviderError(404, "not found")
 
         provider.get_repo = forbidden  # type: ignore[method-assign]
-        result = await RelationshipService(provider).discover(
-            "testuser", "testuser/forked-lib"
-        )
+        result = await RelationshipService(provider).discover("testuser", "testuser/forked-lib")
         assert not result.complete
         assert result.upstream_repo == "upstream-org/forked-lib"
 
@@ -108,24 +106,18 @@ class TestRelationshipDiscovery:
 
         provider.get_repo = rate_limited  # type: ignore[method-assign]
         with pytest.raises(GitHubProviderError):
-            await RelationshipService(provider).discover(
-                "testuser", "testuser/forked-lib"
-            )
+            await RelationshipService(provider).discover("testuser", "testuser/forked-lib")
 
     async def test_unknown_focus_repo_propagates_provider_error(self):
         with pytest.raises(ValueError, match="Repo not found"):
-            await RelationshipService(
-                StubGitProvider.with_testuser_data()
-            ).discover("testuser", "nobody/missing")
+            await RelationshipService(StubGitProvider.with_testuser_data()).discover(
+                "testuser", "nobody/missing"
+            )
 
     async def test_untracked_public_repo_is_supported(self):
         provider = StubGitProvider.with_testuser_data()
-        provider._forks["upstream-org/forked-lib"] = [
-            _fork(1003, "testuser/forked-lib")
-        ]
-        result = await RelationshipService(provider).discover(
-            "testuser", "upstream-org/forked-lib"
-        )
+        provider._forks["upstream-org/forked-lib"] = [_fork(1003, "testuser/forked-lib")]
+        result = await RelationshipService(provider).discover("testuser", "upstream-org/forked-lib")
         assert result.focus_repo == "upstream-org/forked-lib"
         assert len(result.relationships) == 1
         assert result.relationships[0].direction == RelationshipDirection.DOWNSTREAM
@@ -135,9 +127,7 @@ class TestRelationshipDiscovery:
     async def test_user_owned_fork_is_labeled(self):
         provider = StubGitProvider.with_testuser_data()
         provider._forks["testuser/alpha"] = [_fork(1003, "testuser/forked-lib")]
-        result = await RelationshipService(provider).discover(
-            "testuser", "testuser/alpha"
-        )
+        result = await RelationshipService(provider).discover("testuser", "testuser/alpha")
         assert result.relationships[0].is_user_repository
 
     async def test_page_budget_reports_incomplete_coverage(self):
@@ -162,9 +152,7 @@ class TestRelationshipDiscovery:
     @pytest.mark.parametrize("repository", ["none", "a/", "/b", "a/b/c"])
     async def test_invalid_repository(self, repository: str):
         with pytest.raises(ValueError, match="owner/name"):
-            await RelationshipService(StubGitProvider()).discover(
-                "testuser", repository
-            )
+            await RelationshipService(StubGitProvider()).discover("testuser", repository)
 
     async def test_invalid_page_budget(self):
         with pytest.raises(ValueError, match="max_pages"):
