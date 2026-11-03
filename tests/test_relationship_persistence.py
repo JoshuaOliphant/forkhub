@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import aiosqlite
 import pytest
 
 from forkhub import ForkHub
@@ -93,7 +94,7 @@ class TestPersistentRelationships:
         }
         await db.save_relationship_snapshot("alice", snapshot)
         invalid = {**snapshot, "relationships": snapshot["relationships"] * 2}
-        with pytest.raises(Exception):
+        with pytest.raises(aiosqlite.IntegrityError):
             await db.save_relationship_snapshot("alice", invalid)
         stored = await db.get_relationship_snapshot("alice", "alice/project")
         assert stored == snapshot
