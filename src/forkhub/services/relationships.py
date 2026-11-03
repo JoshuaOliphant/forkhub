@@ -8,7 +8,6 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from forkhub.interfaces import GitProvider
-from forkhub.models import ForkInfo, RepoInfo
 
 
 class RelationshipDirection(StrEnum):
