@@ -31,6 +31,7 @@ class RepositoryRelationship(BaseModel):
 
 
 class RelationshipSnapshot(BaseModel):
+    focus_github_id: int
     focus_repo: str
     upstream_repo: str | None = None
     relationships: list[RepositoryRelationship] = Field(default_factory=list)
@@ -69,7 +70,7 @@ class RelationshipService:
             owner, name = repository.split("/")
             focus = await self._provider.get_repo(owner, name)
 
-        snapshot = RelationshipSnapshot(focus_repo=focus.full_name)
+        snapshot = RelationshipSnapshot(focus_github_id=focus.github_id, focus_repo=focus.full_name)
         if focus.is_fork and focus.parent_full_name:
             snapshot.upstream_repo = focus.parent_full_name
             owner, name = focus.parent_full_name.split("/", 1)

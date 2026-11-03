@@ -12,6 +12,34 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS relationship_snapshots (
+    username TEXT NOT NULL,
+    focus_github_id INTEGER NOT NULL,
+    focus_repo TEXT NOT NULL,
+    upstream_repo TEXT,
+    complete BOOLEAN NOT NULL,
+    pages_scanned INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (username, focus_github_id)
+);
+CREATE INDEX IF NOT EXISTS idx_relationship_snapshot_name
+    ON relationship_snapshots(username, focus_repo);
+
+CREATE TABLE IF NOT EXISTS repository_relationships (
+    username TEXT NOT NULL,
+    focus_github_id INTEGER NOT NULL,
+    direction TEXT NOT NULL,
+    source_github_id INTEGER NOT NULL,
+    source_repo TEXT NOT NULL,
+    target_repo TEXT NOT NULL,
+    is_user_repository BOOLEAN NOT NULL,
+    PRIMARY KEY (username, focus_github_id, direction, source_github_id),
+    FOREIGN KEY (username, focus_github_id)
+        REFERENCES relationship_snapshots(username, focus_github_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_repository_relationships_source
+    ON repository_relationships(source_github_id);
+
 CREATE TABLE IF NOT EXISTS tracked_repos (
     id TEXT PRIMARY KEY,
     github_id INTEGER UNIQUE NOT NULL,
@@ -282,6 +310,107 @@ class Database:
             return None
         # PRAGMA results come back as dicts with the pragma name as key
         return next(iter(row.values()))
+
+    # ------------------------------------------------------------------
+    # Cached relationship snapshots
+    # ------------------------------------------------------------------
+
+    async def save_relationship_snapshot(self, username: str, snapshot: dict[str, Any]) -> None:
+        """Atomically replace a bounded snapshot, including its incomplete flag."""
+        key = username.casefold()
+        focus_id = snapshot["focus_github_id"]
+        async with self._db.execute("SAVEPOINT relationship_snapshot"):
+            try:
+                await self._db.execute(
+                    """
+                    INSERT INTO relationship_snapshots
+                        (username, focus_github_id, focus_repo, upstream_repo,
+                         complete, pages_scanned)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(username, focus_github_id) DO UPDATE SET
+                        focus_repo = excluded.focus_repo,
+                        upstream_repo = excluded.upstream_repo,
+                        complete = excluded.complete,
+                        pages_scanned = excluded.pages_scanned,
+                        updated_at = datetime('now')
+                    """,
+                    (
+                        key,
+                        focus_id,
+                        snapshot["focus_repo"],
+                        snapshot["upstream_repo"],
+                        snapshot["complete"],
+                        snapshot["pages_scanned"],
+                    ),
+                )
+                await self._db.execute(
+                    "DELETE FROM repository_relationships WHERE username = ? "
+                    "AND focus_github_id = ?",
+                    (key, focus_id),
+                )
+                await self._db.executemany(
+                    """
+                    INSERT INTO repository_relationships
+                        (username, focus_github_id, direction, source_github_id,
+                         source_repo, target_repo, is_user_repository)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            key,
+                            focus_id,
+                            edge["direction"],
+                            edge["github_id"],
+                            edge["source_repo"],
+                            edge["target_repo"],
+                            edge["is_user_repository"],
+                        )
+                        for edge in snapshot["relationships"]
+                    ],
+                )
+            except Exception:
+                await self._db.execute("ROLLBACK TO SAVEPOINT relationship_snapshot")
+                await self._db.execute("RELEASE SAVEPOINT relationship_snapshot")
+                raise
+            await self._db.execute("RELEASE SAVEPOINT relationship_snapshot")
+        await self._db.commit()
+
+    async def get_relationship_snapshot(
+        self, username: str, repository: str
+    ) -> dict[str, Any] | None:
+        """Load the most recent snapshot, including partial coverage metadata."""
+        key = username.casefold()
+        cursor = await self._db.execute(
+            "SELECT * FROM relationship_snapshots "
+            "WHERE username = ? AND focus_repo = ? COLLATE NOCASE",
+            (key, repository),
+        )
+        row = await self._fetchone(cursor)
+        if row is None:
+            return None
+        cursor = await self._db.execute(
+            "SELECT * FROM repository_relationships "
+            "WHERE username = ? AND focus_github_id = ? ORDER BY rowid",
+            (key, row["focus_github_id"]),
+        )
+        edges = await self._fetchall(cursor)
+        return {
+            "focus_github_id": row["focus_github_id"],
+            "focus_repo": row["focus_repo"],
+            "upstream_repo": row["upstream_repo"],
+            "complete": bool(row["complete"]),
+            "pages_scanned": row["pages_scanned"],
+            "relationships": [
+                {
+                    "direction": edge["direction"],
+                    "github_id": edge["source_github_id"],
+                    "source_repo": edge["source_repo"],
+                    "target_repo": edge["target_repo"],
+                    "is_user_repository": bool(edge["is_user_repository"]),
+                }
+                for edge in edges
+            ],
+        }
 
     # ------------------------------------------------------------------
     # TrackedRepo CRUD
