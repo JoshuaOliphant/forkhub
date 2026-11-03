@@ -39,6 +39,12 @@ def validate_introspection(
     clock = now if now is not None else datetime.now(UTC)
     if exp <= clock.timestamp():
         return False
+    not_before = claims.get("nbf")
+    if not_before is not None:
+        if isinstance(not_before, bool) or not isinstance(not_before, (int, float)):
+            return False
+        if not_before > clock.timestamp():
+            return False
     scopes = claims.get("scope")
     if isinstance(scopes, str):
         available = set(scopes.split())
