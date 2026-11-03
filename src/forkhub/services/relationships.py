@@ -113,7 +113,10 @@ class RelationshipService:
             )
             snapshot.pages_scanned += 1
             for fork in fork_page.forks:
-                if (\n                    fork.github_id in seen\n                    or fork.full_name.casefold() == focus.full_name.casefold()\n                ):
+                if (
+                    fork.github_id in seen
+                    or fork.full_name.casefold() == focus.full_name.casefold()
+                ):
                     continue
                 seen.add(fork.github_id)
                 snapshot.relationships.append(
