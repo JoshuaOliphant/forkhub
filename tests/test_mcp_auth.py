@@ -67,6 +67,9 @@ def test_default_clock_branch():
         {"exp": "9999999999"},
         {"exp": NOW.timestamp()},
         {"exp": NOW.timestamp() - 10},
+        {"nbf": NOW.timestamp() + 1},
+        {"nbf": True},
+        {"nbf": "not-a-time"},
         {"scope": "profile"},
         {"scope": ["profile"]},
         {"scope": ["forkhub:read", 12]},
@@ -97,3 +100,11 @@ def test_custom_required_scope_denied():
         required_scope="forkhub:admin",
         now=NOW,
     )
+
+
+def test_valid_not_before_claim():
+    claims = valid_claims()
+    claims["nbf"] = NOW.timestamp() - 5
+    assert evaluate(claims)
+    claims["nbf"] = NOW.timestamp()
+    assert evaluate(claims)
