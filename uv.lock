@@ -434,6 +434,7 @@ claude = [
 [package.dev-dependencies]
 dev = [
     { name = "claude-agent-sdk" },
+    { name = "mcp" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -467,6 +468,7 @@ provides-extras = ["claude"]
 [package.metadata.requires-dev]
 dev = [
     { name = "claude-agent-sdk", specifier = ">=0.1" },
+    { name = "mcp", specifier = ">=1.26,<2" },
     { name = "pytest", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", specifier = ">=0.24,<1" },
     { name = "pytest-cov", specifier = ">=6.0,<7" },
