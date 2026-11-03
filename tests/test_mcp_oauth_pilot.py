@@ -197,7 +197,7 @@ async def test_tool_handler_rejects_wrong_subject_and_missing_scope(settings, mo
     import examples.chatgpt_mcp_oauth_pilot as pilot
 
     server = create_server(settings)
-    tool = await server._tool_manager.get_tool("list_tracked_repositories")
+    tool = server._tool_manager.get_tool("list_tracked_repositories")
     assert tool is not None
 
     for subject, scopes in [
