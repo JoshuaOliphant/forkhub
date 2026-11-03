@@ -26,7 +26,7 @@ Required environment variables:
 
 | Name | Purpose |
 |---|---|
-| `FORKHUB_OAUTH_ISSUER` | IdP issuer. Normalized using `AnyHttpUrl`; token `iss` must match the normalized value exactly |
+| `FORKHUB_OAUTH_ISSUER` | Exact IdP issuer from discovery; token `iss` must match this value byte-for-byte (including trailing slash, if any) |
 | `FORKHUB_OAUTH_RESOURCE` | Public HTTPS resource URL ending in /mcp |
 | `FORKHUB_OAUTH_INTROSPECTION_URL` | IdP HTTPS token introspection endpoint |
 | `FORKHUB_OAUTH_CLIENT_ID` | Introspection client ID |
@@ -95,6 +95,12 @@ end-to-end connection from unit tests alone.
 
 Issue #51 remains a separate data-quality blocker: a partial refresh
 currently overwrites the last complete relationship snapshot.
+
+The MCP SDK is an explicit development/test dependency (`mcp>=1.26,<2`)
+in `pyproject.toml`, not a transitive dependency. The registered
+authorization-server URL may be rendered with a trailing slash by Pydantic
+for bare-origin issuers; the token `iss` is checked against the raw configured
+issuer to avoid rejecting providers that omit the slash.
 
 The pilot intentionally introspects each request, without a token cache.
 Connection pooling and a bounded TTL cache should be considered after latency
