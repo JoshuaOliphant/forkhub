@@ -91,9 +91,7 @@ async def fetch_discovery(
             response.raise_for_status()
             data = response.json()
         except httpx.HTTPStatusError as exc:
-            return [
-                f"Cannot read {label} metadata at {url}: HTTP {exc.response.status_code}"
-            ]
+            return [f"Cannot read {label} metadata at {url}: HTTP {exc.response.status_code}"]
         except (httpx.HTTPError, ValueError) as exc:
             return [f"Cannot read {label} metadata at {url}: {type(exc).__name__}"]
         if not isinstance(data, dict):
