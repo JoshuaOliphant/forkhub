@@ -61,6 +61,7 @@ dev = [
     "ruff>=0.9,<1",
     "ty>=0.0.24",
     "claude-agent-sdk>=0.1",
+    "mcp>=1.26,<2",
 ]
 otel = [
     "opentelemetry-exporter-otlp-proto-http>=1.42.1",
