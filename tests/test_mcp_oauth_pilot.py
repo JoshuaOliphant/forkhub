@@ -210,7 +210,7 @@ async def test_tool_handler_rejects_wrong_subject_and_missing_scope(settings, mo
             scopes=scopes,
             subject=subject,
         )
-        monkeypatch.setattr(pilot, "get_access_token", lambda: token)
+        monkeypatch.setattr(pilot, "get_access_token", lambda token=token: token)
         with pytest.raises(PermissionError):
             await tool.fn(limit=1)
 
