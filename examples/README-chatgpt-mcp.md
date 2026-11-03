@@ -17,14 +17,20 @@ for this one command, avoiding a production dependency and lockfile change.
 
 ```bash
 export FORKHUB_MCP_USER="your-github-username"
-# Optional: point to your existing development database.
-# export FORKHUB_DATABASE_PATH="$HOME/.local/share/forkhub/forkhub.db"
+# Required: explicitly select an existing ForkHub database.
+export FORKHUB_MCP_DATABASE_PATH="$HOME/.local/share/forkhub/forkhub.db"
 
 uv run --with 'mcp>=1.26,<2' python examples/chatgpt_mcp_preview.py
 ```
 
 The experimental server binds to `127.0.0.1:8765` and serves
 Streamable HTTP at `http://127.0.0.1:8765/mcp`.
+
+The server fails to start if the configured database does not exist. The
+MCP tools open SQLite with `mode=ro`, so this preview does not initialize a
+GitHub provider, embedding model, or new database on a tool call. It remains
+a **single-developer preview**, not an authenticated multi-user application.
+Username lookups are case-normalized for SQLite.
 
 The server exposes:
 
@@ -46,7 +52,9 @@ npx @modelcontextprotocol/inspector@latest
 In Inspector select **Streamable HTTP** and enter
 `http://127.0.0.1:8765/mcp`. Verify the three tool schemas and call each.
 A missing relationship cache should return `status: not_scanned`, not a
-fabricated set of relationships.
+fabricated set of relationships. An untracked signal repository should return
+`status: not_tracked` instead of an exception. Test that scans marked incomplete
+carry an explicit warning.
 
 For a real repository, populate the cache from the existing library API:
 
@@ -102,3 +110,24 @@ not a redundant background agent.
 ## Design decision
 
 See [ChatGPT-first intelligence ADR](../docs/adr-chatgpt-first-intelligence.md).
+
+
+## Review debt from PR #50
+
+The review noted that an **incomplete refresh overwrites the last complete
+relationship snapshot** in the underlying store. This preview correctly
+reports the stored scan's `complete` flag, but cannot recover the earlier
+complete result. Fix snapshot preservation and report freshness before
+judging discovery completeness in the ChatGPT evaluation.
+
+The preview's tracked-repo/signal table has no per-user authorization;
+the username only scopes relationship snapshots. Local loopback isolation
+is a development-only boundary. Public deployment requires identity
+validation and tenant-scoped queries.
+
+To check the example code separately from the repository's default CI scope:
+
+```bash
+uv run ruff check examples/chatgpt_mcp_preview.py
+uv run ruff format --check examples/chatgpt_mcp_preview.py
+```
