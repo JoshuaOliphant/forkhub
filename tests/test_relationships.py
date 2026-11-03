@@ -37,7 +37,7 @@ class TestRelationshipDiscovery:
         assert rel.source_repo == "forker1/alpha"
         assert rel.target_repo == "testuser/alpha"
         assert rel.github_id == 5001
-        assert not rel.is_user_owned
+        assert not rel.is_user_repository
 
     async def test_personal_fork_returns_upstream_and_siblings(self):
         provider = StubGitProvider.with_testuser_data()
@@ -90,7 +90,7 @@ class TestRelationshipDiscovery:
         result = await RelationshipService(provider).discover(
             "testuser", "testuser/alpha"
         )
-        assert result.relationships[0].is_user_owned
+        assert result.relationships[0].is_user_repository
 
     async def test_page_budget_reports_incomplete_coverage(self):
         provider = StubGitProvider.with_testuser_data()
