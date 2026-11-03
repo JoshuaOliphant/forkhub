@@ -315,7 +315,9 @@ class Database:
     # Cached relationship snapshots
     # ------------------------------------------------------------------
 
-    async def save_relationship_snapshot(self, username: str, snapshot: dict[str, Any]) -> None:
+    async def save_relationship_snapshot(
+        self, username: str, snapshot: dict[str, Any]
+    ) -> None:
         """Atomically replace a bounded snapshot, including its incomplete flag."""
         key = username.casefold()
         focus_id = snapshot["focus_github_id"]
@@ -335,8 +337,12 @@ class Database:
                         updated_at = datetime('now')
                     """,
                     (
-                        key, focus_id, snapshot["focus_repo"], snapshot["upstream_repo"],
-                        snapshot["complete"], snapshot["pages_scanned"],
+                        key,
+                        focus_id,
+                        snapshot["focus_repo"],
+                        snapshot["upstream_repo"],
+                        snapshot["complete"],
+                        snapshot["pages_scanned"],
                     ),
                 )
                 await self._db.execute(
@@ -353,8 +359,12 @@ class Database:
                     """,
                     [
                         (
-                            key, focus_id, edge["direction"], edge["github_id"],
-                            edge["source_repo"], edge["target_repo"],
+                            key,
+                            focus_id,
+                            edge["direction"],
+                            edge["github_id"],
+                            edge["source_repo"],
+                            edge["target_repo"],
                             edge["is_user_repository"],
                         )
                         for edge in snapshot["relationships"]
