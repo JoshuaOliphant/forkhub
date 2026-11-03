@@ -49,9 +49,26 @@ OpenID discovery URLs; the preflight deliberately accepts an explicit
 authorization-metadata URL rather than guessing the path.
 
 The script makes metadata-only GET requests, and checks exact resource and
-issuer identity, advertised S256 PKCE, authorization/token endpoints, and CIMD
-or DCR registration support. It does **not** complete login or validate
+issuer identity, advertised S256 PKCE, authorization/token endpoints,
+authorization-code response/grant compatibility, and CIMD or DCR support.
+A missing optional `grant_types_supported` is permitted; if advertised,
+it must contain `authorization_code`. It does **not** complete login or validate
 tokens. A PASS is a prerequisite, not proof of an end-to-end OAuth flow.
+
+**Known pilot SDK interoperability issue:** for an IdP whose exact issuer is a
+bare origin such as `https://identity.example.com`, the MCP SDK's Pydantic
+`AnyHttpUrl` can serialize protected-resource metadata as
+`https://identity.example.com/`. The preflight correctly **fails** this
+slash-only mismatch instead of weakening issuer verification. It prints
+both values and identifies the SDK normalization issue. Resolve the
+advertised metadata inconsistency before connecting ChatGPT. Never
+silently append a slash to the token's `iss` claim or treat the two issuer
+identifiers as equivalent. If an IdP publishes a trailing slash, configure
+the exact issuer including that slash.
+
+HTTP failure diagnostics include the URL, status code, and the `Location`
+header of an unfollowed redirect. Supply the final HTTPS metadata endpoint
+rather than relying on redirects.
 
 ## End-to-end acceptance
 
