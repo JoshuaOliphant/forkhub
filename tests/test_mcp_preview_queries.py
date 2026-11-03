@@ -111,9 +111,7 @@ async def test_signal_missing_repo_returns_structured_status(preview):
 
 async def test_signal_filters_truncates_and_keeps_provenance_caveat(preview):
     db, reader = preview
-    repo = make_tracked_repo(
-        github_id=888, owner="alice", name="repo", full_name="alice/repo"
-    )
+    repo = make_tracked_repo(github_id=888, owner="alice", name="repo", full_name="alice/repo")
     await db.insert_tracked_repo(repo)
     for i in range(3):
         await db.insert_signal(
@@ -151,6 +149,4 @@ def test_repository_name_validation(value, tmp_path):
 async def test_signal_range_validation(preview, significance, limit):
     _, reader = preview
     with pytest.raises(ValueError):
-        reader.list_cached_signals(
-            "alice/repo", min_significance=significance, limit=limit
-        )
+        reader.list_cached_signals("alice/repo", min_significance=significance, limit=limit)
