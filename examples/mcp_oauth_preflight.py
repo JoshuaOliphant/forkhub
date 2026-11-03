@@ -70,9 +70,7 @@ async def fetch_discovery(
         if not isinstance(data, dict):
             return [f"{label} metadata must be a JSON object."]
         documents.append(data)
-    return validate_discovery(
-        documents[0], documents[1], resource_url=resource_url, issuer=issuer
-    )
+    return validate_discovery(documents[0], documents[1], resource_url=resource_url, issuer=issuer)
 
 
 async def main() -> int:
