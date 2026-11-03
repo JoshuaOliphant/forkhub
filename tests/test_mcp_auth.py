@@ -50,9 +50,7 @@ def test_valid_list_audience_and_scopes():
 def test_default_clock_branch():
     claims = valid_claims()
     claims["exp"] = datetime.now(UTC).timestamp() + 3600
-    assert validate_introspection(
-        claims, issuer=ISSUER, audience=RESOURCE, subject=SUBJECT
-    )
+    assert validate_introspection(claims, issuer=ISSUER, audience=RESOURCE, subject=SUBJECT)
 
 
 @pytest.mark.parametrize(
