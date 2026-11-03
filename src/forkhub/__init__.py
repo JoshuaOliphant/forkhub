@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     from forkhub.config import ForkHubSettings
     from forkhub.database import Database
+    from forkhub.intelligence_store import IntelligenceStore
     from forkhub.interfaces import (
         Analyzer,
         EmbeddingProvider,
@@ -129,11 +130,13 @@ class ForkHub:
         embedding_provider: EmbeddingProvider | None = None,
         db: Database | None = None,
         *,
+        intelligence_store: IntelligenceStore | None = None,
         auto_analyze: bool = True,
         analyzer: Analyzer | None = None,
     ) -> None:
         from forkhub.config import get_db_path, load_settings
         from forkhub.database import Database as _Database
+        from forkhub.intelligence_store import SQLiteIntelligenceStore
         from forkhub.notifications.console import ConsoleBackend
         from forkhub.services.cluster import ClusterService
         from forkhub.services.digest import DigestService
@@ -143,6 +146,7 @@ class ForkHub:
 
         self._settings = settings or load_settings()
         self._db = db or _Database(get_db_path(self._settings))
+        self._intelligence_store = intelligence_store or SQLiteIntelligenceStore(self._db)
         self._provider = git_provider or self._build_default_provider()
         self._backends: list[NotificationBackend] = (
             notification_backends if notification_backends is not None else [ConsoleBackend()]
@@ -214,22 +218,15 @@ class ForkHub:
         self, username: str, repository: str, *, max_pages: int = 3
     ) -> RelationshipSnapshot:
         """Refresh a bounded relationship snapshot and persist it for later queries."""
-        from forkhub.services.relationships import RelationshipSnapshot as _RelationshipSnapshot
-
         snapshot = await self._relationships.discover(username, repository, max_pages=max_pages)
-        await self._db.save_relationship_snapshot(username, snapshot.model_dump())
-        return _RelationshipSnapshot.model_validate(snapshot)
+        await self._intelligence_store.save_relationship_snapshot(username, snapshot)
+        return snapshot
 
     async def get_cached_relationships(
         self, username: str, repository: str
     ) -> RelationshipSnapshot | None:
         """Read the last discovered relationship snapshot without contacting GitHub."""
-        from forkhub.services.relationships import RelationshipSnapshot as _RelationshipSnapshot
-
-        data = await self._db.get_relationship_snapshot(username, repository)
-        if data is None:
-            return None
-        return _RelationshipSnapshot.model_validate(data)
+        return await self._intelligence_store.get_relationship_snapshot(username, repository)
 
     async def get_repos(self, mode: TrackingMode | None = None) -> list[TrackedRepo]:
         """List tracked repositories, optionally filtered by mode."""
