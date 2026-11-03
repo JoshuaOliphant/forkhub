@@ -88,9 +88,14 @@ async def test_invalid_urls_and_failure_modes():
             "resource_url": RESOURCE,
             "issuer": ISSUER,
         }
-        assert "HTTPS" in (await fetch_discovery(
-            client, **{**params, "resource_metadata_url": "http://forkhub.example.com/meta"}
-        ))[0]
+        assert (
+            "HTTPS"
+            in (
+                await fetch_discovery(
+                    client, **{**params, "resource_metadata_url": "http://forkhub.example.com/meta"}
+                )
+            )[0]
+        )
         assert "HTTPStatusError" in (await fetch_discovery(client, **params))[0]
 
 
