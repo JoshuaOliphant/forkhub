@@ -23,6 +23,7 @@ from forkhub.models import (
     TrackedRepo,
 )
 from forkhub.providers.github import GitHubProviderError
+from forkhub.services.relationships import RelationshipSnapshot
 
 # ---------------------------------------------------------------------------
 # Time constants used across tests
@@ -564,3 +565,21 @@ class StubAnalyzer:
         if self._raise_error is not None:
             raise self._raise_error
         return list(self._signals)
+
+
+class StubIntelligenceStore:
+    """In-memory implementation of the intelligence persistence contract."""
+
+    def __init__(self) -> None:
+        self.snapshots: dict[tuple[str, str], RelationshipSnapshot] = {}
+
+    async def save_relationship_snapshot(
+        self, user_id: str, snapshot: RelationshipSnapshot
+    ) -> None:
+        self.snapshots[(user_id, snapshot.focus_repo)] = snapshot.model_copy(deep=True)
+
+    async def get_relationship_snapshot(
+        self, user_id: str, repository: str
+    ) -> RelationshipSnapshot | None:
+        snapshot = self.snapshots.get((user_id, repository))
+        return snapshot.model_copy(deep=True) if snapshot is not None else None
