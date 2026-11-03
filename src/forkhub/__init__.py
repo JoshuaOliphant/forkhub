@@ -37,8 +37,8 @@ if TYPE_CHECKING:
     from forkhub.models import (
         BackfillStatus as BackfillStatus,
     )
-    from forkhub.services.sync import ReconcileResult, SyncResult
     from forkhub.services.relationships import RelationshipSnapshot
+    from forkhub.services.sync import ReconcileResult, SyncResult
 
 logger = logging.getLogger(__name__)
 
