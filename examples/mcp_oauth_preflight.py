@@ -26,7 +26,20 @@ def validate_discovery(
         problems.append("Resource metadata must advertise the exact configured MCP resource URL.")
     servers = resource_metadata.get("authorization_servers")
     if not isinstance(servers, list) or issuer not in servers:
-        problems.append("Resource metadata must list the exact authorization-server issuer.")
+        if (
+            isinstance(servers, list)
+            and issuer.rstrip("/") + "/" in servers
+            and not issuer.endswith("/")
+        ):
+            problems.append(
+                "Resource metadata advertises the issuer with an extra trailing slash: "
+                f"{issuer.rstrip('/') + '/'}; IdP issuer is {issuer}. "
+                "The MCP pilot's AnyHttpUrl normalization can cause this. "
+                "This is a real discovery incompatibility; configure compatible "
+                "metadata before connecting ChatGPT."
+            )
+        else:
+            problems.append("Resource metadata must list the exact authorization-server issuer.")
 
     if authorization_metadata.get("issuer") != issuer:
         problems.append("Authorization-server metadata issuer does not match exactly.")
@@ -37,6 +50,12 @@ def validate_discovery(
         problems.append("Authorization endpoint is missing.")
     if not isinstance(authorization_metadata.get("token_endpoint"), str):
         problems.append("Token endpoint is missing.")
+    response_types = authorization_metadata.get("response_types_supported")
+    if not isinstance(response_types, list) or "code" not in response_types:
+        problems.append("Authorization server must advertise response type code.")
+    grants = authorization_metadata.get("grant_types_supported")
+    if grants is not None and (not isinstance(grants, list) or "authorization_code" not in grants):
+        problems.append("Authorization server must support the authorization_code grant.")
 
     has_cimd = authorization_metadata.get("client_id_metadata_document_supported") is True
     has_dcr = isinstance(authorization_metadata.get("registration_endpoint"), str)
@@ -63,10 +82,20 @@ async def fetch_discovery(
             return [f"{label} metadata URL must use HTTPS."]
         try:
             response = await client.get(url)
+            if response.is_redirect:
+                location = response.headers.get("location", "(no Location header)")
+                return [
+                    f"Cannot read {label} metadata at {url}: HTTP {response.status_code}; "
+                    f"redirect to {location}. Use the final HTTPS metadata URL."
+                ]
             response.raise_for_status()
             data = response.json()
+        except httpx.HTTPStatusError as exc:
+            return [
+                f"Cannot read {label} metadata at {url}: HTTP {exc.response.status_code}"
+            ]
         except (httpx.HTTPError, ValueError) as exc:
-            return [f"Cannot read {label} metadata: {type(exc).__name__}"]
+            return [f"Cannot read {label} metadata at {url}: {type(exc).__name__}"]
         if not isinstance(data, dict):
             return [f"{label} metadata must be a JSON object."]
         documents.append(data)
@@ -76,7 +105,11 @@ async def fetch_discovery(
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Check ForkHub OAuth discovery metadata.")
     parser.add_argument("--resource", required=True, help="Exact HTTPS MCP resource URL")
-    parser.add_argument("--issuer", required=True, help="Exact IdP issuer (including slash)")
+    parser.add_argument(
+        "--issuer",
+        required=True,
+        help="Exact IdP issuer as published in its metadata (trailing slash only if present)",
+    )
     parser.add_argument("--resource-metadata", required=True, help="Full HTTPS metadata URL")
     parser.add_argument("--authorization-metadata", required=True, help="Full HTTPS metadata URL")
     args = parser.parse_args()
