@@ -26,7 +26,7 @@ Required environment variables:
 
 | Name | Purpose |
 |---|---|
-| `FORKHUB_OAUTH_ISSUER` | Exact issuer returned by token introspection |
+| `FORKHUB_OAUTH_ISSUER` | IdP issuer. Normalized using `AnyHttpUrl`; token `iss` must match the normalized value exactly |
 | `FORKHUB_OAUTH_RESOURCE` | Public HTTPS resource URL ending in /mcp |
 | `FORKHUB_OAUTH_INTROSPECTION_URL` | IdP HTTPS token introspection endpoint |
 | `FORKHUB_OAUTH_CLIENT_ID` | Introspection client ID |
@@ -52,9 +52,11 @@ scheme, ensure the resource URL and OAuth discovery metadata match exactly.
 ## Security behavior
 
 - OAuth introspection must return `active=true`, `iss`, `sub`,
-  `aud`, `exp`, `scope`, and `client_id`.
-- Deny inactive, expired, unscoped, wrong-audience, wrong-issuer or
-  wrong-subject tokens.
+  `aud`, `exp`, `scope`, and `client_id`. If `nbf` is present, it must be a valid
+  numeric timestamp that is not in the future.
+- Deny inactive, expired, not-yet-valid, unscoped, wrong-audience, wrong-issuer
+  or wrong-subject tokens. Scope data passed to the MCP SDK comes from the
+  introspected grant, not a fabricated fixed list.
 - Authenticated tool handlers still verify the user subject and read scope.
 - GitHub username is an operator-configured single-user mapping, *not*
   an authentication credential.
@@ -69,14 +71,15 @@ scheme, ensure the resource URL and OAuth discovery metadata match exactly.
 
 ## Verification checklist
 
-1. Run `uv run pytest tests/test_mcp_auth.py`, lint and format.
+1. Run `uv run pytest tests/test_mcp_auth.py tests/test_mcp_oauth_pilot.py`, lint and format.
 2. Start the service against the dedicated database with a real IdP.
 3. Unauthenticated `/mcp` requests must return **401** with a resource
    metadata reference.
 4. The `/.well-known/oauth-protected-resource/mcp` document must
    advertise the configured resource URL and authorization server.
-5. Test unknown, expired, wrong-audience, wrong-issuer and wrong-subject
-   tokens. None may reach tool handlers.
+5. Test unknown, expired, future-`nbf`, wrong-audience, wrong-issuer and wrong-subject
+   tokens. None may reach tool handlers. The automated suite mocks IdP introspection;
+   test full network behavior with the real IdP before deployment.
 6. Test a valid user token with read scope. Verify all three tool results.
 7. Connect ChatGPT only after OAuth discovery and permission checks pass.
 8. Before any public rollout, add per-tool `securitySchemes`, tenant
@@ -92,3 +95,7 @@ end-to-end connection from unit tests alone.
 
 Issue #51 remains a separate data-quality blocker: a partial refresh
 currently overwrites the last complete relationship snapshot.
+
+The pilot intentionally introspects each request, without a token cache.
+Connection pooling and a bounded TTL cache should be considered after latency
+and revocation requirements are measured against the real IdP.
