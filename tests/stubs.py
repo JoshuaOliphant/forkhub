@@ -579,10 +579,14 @@ class StubIntelligenceStore:
     async def save_relationship_snapshot(
         self, user_id: str, snapshot: RelationshipSnapshot
     ) -> None:
-        self.snapshots[(user_id, snapshot.focus_repo)] = snapshot.model_copy(deep=True)
+        key = (user_id.casefold(), snapshot.focus_repo.casefold())
+        previous = self.snapshots.get(key)
+        if previous is not None and previous.complete and not snapshot.complete:
+            return
+        self.snapshots[key] = snapshot.model_copy(deep=True)
 
     async def get_relationship_snapshot(
         self, user_id: str, repository: str
     ) -> RelationshipSnapshot | None:
-        snapshot = self.snapshots.get((user_id, repository))
+        snapshot = self.snapshots.get((user_id.casefold(), repository.casefold()))
         return snapshot.model_copy(deep=True) if snapshot is not None else None
