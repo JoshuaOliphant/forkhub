@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS relationship_snapshots (
     complete BOOLEAN NOT NULL,
     pages_scanned INTEGER NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_attempt_at TEXT,
+    last_attempt_complete BOOLEAN,
+    last_attempt_pages_scanned INTEGER,
+    last_complete_at TEXT,
     PRIMARY KEY (username, focus_github_id)
 );
 CREATE INDEX IF NOT EXISTS idx_relationship_snapshot_name
@@ -250,6 +254,13 @@ class Database:
         await self._add_column_if_missing(
             "forks", "baseline_attempts", "INTEGER NOT NULL DEFAULT 0"
         )
+        for name, declaration in (
+            ("last_attempt_at", "TEXT"),
+            ("last_attempt_complete", "BOOLEAN"),
+            ("last_attempt_pages_scanned", "INTEGER"),
+            ("last_complete_at", "TEXT"),
+        ):
+            await self._add_column_if_missing("relationship_snapshots", name, declaration)
 
     async def _add_column_if_missing(self, table: str, column: str, decl: str) -> None:
         """Add `column` to `table` if it is not already present.
@@ -316,23 +327,70 @@ class Database:
     # ------------------------------------------------------------------
 
     async def save_relationship_snapshot(self, username: str, snapshot: dict[str, Any]) -> None:
-        """Atomically replace a bounded snapshot, including its incomplete flag."""
+        """Retain the last complete graph when a subsequent scan is incomplete.
+
+        First-time partial snapshots remain queryable but explicitly incomplete.
+        The most recent attempt's coverage and timestamp are tracked separately.
+        """
         key = username.casefold()
         focus_id = snapshot["focus_github_id"]
         async with self._db.execute("SAVEPOINT relationship_snapshot"):
             try:
-                await self._db.execute(
+                cursor = await self._db.execute(
+                    "SELECT complete, updated_at, last_complete_at "
+                    "FROM relationship_snapshots "
+                    "WHERE username = ? AND focus_github_id = ?",
+                    (key, focus_id),
+                )
+                previous = await self._fetchone(cursor)
+                if previous is not None and previous["complete"] and not snapshot["complete"]:
+                    # Do not destroy a previously complete graph on a failed or
+                    # rate-limited refresh. Record the attempt without changing
+                    # the last successful edges or their snapshot timestamp.
+                    await self._db.execute(
+                        """
+                        UPDATE relationship_snapshots SET
+                            last_attempt_at = datetime('now'),
+                            last_attempt_complete = 0,
+                            last_attempt_pages_scanned = ?,
+                            last_complete_at = COALESCE(last_complete_at, updated_at)
+                        WHERE username = ? AND focus_github_id = ?
+                        """,
+                        (snapshot["pages_scanned"], key, focus_id),
+                    )
+                else:
+                    await self._replace_relationship_snapshot(key, snapshot)
+            except Exception:
+                await self._db.execute("ROLLBACK TO SAVEPOINT relationship_snapshot")
+                await self._db.execute("RELEASE SAVEPOINT relationship_snapshot")
+                raise
+            await self._db.execute("RELEASE SAVEPOINT relationship_snapshot")
+        await self._db.commit()
+
+    async def _replace_relationship_snapshot(
+        self, key: str, snapshot: dict[str, Any]
+    ) -> None:
+        """Replace a complete graph, or a partial graph without prior complete coverage."""
+        focus_id = snapshot["focus_github_id"]
+        await self._db.execute(
                     """
                     INSERT INTO relationship_snapshots
                         (username, focus_github_id, focus_repo, upstream_repo,
-                         complete, pages_scanned)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                         complete, pages_scanned, last_attempt_at,
+                         last_attempt_complete, last_attempt_pages_scanned,
+                         last_complete_at)
+                    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, ?,
+                            CASE WHEN ? THEN datetime('now') ELSE NULL END)
                     ON CONFLICT(username, focus_github_id) DO UPDATE SET
                         focus_repo = excluded.focus_repo,
                         upstream_repo = excluded.upstream_repo,
                         complete = excluded.complete,
                         pages_scanned = excluded.pages_scanned,
-                        updated_at = datetime('now')
+                        updated_at = datetime('now'),
+                        last_attempt_at = excluded.last_attempt_at,
+                        last_attempt_complete = excluded.last_attempt_complete,
+                        last_attempt_pages_scanned = excluded.last_attempt_pages_scanned,
+                        last_complete_at = excluded.last_complete_at
                     """,
                     (
                         key,
@@ -341,14 +399,17 @@ class Database:
                         snapshot["upstream_repo"],
                         snapshot["complete"],
                         snapshot["pages_scanned"],
+                        snapshot["complete"],
+                        snapshot["pages_scanned"],
+                        snapshot["complete"],
                     ),
-                )
-                await self._db.execute(
+        )
+        await self._db.execute(
                     "DELETE FROM repository_relationships WHERE username = ? "
                     "AND focus_github_id = ?",
                     (key, focus_id),
                 )
-                await self._db.executemany(
+        await self._db.executemany(
                     """
                     INSERT INTO repository_relationships
                         (username, focus_github_id, direction, source_github_id,
@@ -368,12 +429,6 @@ class Database:
                         for edge in snapshot["relationships"]
                     ],
                 )
-            except Exception:
-                await self._db.execute("ROLLBACK TO SAVEPOINT relationship_snapshot")
-                await self._db.execute("RELEASE SAVEPOINT relationship_snapshot")
-                raise
-            await self._db.execute("RELEASE SAVEPOINT relationship_snapshot")
-        await self._db.commit()
 
     async def get_relationship_snapshot(
         self, username: str, repository: str
