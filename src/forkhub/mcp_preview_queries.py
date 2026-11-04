@@ -54,7 +54,9 @@ class PreviewQueries:
         self._validate_repo(repository)
         with closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT focus_github_id, focus_repo, upstream_repo, complete, pages_scanned "
+                "SELECT focus_github_id, focus_repo, upstream_repo, complete, pages_scanned, "
+                "updated_at, last_attempt_at, last_attempt_complete, "
+                "last_attempt_pages_scanned, last_complete_at "
                 "FROM relationship_snapshots "
                 "WHERE username = ? AND focus_repo = ? COLLATE NOCASE",
                 (self._user, repository),
@@ -72,9 +74,28 @@ class PreviewQueries:
                 (self._user, row["focus_github_id"]),
             ).fetchall()
         complete = bool(row["complete"])
+        last_attempt_complete = (
+            bool(row["last_attempt_complete"])
+            if row["last_attempt_complete"] is not None
+            else complete
+        )
+        last_attempt_at = row["last_attempt_at"] or row["updated_at"]
+        last_complete_at = row["last_complete_at"] or (
+            row["updated_at"] if complete else None
+        )
+        preserved = complete and not last_attempt_complete
         return {
             "repository": repository,
             "status": "cached",
+            "last_attempt_complete": last_attempt_complete,
+            "last_attempt_at": last_attempt_at,
+            "last_attempt_pages_scanned": (
+                row["last_attempt_pages_scanned"]
+                if row["last_attempt_pages_scanned"] is not None
+                else row["pages_scanned"]
+            ),
+            "last_complete_at": last_complete_at,
+            "preserved_complete_snapshot": preserved,
             "snapshot": {
                 "focus_github_id": row["focus_github_id"],
                 "focus_repo": row["focus_repo"],
@@ -93,9 +114,14 @@ class PreviewQueries:
                 ],
             },
             "warning": (
-                "Incomplete fork coverage; results must not be presented as exhaustive."
-                if not complete
-                else None
+                "Latest scan was incomplete. Showing the last complete snapshot; "
+                "its relationships may now be stale."
+                if preserved
+                else (
+                    "Incomplete fork coverage; results must not be presented as exhaustive."
+                    if not complete
+                    else None
+                )
             ),
         }
 
