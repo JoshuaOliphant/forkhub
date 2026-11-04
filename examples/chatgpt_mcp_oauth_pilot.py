@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Annotated
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
