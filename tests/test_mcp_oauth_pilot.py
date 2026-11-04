@@ -217,3 +217,23 @@ async def test_tool_handler_rejects_wrong_subject_and_missing_scope(settings, mo
     monkeypatch.setattr(pilot, "get_access_token", lambda: None)
     with pytest.raises(PermissionError):
         await tool.fn(limit=1)
+
+
+@pytest.mark.parametrize("exact_issuer", [
+    "https://identity.example.com",
+    "https://identity.example.com/",
+    "https://identity.example.com/realms/forkhub",
+])
+async def test_http_metadata_advertises_exact_idp_issuer(settings, exact_issuer):
+    from dataclasses import replace
+
+    pilot_settings = replace(settings, issuer=exact_issuer)
+    server = create_server(pilot_settings)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server.streamable_http_app()),
+        base_url="http://localhost:8766",
+    ) as client:
+        response = await client.get("/.well-known/oauth-protected-resource/mcp")
+    assert response.status_code == 200
+    assert response.json()["authorization_servers"] == [exact_issuer]
+    assert response.json()["resource"] == RESOURCE
