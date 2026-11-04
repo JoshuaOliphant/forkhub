@@ -17,6 +17,7 @@ registration mode (CIMD preferred, DCR where supported), PKCE, resource
 indicators and issuer discovery.
 
 See:
+- [First ChatGPT connection runbook](chatgpt-connection-runbook.md)
 - https://developers.openai.com/plugins/build/auth
 - https://py.sdk.modelcontextprotocol.io/run/authorization/
 
@@ -97,10 +98,15 @@ Issue #51 remains a separate data-quality blocker: a partial refresh
 currently overwrites the last complete relationship snapshot.
 
 The MCP SDK is an explicit development/test dependency (`mcp>=1.26,<2`)
-in `pyproject.toml`, not a transitive dependency. The registered
-authorization-server URL may be rendered with a trailing slash by Pydantic
-for bare-origin issuers; the token `iss` is checked against the raw configured
-issuer to avoid rejecting providers that omit the slash.
+in `pyproject.toml`, not a transitive dependency. Pydantic currently may
+serialize a bare-origin issuer with a trailing slash in protected-resource
+metadata, while token `iss` is checked against the exact IdP-published
+value. This is a genuine discovery interoperability issue, not an
+acceptable normalization. The [connection runbook](chatgpt-connection-runbook.md)
+requires discovery preflight to pass before exposing the pilot to ChatGPT;
+for an affected bare-origin issuer, fix the published metadata using a
+supported SDK/IdP configuration before proceeding. Do not bypass strict
+issuer comparisons.
 
 The pilot intentionally introspects each request, without a token cache.
 Connection pooling and a bounded TTL cache should be considered after latency
