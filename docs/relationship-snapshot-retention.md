@@ -12,8 +12,11 @@ parents, or rate limits must not erase complete evidence already collected.
 ## Storage behavior
 
 - First partial scan: store its partial graph as explicitly incomplete.
+- Without a complete snapshot: each partial scan replaces the preceding partial
+  graph, even when it contains fewer relationships.
 - Partial scan after a complete scan: retain existing graph, its snapshot
-  timestamp and edges; update attempt coverage/timestamp only.
+  timestamp, repository names and edges; update attempt coverage/timestamp only.
+  Renames observed only in a partial scan wait until a complete scan succeeds.
 - Further partial scans: keep the complete graph; update last-attempt status.
 - Successful complete scan: atomically replace the graph and clear stale
   attempt status.
