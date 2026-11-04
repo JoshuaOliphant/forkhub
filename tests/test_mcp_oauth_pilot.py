@@ -219,11 +219,14 @@ async def test_tool_handler_rejects_wrong_subject_and_missing_scope(settings, mo
         await tool.fn(limit=1)
 
 
-@pytest.mark.parametrize("exact_issuer", [
-    "https://identity.example.com",
-    "https://identity.example.com/",
-    "https://identity.example.com/realms/forkhub",
-])
+@pytest.mark.parametrize(
+    "exact_issuer",
+    [
+        "https://identity.example.com",
+        "https://identity.example.com/",
+        "https://identity.example.com/realms/forkhub",
+    ],
+)
 async def test_http_metadata_advertises_exact_idp_issuer(settings, exact_issuer):
     from dataclasses import replace
 
