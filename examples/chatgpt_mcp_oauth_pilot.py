@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
@@ -14,7 +15,7 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, TypeAdapter, UrlConstraints
 
 from forkhub.mcp_auth import validate_introspection
 from forkhub.mcp_preview_queries import PreviewQueries
@@ -112,6 +113,11 @@ class IntrospectionVerifier(TokenVerifier):
 def create_server(settings: PilotSettings) -> FastMCP:
     """Construct authenticated MCP endpoints without user-controlled account selection."""
     reader = PreviewQueries(settings.database_path, settings.github_username)
+    # Preserve the IdP's exact RFC 8414 issuer, including an absent trailing slash.
+    # Construct the URL with explicit Pydantic 2.12+ constraints before AuthSettings.
+    issuer_url = TypeAdapter(
+        Annotated[AnyHttpUrl, UrlConstraints(preserve_empty_path=True)]
+    ).validate_python(settings.issuer)
     mcp = FastMCP(
         "forkhub-oauth-pilot",
         host="127.0.0.1",
@@ -120,7 +126,7 @@ def create_server(settings: PilotSettings) -> FastMCP:
         json_response=True,
         token_verifier=IntrospectionVerifier(settings),
         auth=AuthSettings(
-            issuer_url=AnyHttpUrl(settings.issuer),
+            issuer_url=issuer_url,
             resource_server_url=AnyHttpUrl(settings.resource),
             required_scopes=["forkhub:read"],
         ),

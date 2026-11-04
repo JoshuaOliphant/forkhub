@@ -98,15 +98,14 @@ Issue #51 remains a separate data-quality blocker: a partial refresh
 currently overwrites the last complete relationship snapshot.
 
 The MCP SDK is an explicit development/test dependency (`mcp>=1.26,<2`)
-in `pyproject.toml`, not a transitive dependency. Pydantic currently may
-serialize a bare-origin issuer with a trailing slash in protected-resource
-metadata, while token `iss` is checked against the exact IdP-published
-value. This is a genuine discovery interoperability issue, not an
-acceptable normalization. The [connection runbook](chatgpt-connection-runbook.md)
-requires discovery preflight to pass before exposing the pilot to ChatGPT;
-for an affected bare-origin issuer, fix the published metadata using a
-supported SDK/IdP configuration before proceeding. Do not bypass strict
-issuer comparisons.
+in `pyproject.toml`, not a transitive dependency. Pydantic 2.12+ is
+required for `UrlConstraints(preserve_empty_path=True)`. The pilot uses
+that constraint to publish a bare-origin issuer without adding a slash,
+while keeping the exact IdP-published `iss` comparison. HTTP-level tests
+cover issuers with no slash, with a slash, and with a path.
+The [connection runbook](chatgpt-connection-runbook.md) still requires
+discovery preflight to pass against the real deployment. Do not bypass
+strict issuer comparisons.
 
 The pilot intentionally introspects each request, without a token cache.
 Connection pooling and a bounded TTL cache should be considered after latency
