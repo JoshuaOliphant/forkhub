@@ -373,62 +373,62 @@ class Database:
         """Replace a complete graph, or a partial graph without prior complete coverage."""
         focus_id = snapshot["focus_github_id"]
         await self._db.execute(
-                    """
-                    INSERT INTO relationship_snapshots
-                        (username, focus_github_id, focus_repo, upstream_repo,
-                         complete, pages_scanned, last_attempt_at,
-                         last_attempt_complete, last_attempt_pages_scanned,
-                         last_complete_at)
-                    VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, ?,
-                            CASE WHEN ? THEN datetime('now') ELSE NULL END)
-                    ON CONFLICT(username, focus_github_id) DO UPDATE SET
-                        focus_repo = excluded.focus_repo,
-                        upstream_repo = excluded.upstream_repo,
-                        complete = excluded.complete,
-                        pages_scanned = excluded.pages_scanned,
-                        updated_at = datetime('now'),
-                        last_attempt_at = excluded.last_attempt_at,
-                        last_attempt_complete = excluded.last_attempt_complete,
-                        last_attempt_pages_scanned = excluded.last_attempt_pages_scanned,
-                        last_complete_at = excluded.last_complete_at
-                    """,
-                    (
-                        key,
-                        focus_id,
-                        snapshot["focus_repo"],
-                        snapshot["upstream_repo"],
-                        snapshot["complete"],
-                        snapshot["pages_scanned"],
-                        snapshot["complete"],
-                        snapshot["pages_scanned"],
-                        snapshot["complete"],
-                    ),
+            """
+            INSERT INTO relationship_snapshots
+                (username, focus_github_id, focus_repo, upstream_repo,
+                 complete, pages_scanned, last_attempt_at,
+                 last_attempt_complete, last_attempt_pages_scanned,
+                 last_complete_at)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, ?,
+                    CASE WHEN ? THEN datetime('now') ELSE NULL END)
+            ON CONFLICT(username, focus_github_id) DO UPDATE SET
+                focus_repo = excluded.focus_repo,
+                upstream_repo = excluded.upstream_repo,
+                complete = excluded.complete,
+                pages_scanned = excluded.pages_scanned,
+                updated_at = datetime('now'),
+                last_attempt_at = excluded.last_attempt_at,
+                last_attempt_complete = excluded.last_attempt_complete,
+                last_attempt_pages_scanned = excluded.last_attempt_pages_scanned,
+                last_complete_at = excluded.last_complete_at
+            """,
+            (
+                key,
+                focus_id,
+                snapshot["focus_repo"],
+                snapshot["upstream_repo"],
+                snapshot["complete"],
+                snapshot["pages_scanned"],
+                snapshot["complete"],
+                snapshot["pages_scanned"],
+                snapshot["complete"],
+            ),
         )
         await self._db.execute(
-                    "DELETE FROM repository_relationships WHERE username = ? "
-                    "AND focus_github_id = ?",
-                    (key, focus_id),
-                )
+            "DELETE FROM repository_relationships WHERE username = ? "
+            "AND focus_github_id = ?",
+            (key, focus_id),
+        )
         await self._db.executemany(
-                    """
-                    INSERT INTO repository_relationships
-                        (username, focus_github_id, direction, source_github_id,
-                         source_repo, target_repo, is_user_repository)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            key,
-                            focus_id,
-                            edge["direction"],
-                            edge["github_id"],
-                            edge["source_repo"],
-                            edge["target_repo"],
-                            edge["is_user_repository"],
-                        )
-                        for edge in snapshot["relationships"]
-                    ],
+            """
+            INSERT INTO repository_relationships
+                (username, focus_github_id, direction, source_github_id,
+                 source_repo, target_repo, is_user_repository)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    key,
+                    focus_id,
+                    edge["direction"],
+                    edge["github_id"],
+                    edge["source_repo"],
+                    edge["target_repo"],
+                    edge["is_user_repository"],
                 )
+                for edge in snapshot["relationships"]
+            ],
+        )
 
     async def get_relationship_snapshot(
         self, username: str, repository: str
