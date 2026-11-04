@@ -48,3 +48,28 @@ async def test_in_memory_store_returns_independent_snapshots():
     second = await store.get_relationship_snapshot("alice", "alice/repo")
     assert second is not None
     assert second.complete
+
+
+async def test_in_memory_store_retains_complete_identity_after_partial_rename():
+    store = StubIntelligenceStore()
+    original = RelationshipSnapshot(focus_github_id=7, focus_repo="alice/repo")
+    partial = original.model_copy(update={"focus_repo": "alice/renamed", "complete": False})
+    await store.save_relationship_snapshot("ALICE", original)
+    await store.save_relationship_snapshot("alice", partial)
+    assert await store.get_relationship_snapshot("Alice", "ALICE/REPO") == original
+    assert await store.get_relationship_snapshot("alice", "alice/renamed") is None
+
+
+async def test_in_memory_store_complete_rename_replaces_identity_for_one_user():
+    store = StubIntelligenceStore()
+    original = RelationshipSnapshot(focus_github_id=7, focus_repo="alice/repo")
+    renamed = original.model_copy(update={"focus_repo": "alice/renamed"})
+    independent = RelationshipSnapshot(focus_github_id=8, focus_repo="alice/other")
+    await store.save_relationship_snapshot("alice", original)
+    await store.save_relationship_snapshot("bob", original)
+    await store.save_relationship_snapshot("alice", independent)
+    await store.save_relationship_snapshot("ALICE", renamed)
+    assert await store.get_relationship_snapshot("alice", "alice/repo") is None
+    assert await store.get_relationship_snapshot("Alice", "ALICE/RENAMED") == renamed
+    assert await store.get_relationship_snapshot("bob", "alice/repo") == original
+    assert await store.get_relationship_snapshot("alice", "alice/other") == independent
