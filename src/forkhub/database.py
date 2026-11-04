@@ -367,9 +367,7 @@ class Database:
             await self._db.execute("RELEASE SAVEPOINT relationship_snapshot")
         await self._db.commit()
 
-    async def _replace_relationship_snapshot(
-        self, key: str, snapshot: dict[str, Any]
-    ) -> None:
+    async def _replace_relationship_snapshot(self, key: str, snapshot: dict[str, Any]) -> None:
         """Replace a complete graph, or a partial graph without prior complete coverage."""
         focus_id = snapshot["focus_github_id"]
         await self._db.execute(
@@ -405,8 +403,7 @@ class Database:
             ),
         )
         await self._db.execute(
-            "DELETE FROM repository_relationships WHERE username = ? "
-            "AND focus_github_id = ?",
+            "DELETE FROM repository_relationships WHERE username = ? AND focus_github_id = ?",
             (key, focus_id),
         )
         await self._db.executemany(

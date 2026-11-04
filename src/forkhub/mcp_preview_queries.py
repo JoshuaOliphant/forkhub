@@ -80,9 +80,7 @@ class PreviewQueries:
             else complete
         )
         last_attempt_at = row["last_attempt_at"] or row["updated_at"]
-        last_complete_at = row["last_complete_at"] or (
-            row["updated_at"] if complete else None
-        )
+        last_complete_at = row["last_complete_at"] or (row["updated_at"] if complete else None)
         preserved = complete and not last_attempt_complete
         return {
             "repository": repository,

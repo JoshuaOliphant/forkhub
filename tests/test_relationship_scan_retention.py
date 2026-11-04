@@ -40,9 +40,7 @@ async def test_partial_attempt_preserves_complete_edges_and_reports_staleness(tm
     async with Database(path) as db:
         original = snapshot()
         await db.save_relationship_snapshot("ALICE", original)
-        await db.save_relationship_snapshot(
-            "alice", snapshot(complete=False, pages=1, edge_id=999)
-        )
+        await db.save_relationship_snapshot("alice", snapshot(complete=False, pages=1, edge_id=999))
         assert await db.get_relationship_snapshot("alice", "alice/project") == original
         preview = PreviewQueries(path, "alice").get_cached_relationships("alice/project")
         assert preview["snapshot"]["relationships"][0]["github_id"] == 200
@@ -133,9 +131,7 @@ async def test_existing_schema_adds_metadata_and_retains_legacy_complete(tmp_pat
         await conn.commit()
 
     async with Database(path) as db:
-        await db.save_relationship_snapshot(
-            "alice", snapshot(complete=False, pages=1, edge_id=400)
-        )
+        await db.save_relationship_snapshot("alice", snapshot(complete=False, pages=1, edge_id=400))
         result = PreviewQueries(path, "alice").get_cached_relationships("alice/project")
         assert result["snapshot"]["complete"] is True
         assert result["preserved_complete_snapshot"] is True
