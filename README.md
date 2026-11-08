@@ -315,6 +315,10 @@ uv run ruff format src/ tests/
 uv run ty check
 ```
 
+## Docs
+
+- [Cloudflare Access Managed OAuth pilot](docs/cloudflare-managed-oauth-pilot.md) — authenticate private, read-only MCP cache access through Cloudflare Access.
+
 ## License
 
 MIT
