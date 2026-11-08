@@ -10,8 +10,8 @@ from forkhub.cli.config_cmd import config_app
 from forkhub.cli.digest_cmd import digest_command
 from forkhub.cli.forks_cmd import forks_command, inspect_command
 from forkhub.cli.init_cmd import init_command
-from forkhub.cli.repos_cmd import repos_command
 from forkhub.cli.relationships_cmd import relationships_command
+from forkhub.cli.repos_cmd import repos_command
 from forkhub.cli.sync_cmd import sync_command
 from forkhub.cli.track_cmd import (
     exclude_command,
