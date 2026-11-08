@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "forkhub-mcp",
+  "main": "src/worker.py",
+  "compatibility_date": "2026-11-08",
+  "compatibility_flags": ["python_workers", "python_workers_314"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "limits": {"cpu_ms": 1000},
+  "build": {
+    "command": "uv run pywrangler sync --force",
+    "watch_dir": ["src", "library", "../../src/forkhub"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "forkhub-cache"
+    }
+  ],
+  "vars": {
+    "FORKHUB_ACCESS_ISSUER": "https://configure-team.cloudflareaccess.com",
+    "FORKHUB_ACCESS_AUDIENCE": "configure-access-application",
+    "FORKHUB_ACCESS_EMAIL": "configure@example.invalid",
+    "FORKHUB_GITHUB_USERNAME": "configure-cache-owner",
+    "FORKHUB_HOSTNAME": "mcp.forkhub.dev"
+  },
+  "observability": {"enabled": true, "head_sampling_rate": 1}
+}

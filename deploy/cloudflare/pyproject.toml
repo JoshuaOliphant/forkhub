@@ -1,0 +1,21 @@
+[project]
+name = "forkhub-cloudflare"
+version = "0.1.0"
+description = "Authenticated read-only ForkHub MCP service on Cloudflare Workers"
+requires-python = ">=3.14"
+dependencies = [
+    "forkhub-worker-library",
+    "mcp==1.26.0",
+    "httpx==0.28.1",
+    "pyjwt[crypto]>=2.10,<3",
+]
+
+[tool.uv.sources]
+forkhub-worker-library = {path = "library"}
+
+[dependency-groups]
+dev = [
+    "uv>=0.13.4",
+    "workers-py==1.17.9",
+    "workers-runtime-sdk==1.9.6",
+]

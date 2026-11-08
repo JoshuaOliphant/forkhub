@@ -317,7 +317,10 @@ uv run ty check
 
 ## Docs
 
+- [Cloudflare Worker deployment](docs/cloudflare-worker-deployment.md) — host the read-only MCP service with Access OAuth and a dedicated D1 cache.
+- [Cloudflare MCP runtime findings](knowledge/capture/daily/2026-11-08-cloudflare-mcp.md) — measured Python, D1, and packaging constraints from the deployment work.
 - [Cloudflare Access Managed OAuth pilot](docs/cloudflare-managed-oauth-pilot.md) — authenticate private, read-only MCP cache access through Cloudflare Access.
+- [Managed ForkHub deployment](docs/deployment.md) — run the authenticated MCP service and optional cache refresh on a persistent Linux host.
 
 ## License
 

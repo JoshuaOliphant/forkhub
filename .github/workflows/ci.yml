@@ -6,14 +6,47 @@ on:
   pull_request:
 
 jobs:
+  cloudflare-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: npm ci
+        working-directory: deploy/cloudflare
+      - name: Build the production Worker from the checkout
+        working-directory: deploy/cloudflare
+        run: env -u UV_PYTHON -u VIRTUAL_ENV uv run --python 3.14 pywrangler deploy --dry-run
+      - name: Exercise authenticated MCP calls against local Workers and D1
+        run: uv run pytest tests/test_cloudflare_runtime.py -o addopts='' -m integration -x -q
+        env:
+          WRANGLER_SEND_METRICS: "false"
+
+  production-mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --no-dev --extra mcp
+      - name: Import the deployed origin without development dependencies
+        run: |
+          .venv/bin/python -c 'import importlib.util, runpy; assert importlib.util.find_spec("pytest") is None; app = runpy.run_path("examples/chatgpt_mcp_cloudflare_access.py"); assert callable(app["create_app"]); print("Production MCP import passed")'
+
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --frozen --extra claude
-      - run: uv run ruff check src/ tests/ examples/
-      - run: uv run ruff format --check src/ tests/ examples/
+      - run: uv run ruff check src/ tests/ examples/ deploy/cloudflare/src/
+      - run: uv run ruff format --check src/ tests/ examples/ deploy/cloudflare/src/
 
   test:
     runs-on: ubuntu-latest
