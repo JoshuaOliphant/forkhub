@@ -1,9 +1,17 @@
 # ABOUTME: Shared pytest fixtures for ForkHub tests.
 # ABOUTME: Provides in-memory database, sample models, and provider stubs.
 
-import pytest
+import json
+from datetime import UTC, datetime
 
+import jwt
+import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+from examples.chatgpt_mcp_cloudflare_access import AccessSettings
+from examples.seed_mcp_demo import DEMO_USER, seed
 from forkhub.database import Database
+from forkhub.mcp_cloudflare_access import AccessPolicy
 
 from .stubs import (
     StubEmbeddingProvider,
@@ -103,3 +111,54 @@ async def fork_in_db(db: Database, repo_in_db: dict) -> dict:
     fork = make_fork(repo_in_db["id"])
     await db.insert_fork(fork)
     return fork
+
+
+@pytest.fixture
+def access_policy():
+    return AccessPolicy(
+        issuer="https://forkhub-test.cloudflareaccess.com",
+        audience="forkhub-test-audience",
+        email="pilot@example.com",
+    )
+
+
+@pytest.fixture(scope="module")
+def signing_keys():
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
+    public.update(kid="test-key", use="sig", alg="RS256")
+    return private_key, {"keys": [public]}
+
+
+@pytest.fixture
+def access_claims(access_policy):
+    now = datetime.now(UTC).timestamp()
+    return {
+        "iss": access_policy.issuer,
+        "aud": [access_policy.audience],
+        "sub": "cloudflare-pilot-user",
+        "email": access_policy.email,
+        "type": "app",
+        "exp": now + 3600,
+        "nbf": now - 60,
+    }
+
+
+@pytest.fixture
+def sign_assertion(signing_keys, access_claims):
+    def sign(claims=None, headers=None):
+        return jwt.encode(
+            access_claims if claims is None else claims,
+            signing_keys[0],
+            algorithm="RS256",
+            headers={"kid": "test-key"} if headers is None else headers,
+        )
+
+    return sign
+
+
+@pytest.fixture
+async def access_settings(tmp_path, access_policy):
+    path = tmp_path / "synthetic.db"
+    await seed(path)
+    return AccessSettings(policy=access_policy, github_username=DEMO_USER, database_path=str(path))
