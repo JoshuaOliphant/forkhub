@@ -318,6 +318,7 @@ uv run ty check
 ## Docs
 
 - [Cloudflare Access Managed OAuth pilot](docs/cloudflare-managed-oauth-pilot.md) — authenticate private, read-only MCP cache access through Cloudflare Access.
+- [Managed ForkHub deployment](docs/deployment.md) — run the authenticated MCP service and optional cache refresh on a persistent Linux host.
 
 ## License
 

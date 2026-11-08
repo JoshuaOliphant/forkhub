@@ -1,0 +1,32 @@
+# ABOUTME: Maintain the dedicated outbound Cloudflare Tunnel for ForkHub.
+# ABOUTME: Load the connector token through a private systemd credential file.
+[Unit]
+Description=ForkHub Cloudflare Tunnel
+Wants=network-online.target forkhub-mcp.service
+After=network-online.target forkhub-mcp.service
+
+[Service]
+Type=simple
+User=forkhub-tunnel
+Group=forkhub-tunnel
+LoadCredential=tunnel-token:/etc/forkhub/tunnel-token
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate run --token-file %d/tunnel-token
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+InaccessiblePaths=/var/lib/forkhub /etc/forkhub/mcp.env /etc/forkhub/sync.env
+
+[Install]
+WantedBy=multi-user.target

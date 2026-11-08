@@ -6,6 +6,18 @@ on:
   pull_request:
 
 jobs:
+  production-mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --no-dev --extra mcp
+      - name: Import the deployed origin without development dependencies
+        run: |
+          .venv/bin/python -c 'import importlib.util, runpy; assert importlib.util.find_spec("pytest") is None; app = runpy.run_path("examples/chatgpt_mcp_cloudflare_access.py"); assert callable(app["create_app"]); print("Production MCP import passed")'
+
   lint:
     runs-on: ubuntu-latest
     steps:
