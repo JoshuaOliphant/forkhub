@@ -4,5 +4,6 @@
 python_modules/
 .dev.vars
 .dev.vars.*
+wrangler.private.jsonc
 node_modules/
 dist/

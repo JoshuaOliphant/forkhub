@@ -1,0 +1,34 @@
+# ABOUTME: Run the authenticated read-only ForkHub MCP origin.
+# ABOUTME: Restrict the service to a published SQLite snapshot and public Access settings.
+[Unit]
+Description=ForkHub authenticated MCP origin
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=forkhub-mcp
+Group=forkhub-read
+WorkingDirectory=/opt/forkhub
+EnvironmentFile=/etc/forkhub/mcp.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/forkhub/.venv/bin/python /opt/forkhub/examples/chatgpt_mcp_cloudflare_access.py
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+InaccessiblePaths=/var/lib/forkhub/cache /etc/forkhub/sync.env /etc/forkhub/tunnel-token
+ReadOnlyPaths=/var/lib/forkhub/published
+
+[Install]
+WantedBy=multi-user.target

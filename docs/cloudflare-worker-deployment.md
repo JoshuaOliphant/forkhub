@@ -75,6 +75,12 @@ Configuration requires these values:
 
 Keep deployment identity values outside the public repository. No GitHub,
 Anthropic, or Cloudflare management token belongs in Worker runtime variables.
+Create an ignored, mode-0600 `deploy/cloudflare/wrangler.private.jsonc` from
+the reviewed configuration for actual account, identity, and binding values.
+Keep this file beside the Worker's `pyproject.toml`: Wrangler locates the
+vendored Python modules relative to the configuration directory. A config
+outside the project can produce a successful but incomplete dry-run bundle.
+Inspect the built modules before deploying with `--config wrangler.private.jsonc`.
 The D1 binding supplies database access without an API credential in code.
 Bindings can write; this application restricts its tool paths to fixed,
 parameterized read queries. Do not describe the binding itself as a read-only

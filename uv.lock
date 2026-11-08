@@ -431,11 +431,13 @@ dependencies = [
 claude = [
     { name = "claude-agent-sdk" },
 ]
+mcp = [
+    { name = "mcp" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "claude-agent-sdk" },
-    { name = "mcp" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -455,6 +457,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.137.2" },
     { name = "githubkit", specifier = ">=0.12,<1" },
     { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.26,<2" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
@@ -465,12 +468,11 @@ requires-dist = [
     { name = "typer", specifier = ">=0.15,<1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.41.0" },
 ]
-provides-extras = ["claude"]
+provides-extras = ["claude", "mcp"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "claude-agent-sdk", specifier = ">=0.1" },
-    { name = "mcp", specifier = ">=1.26,<2" },
     { name = "pytest", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", specifier = ">=0.24,<1" },
     { name = "pytest-cov", specifier = ">=6.0,<7" },
