@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from typer.testing import CliRunner
 
@@ -18,13 +20,17 @@ from tests.stubs import StubGitProvider
 def test_relationship_command_is_registered():
     result = CliRunner().invoke(app, ["relationships", "--help"])
     assert result.exit_code == 0
-    assert "username" in result.output
-    assert "max-pages" in result.output
+    plain_help = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--username" in plain_help
+    assert "--max-pages" in plain_help
 
 
 @pytest.mark.parametrize(
     ("username", "pages", "message"),
-    [("", 3, "username is required"), ("testuser", 0, "max_pages must be at least 1")],
+    [
+        ("", 3, "username is required"),
+        ("testuser", 0, "max_pages must be at least 1"),
+    ],
 )
 async def test_invalid_discovery_arguments(username, pages, message):
     with pytest.raises(ValueError, match=message):
@@ -35,9 +41,7 @@ async def test_command_populates_mcp_readable_cache(tmp_path):
     provider = StubGitProvider.with_testuser_data()
     path = tmp_path / "forkhub.db"
     async with Database(path) as db:
-        result = await _relationships_impl(
-            "testuser/alpha", "testuser", db=db, provider=provider
-        )
+        result = await _relationships_impl("testuser/alpha", "testuser", db=db, provider=provider)
         assert result["repository"] == "testuser/alpha"
         assert result["complete"] is True
         assert result["relationship_count"] > 0
@@ -90,7 +94,8 @@ def test_cli_reports_success_and_incomplete_warning(monkeypatch, complete):
 
     monkeypatch.setattr(relationships_cmd, "_relationships_impl", fake_impl)
     result = CliRunner().invoke(
-        app, ["relationships", "testuser/alpha", "--username", "testuser", "--max-pages", "1"]
+        app,
+        ["relationships", "testuser/alpha", "--username", "testuser", "--max-pages", "1"],
     )
     assert result.exit_code == 0
     assert "2 relationships" in result.output
