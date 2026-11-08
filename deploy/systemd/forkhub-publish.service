@@ -1,0 +1,31 @@
+# ABOUTME: Publish a consistent SQLite cache snapshot for the MCP reader.
+# ABOUTME: Replace the served snapshot only after backup and journal conversion succeed.
+[Unit]
+Description=Publish ForkHub MCP cache snapshot
+After=forkhub-sync.service
+
+[Service]
+Type=oneshot
+User=forkhub-sync
+Group=forkhub-read
+ExecStartPre=/usr/bin/test -f /var/lib/forkhub/cache/forkhub.db
+ExecStartPre=/usr/bin/rm -f /var/lib/forkhub/published/mcp.db.next /var/lib/forkhub/published/mcp.db.next-wal /var/lib/forkhub/published/mcp.db.next-shm /var/lib/forkhub/published/mcp.db.next-journal
+ExecStart=/usr/bin/sqlite3 -batch -bail -readonly -cmd ".timeout 30000" /var/lib/forkhub/cache/forkhub.db ".backup '/var/lib/forkhub/published/mcp.db.next'"
+ExecStart=/usr/bin/sqlite3 -batch -bail /var/lib/forkhub/published/mcp.db.next "PRAGMA journal_mode=DELETE;"
+ExecStart=/usr/bin/chmod 0640 /var/lib/forkhub/published/mcp.db.next
+ExecStart=/usr/bin/mv -f /var/lib/forkhub/published/mcp.db.next /var/lib/forkhub/published/mcp.db
+TimeoutStartSec=10min
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/forkhub/cache /var/lib/forkhub/published
+InaccessiblePaths=/etc/forkhub

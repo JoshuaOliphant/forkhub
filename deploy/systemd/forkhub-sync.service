@@ -1,0 +1,33 @@
+# ABOUTME: Refresh the dedicated ForkHub cache from GitHub without model analysis.
+# ABOUTME: Publish the resulting cache through a serialized snapshot service.
+[Unit]
+Description=Refresh ForkHub GitHub cache
+Wants=network-online.target
+After=network-online.target
+OnSuccess=forkhub-publish.service
+
+[Service]
+Type=oneshot
+User=forkhub-sync
+Group=forkhub-read
+WorkingDirectory=/opt/forkhub
+EnvironmentFile=/etc/forkhub/sync.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=HOME=/var/lib/forkhub/cache
+Environment=XDG_CACHE_HOME=/var/lib/forkhub/cache/.cache
+ExecStart=/opt/forkhub/.venv/bin/forkhub sync --no-analyze
+TimeoutStartSec=2h
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/forkhub/cache
+InaccessiblePaths=/var/lib/forkhub/published /etc/forkhub/mcp.env /etc/forkhub/tunnel-token
