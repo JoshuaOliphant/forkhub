@@ -74,6 +74,8 @@ async def test_local_workers_and_d1_preserve_authenticated_cache_contract(
     config["d1_databases"][0]["database_id"] = "00000000-0000-0000-0000-000000000001"
     (project / "wrangler.jsonc").write_text(json.dumps(config))
     environment = {**os.environ, "WRANGLER_SEND_METRICS": "false"}
+    environment.pop("UV_PYTHON", None)
+    environment.pop("VIRTUAL_ENV", None)
     installed = subprocess.run(
         ["npm", "ci"],
         cwd=project,

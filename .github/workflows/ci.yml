@@ -21,7 +21,7 @@ jobs:
         working-directory: deploy/cloudflare
       - name: Build the production Worker from the checkout
         working-directory: deploy/cloudflare
-        run: uv run pywrangler deploy --dry-run
+        run: env -u UV_PYTHON -u VIRTUAL_ENV uv run --python 3.14 pywrangler deploy --dry-run
       - name: Exercise authenticated MCP calls against local Workers and D1
         run: uv run pytest tests/test_cloudflare_runtime.py -o addopts='' -m integration -x -q
         env:

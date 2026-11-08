@@ -24,6 +24,11 @@ data access works.
 - D1 limits SQL statements to 100,000 UTF-8 bytes. Validate after escaping,
   before creating the import file; character counts miss Unicode and
   hexadecimal expansion. Oversized rows fail explicitly without truncation.
+- The CI setup action exports its root Python selection. Clear `UV_PYTHON`
+  and `VIRTUAL_ENV` at the Worker subprocess boundary so the root's Python
+  3.12 tests do not force that interpreter onto the Python 3.14 subproject.
+  The build and integration passed with that conflicting environment
+  reproduced locally.
 
 ## Verification and remaining work
 
