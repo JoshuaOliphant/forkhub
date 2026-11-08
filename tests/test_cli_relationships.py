@@ -32,7 +32,7 @@ async def test_command_populates_mcp_readable_cache(db, tmp_path):
     assert snapshot["complete"] is True
 
     # The MCP consumer reads the same persisted relationship snapshot.
-    preview = PreviewQueries(db.path, "testuser").get_cached_relationships("testuser/alpha")
+    preview = PreviewQueries(db._db_path, "testuser").get_cached_relationships("testuser/alpha")
     assert preview["status"] == "cached"
     assert preview["snapshot"]["focus_repo"] == "testuser/alpha"
 
