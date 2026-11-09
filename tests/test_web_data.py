@@ -44,13 +44,15 @@ def snapshot(*, complete=True, edge_id=456):
         "upstream_repo": None,
         "complete": complete,
         "pages_scanned": 1,
-        "relationships": [{
-            "direction": "downstream",
-            "github_id": edge_id,
-            "source_repo": f"example/fork-{edge_id}",
-            "target_repo": "torvalds/linux",
-            "is_user_repository": False,
-        }],
+        "relationships": [
+            {
+                "direction": "downstream",
+                "github_id": edge_id,
+                "source_repo": f"example/fork-{edge_id}",
+                "target_repo": "torvalds/linux",
+                "is_user_repository": False,
+            }
+        ],
     }
 
 
