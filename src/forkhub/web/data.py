@@ -21,7 +21,7 @@ async def build_explore_data(forkhub: ForkHub, owner: str, repo: str) -> dict[st
 
     # Snapshots are scoped by discovering user. For a personal repository the
     # owner is the scope; configurable identity is preferred for watched repos.
-    configured_user = forkhub._settings.github.username
+    configured_user = forkhub.github_username
     username = configured_user or owner
     relationship = await forkhub.get_relationship_view(username, tracked.full_name)
     return {
@@ -30,5 +30,6 @@ async def build_explore_data(forkhub: ForkHub, owner: str, repo: str) -> dict[st
             "full_name": tracked.full_name,
             "last_sync": tracked.last_synced_at.isoformat() if tracked.last_synced_at else None,
         },
+        "discovery_username": username,
         "relationship": relationship,
     }
