@@ -1,0 +1,37 @@
+/* ABOUTME: Relationship-first Explore page, intentionally independent of legacy constellation CSS. */
+/* ABOUTME: Scan state and empty coverage remain legible without JavaScript. */
+.relationship-page { grid-column: 2; overflow: auto; padding: 36px; max-width: 1400px; width: 100%; margin: 0 auto; }
+.relationship-header { margin-bottom: 24px; }
+.relationship-header h1 { font-size: 30px; margin-bottom: 5px; }
+.relationship-header h2, .relationship-table h2 { font-size: 20px; margin-bottom: 8px; }
+.relationship-header p, .relationship-meta small { color: var(--muted); }
+.scan-label { text-transform: capitalize; color: var(--accent); }
+.relationship-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 24px 0; }
+.relationship-meta > div { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.relationship-meta strong { display: block; overflow-wrap: anywhere; font-size: 15px; }
+.relationship-meta small { display: block; margin-top: 6px; font-size: 12px; }
+.relationship-notice { margin: 24px 0; padding: 20px; background: var(--surface); border: 1px solid var(--accent); border-radius: 12px; }
+.relationship-notice h2 { font-size: 18px; margin-bottom: 8px; }
+.relationship-notice p { margin-bottom: 10px; color: var(--muted); }
+.relationship-notice code { white-space: normal; overflow-wrap: anywhere; }
+.relationship-map { display: grid; grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr); align-items: center; gap: 20px; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--sky-deep); }
+.relationship-edges { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.relationship-node { display: flex; flex-direction: column; gap: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; overflow-wrap: anywhere; }
+.relationship-node:hover, .relationship-node:focus-visible { border-color: var(--accent); }
+.relationship-node strong { font-size: 13px; }
+.relationship-node small { color: var(--muted); }
+.relationship-direction { font-size: 11px; text-transform: uppercase; color: var(--accent); letter-spacing: .1em; }
+.relationship-focus { display: flex; flex-direction: column; gap: 7px; padding: 24px; border: 2px solid var(--accent); border-radius: 12px; background: var(--surface); overflow-wrap: anywhere; }
+.relationship-focus span { color: var(--muted); font-size: 12px; }
+.relationship-empty { color: var(--muted); }
+.relationship-table { margin-top: 28px; overflow-x: auto; }
+.relationship-table table { width: 100%; border-collapse: collapse; text-align: left; }
+.relationship-table th, .relationship-table td { padding: 12px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.relationship-table th { color: var(--muted); font-weight: 500; }
+@media (max-width: 780px) {
+  .relationship-page { padding: 18px; }
+  .relationship-map { grid-template-columns: 1fr; }
+  .rail { display: none; }
+  .app { grid-template-columns: 1fr; }
+  .relationship-page { grid-column: 1; }
+}
