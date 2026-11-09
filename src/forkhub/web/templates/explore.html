@@ -28,9 +28,14 @@
       {% set view = data.relationship %}
       {% if view.status == "not_scanned" %}
         <section class="relationship-notice" role="status">
-          <h2>Not scanned yet</h2>
-          <p>No cached relationship discovery exists for this repository. A sync timestamp does not establish a relationship scan.</p>
-          <code>forkhub relationships {{ data.repo.full_name }} --username {{ data.repo.full_name.split("/")[0] }}</code>
+          {% if data.discovery_username %}
+            <h2>Not scanned yet</h2>
+            <p>No cached relationship discovery exists for this repository. A sync timestamp does not establish a relationship scan.</p>
+            <code>forkhub relationships {{ data.repo.full_name }} --username {{ data.discovery_username }}</code>
+          {% else %}
+            <h2>No repositories tracked</h2>
+            <p>{{ view.message }}</p>
+          {% endif %}
         </section>
       {% elif view.status == "cached" %}
         <section class="relationship-meta" aria-label="Discovery status">
@@ -69,6 +74,5 @@
       {% endif %}
     </main>
   </div>
-  <script id="forkhub-data" type="application/json">{{ data | tojson }}</script>
 </body>
 </html>
