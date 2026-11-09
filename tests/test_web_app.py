@@ -17,7 +17,6 @@ from tests.stubs import (
     StubGitProvider,
     StubNotificationBackend,
     make_fork,
-    make_signal,
     make_tracked_repo,
 )
 
@@ -46,7 +45,6 @@ async def _seed_repo(db: Database) -> dict:
     await db.insert_tracked_repo(repo)
     fork = make_fork(repo["id"])
     await db.insert_fork(fork)
-    await db.insert_signal(make_signal(fork["id"], repo["id"]))
     return repo
 
 
@@ -64,6 +62,34 @@ class TestExploreApp:
         assert resp.status_code == 200
         assert 'id="forkhub-data"' in resp.text
         assert "torvalds/linux" in resp.text  # repo name rendered in the topbar
+        assert "Not scanned yet" in resp.text
+
+    async def test_explore_shows_relationships_and_coverage_warning(
+        self, hub: ForkHub, db: Database
+    ):
+        await _seed_repo(db)
+        await db.save_relationship_snapshot("torvalds", {
+            "focus_github_id": 123456,
+            "focus_repo": "torvalds/linux",
+            "upstream_repo": None,
+            "complete": False,
+            "pages_scanned": 1,
+            "relationships": [{
+                "direction": "downstream",
+                "github_id": 789012,
+                "source_repo": "someone/linux",
+                "target_repo": "torvalds/linux",
+                "is_user_repository": False,
+            }],
+        })
+        app = create_app(hub)
+        app.state.hub = hub
+        async with _client(app) as client:
+            resp = await client.get("/torvalds/linux")
+        assert resp.status_code == 200
+        assert "Coverage warning" in resp.text
+        assert "someone/linux" in resp.text
+        assert "Incomplete fork coverage" in resp.text
 
     async def test_explore_untracked_returns_404(self, hub: ForkHub):
         app = create_app(hub)
@@ -122,7 +148,7 @@ class TestExploreApp:
 
         assert recorded and recorded[0]["name"] == "web.explore"
         assert recorded[0]["attrs"]["repo"] == "torvalds/linux"
-        assert recorded[0]["attrs"]["fork_count"] == 1
+        assert recorded[0]["attrs"]["relationship_status"] == "not_scanned"
 
     async def test_explore_escapes_html_in_embedded_data(self, hub: ForkHub, db: Database):
         """tojson escapes untrusted markup so it can't break out of the <script> block."""
@@ -130,9 +156,20 @@ class TestExploreApp:
         await db.insert_tracked_repo(repo)
         fork = make_fork(repo["id"])
         await db.insert_fork(fork)
-        await db.insert_signal(
-            make_signal(fork["id"], repo["id"], summary="</script><img src=x onerror=alert(1)>")
-        )
+        await db.save_relationship_snapshot("torvalds", {
+            "focus_github_id": 123456,
+            "focus_repo": "torvalds/linux",
+            "upstream_repo": None,
+            "complete": True,
+            "pages_scanned": 1,
+            "relationships": [{
+                "direction": "downstream",
+                "github_id": 9001,
+                "source_repo": "</script><img src=x onerror=alert(1)>",
+                "target_repo": "torvalds/linux",
+                "is_user_repository": False,
+            }],
+        })
         app = create_app(hub)
         app.state.hub = hub
         async with _client(app) as client:
