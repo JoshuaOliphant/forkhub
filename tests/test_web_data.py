@@ -68,9 +68,12 @@ class TestBuildExploreData:
         await db.insert_tracked_repo(make_tracked_repo())
         await db.save_relationship_snapshot("torvalds", snapshot())
         data = await build_explore_data(hub, "torvalds", "linux")
-        assert data["relationship"] == await db.get_relationship_view("torvalds", "torvalds/linux")
+        assert data["relationship"] == await db.get_relationship_view(
+            "torvalds", "torvalds/linux"
+        )
         assert data["relationship"]["status"] == "cached"
-        assert data["relationship"]["snapshot"]["relationships"][0]["source_repo"] == "example/fork-456"
+        edges = data["relationship"]["snapshot"]["relationships"]
+        assert edges[0]["source_repo"] == "example/fork-456"
         assert data["relationship"]["last_attempt_complete"] is True
 
     async def test_incomplete_snapshot_is_not_exhaustive(self, hub: ForkHub, db: Database):
