@@ -60,9 +60,10 @@ class TestExploreApp:
         async with _client(app) as client:
             resp = await client.get("/torvalds/linux")
         assert resp.status_code == 200
-        assert 'id="forkhub-data"' in resp.text
+        assert 'id="forkhub-data"' not in resp.text
         assert "torvalds/linux" in resp.text  # repo name rendered in the topbar
         assert "Not scanned yet" in resp.text
+        assert "forkhub relationships torvalds/linux --username torvalds" in resp.text
 
     async def test_explore_shows_relationships_and_coverage_warning(
         self, hub: ForkHub, db: Database
@@ -96,6 +97,19 @@ class TestExploreApp:
         assert "someone/linux" in resp.text
         assert "Incomplete fork coverage" in resp.text
 
+    async def test_not_scanned_watched_repo_uses_configured_username(
+        self, hub: ForkHub, db: Database
+    ):
+        await _seed_repo(db)
+        hub._settings.github.username = "watcher"
+        app = create_app(hub)
+        app.state.hub = hub
+        async with _client(app) as client:
+            resp = await client.get("/torvalds/linux")
+        assert resp.status_code == 200
+        assert "forkhub relationships torvalds/linux --username watcher" in resp.text
+        assert "forkhub relationships torvalds/linux --username torvalds" not in resp.text
+
     async def test_explore_untracked_returns_404(self, hub: ForkHub):
         app = create_app(hub)
         app.state.hub = hub
@@ -119,6 +133,9 @@ class TestExploreApp:
             resp = await client.get("/")
         assert resp.status_code == 200
         assert "No repos tracked yet" in resp.text
+        assert "No repository selected." in resp.text
+        assert "forkhub relationships" not in resp.text
+        assert "Not scanned yet" not in resp.text
 
     async def test_lifespan_sets_injected_hub(self, hub: ForkHub):
         app = create_app(hub)
@@ -128,7 +145,7 @@ class TestExploreApp:
     async def test_explore_route_emits_span_with_labels(
         self, hub: ForkHub, db: Database, monkeypatch
     ):
-        """The render path opens a 'web.explore' span carrying repo + fork_count (AC-13)."""
+        """The render path records the repository and relationship scan state."""
         import forkhub.otel as otel
 
         await _seed_repo(db)
@@ -155,8 +172,8 @@ class TestExploreApp:
         assert recorded[0]["attrs"]["repo"] == "torvalds/linux"
         assert recorded[0]["attrs"]["relationship_status"] == "not_scanned"
 
-    async def test_explore_escapes_html_in_embedded_data(self, hub: ForkHub, db: Database):
-        """tojson escapes untrusted markup so it can't break out of the <script> block."""
+    async def test_explore_escapes_html_in_rendered_relationships(self, hub: ForkHub, db: Database):
+        """Jinja autoescaping prevents untrusted repository names from becoming HTML."""
         repo = make_tracked_repo()
         await db.insert_tracked_repo(repo)
         fork = make_fork(repo["id"])
@@ -187,4 +204,4 @@ class TestExploreApp:
 
         assert resp.status_code == 200
         assert "<img src=x" not in resp.text  # the injected tag never appears raw
-        assert "u003cimg" in resp.text  # it's present, but unicode-escaped by tojson
+        assert "&lt;img src=x" in resp.text  # the untrusted name is HTML-escaped
