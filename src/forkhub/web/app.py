@@ -21,9 +21,10 @@ if TYPE_CHECKING:
 WEB_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
-# Rendered when no repos are tracked yet — a valid-but-empty constellation.
+# Rendered when no repositories are tracked; no discovery command is applicable.
 _EMPTY: dict[str, Any] = {
     "repo": {"name": "—", "full_name": "No repos tracked yet", "last_sync": None},
+    "discovery_username": None,
     "relationship": {"status": "not_scanned", "message": "No repository selected."},
 }
 
