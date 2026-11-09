@@ -93,6 +93,15 @@ class TestBuildExploreData:
         assert relationship["last_attempt_complete"] is False
         assert relationship["snapshot"]["relationships"][0]["source_repo"] == "example/fork-456"
 
+    async def test_configured_username_scopes_watched_repository(
+        self, hub: ForkHub, db: Database
+    ):
+        await db.insert_tracked_repo(make_tracked_repo())
+        hub._settings.github.username = "watcher"
+        await db.save_relationship_snapshot("watcher", snapshot())
+        data = await build_explore_data(hub, "torvalds", "linux")
+        assert data["relationship"]["status"] == "cached"
+
     async def test_last_sync_serialized_when_set(self, hub: ForkHub, db: Database):
         await db.insert_tracked_repo(
             make_tracked_repo(last_synced_at="2026-06-01T12:00:00+00:00")
