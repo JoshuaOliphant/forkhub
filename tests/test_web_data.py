@@ -1,5 +1,5 @@
-# ABOUTME: Unit tests for the Explore web data mapper (build_explore_data).
-# ABOUTME: Seeds an in-memory DB and asserts the frontend JSON shape + edge cases.
+# ABOUTME: Explore uses the same relationship scan contract as MCP.
+# ABOUTME: Test never-scanned, complete, incomplete and preserved-complete states.
 
 from __future__ import annotations
 
@@ -10,19 +10,15 @@ import pytest
 from forkhub import ForkHub
 from forkhub.config import ForkHubSettings
 from forkhub.web.data import build_explore_data
-
-if TYPE_CHECKING:
-    from forkhub.database import Database
 from tests.stubs import (
     StubEmbeddingProvider,
     StubGitProvider,
     StubNotificationBackend,
-    make_cluster,
-    make_cluster_member,
-    make_fork,
-    make_signal,
     make_tracked_repo,
 )
+
+if TYPE_CHECKING:
+    from forkhub.database import Database
 
 
 @pytest.fixture
@@ -41,69 +37,73 @@ def hub(
     )
 
 
+def snapshot(*, complete=True, edge_id=456):
+    return {
+        "focus_github_id": 123456,
+        "focus_repo": "torvalds/linux",
+        "upstream_repo": None,
+        "complete": complete,
+        "pages_scanned": 1,
+        "relationships": [
+            {
+                "direction": "downstream",
+                "github_id": edge_id,
+                "source_repo": f"example/fork-{edge_id}",
+                "target_repo": "torvalds/linux",
+                "is_user_repository": False,
+            }
+        ],
+    }
+
+
 class TestBuildExploreData:
-    async def test_shape_and_field_mapping(self, hub: ForkHub, db: Database):
-        repo = make_tracked_repo()  # last_synced_at None -> last_sync None branch
-        await db.insert_tracked_repo(repo)
-        f1 = make_fork(
-            repo["id"],
-            github_id=1,
-            full_name="alice/linux",
-            owner="alice",
-            head_sha="7b2e004deadbeef",
-        )
-        f2 = make_fork(
-            repo["id"], github_id=2, full_name="bob/linux", owner="bob", head_sha="c40aa12cafef00d"
-        )
-        f3 = make_fork(
-            repo["id"], github_id=3, full_name="carol/linux", owner="carol", head_sha=None
-        )
-        for f in (f1, f2, f3):
-            await db.insert_fork(f)
-        s1 = make_signal(f1["id"], repo["id"])
-        s2 = make_signal(f2["id"], repo["id"])
-        await db.insert_signal(s1)
-        await db.insert_signal(s2)
-        # A repo-level signal (fork_id None) must be skipped by the mapper.
-        await db.insert_signal(make_signal(None, repo["id"]))
-        cluster = make_cluster(repo["id"], fork_count=2)
-        await db.insert_cluster(cluster)
-        await db.add_cluster_member(make_cluster_member(cluster["id"], s1["id"], f1["id"]))
-        await db.add_cluster_member(make_cluster_member(cluster["id"], s2["id"], f2["id"]))
-
+    async def test_never_scanned_is_explicit(self, hub: ForkHub, db: Database):
+        await db.insert_tracked_repo(make_tracked_repo())
         data = await build_explore_data(hub, "torvalds", "linux")
+        assert data["repo"]["full_name"] == "torvalds/linux"
+        assert data["repo"]["last_sync"] is None
+        assert data["relationship"]["status"] == "not_scanned"
+        assert data["discovery_username"] == "torvalds"
+        assert "forks" not in data
+        assert "clusters" not in data
 
-        # repo
-        assert data["repo"] == {
-            "name": "linux",
-            "full_name": "torvalds/linux",
-            "fork_count": 3,
-            "last_sync": None,
-        }
-        # forks (indexed by id)
-        forks = {f["id"]: f for f in data["forks"]}
-        fa = forks[f1["id"]]
-        assert fa["owner"] == "alice"
-        assert fa["sha"] == "7b2e004"  # short
-        assert fa["html_url"] == "https://github.com/alice/linux"  # fork's own name, rename-safe
-        assert fa["signal"]["category"] == "feature"
-        assert fa["signal"]["reasoning"] == s1["detail"]  # detail -> reasoning
-        assert fa["signal"]["files"] == ["src/gpu.py", "src/train.py"]  # files_involved -> files
-        assert fa["signal"]["significance"] == s1["significance"]
-        # fork with no signal + no sha
-        fc = forks[f3["id"]]
-        assert fc["sha"] is None
-        assert fc["signal"] is None
-        # clusters
-        assert len(data["clusters"]) == 1
-        cl = data["clusters"][0]
-        assert cl["label"] == cluster["label"]
-        assert cl["summary"] == cluster["description"]
-        assert set(cl["members"]) == {f1["id"], f2["id"]}
+    async def test_complete_snapshot_uses_mcp_contract(self, hub: ForkHub, db: Database):
+        await db.insert_tracked_repo(make_tracked_repo())
+        await db.save_relationship_snapshot("torvalds", snapshot())
+        data = await build_explore_data(hub, "torvalds", "linux")
+        assert data["relationship"] == await db.get_relationship_view("torvalds", "torvalds/linux")
+        assert data["relationship"]["status"] == "cached"
+        edges = data["relationship"]["snapshot"]["relationships"]
+        assert edges[0]["source_repo"] == "example/fork-456"
+        assert data["relationship"]["last_attempt_complete"] is True
+
+    async def test_incomplete_snapshot_is_not_exhaustive(self, hub: ForkHub, db: Database):
+        await db.insert_tracked_repo(make_tracked_repo())
+        await db.save_relationship_snapshot("torvalds", snapshot(complete=False))
+        data = await build_explore_data(hub, "torvalds", "linux")
+        assert data["relationship"]["snapshot"]["complete"] is False
+        assert "Incomplete fork coverage" in data["relationship"]["warning"]
+
+    async def test_partial_refresh_retains_complete_graph(self, hub: ForkHub, db: Database):
+        await db.insert_tracked_repo(make_tracked_repo())
+        await db.save_relationship_snapshot("torvalds", snapshot())
+        await db.save_relationship_snapshot("torvalds", snapshot(complete=False, edge_id=999))
+        data = await build_explore_data(hub, "torvalds", "linux")
+        relationship = data["relationship"]
+        assert relationship["preserved_complete_snapshot"] is True
+        assert relationship["last_attempt_complete"] is False
+        assert relationship["snapshot"]["relationships"][0]["source_repo"] == "example/fork-456"
+
+    async def test_configured_username_scopes_watched_repository(self, hub: ForkHub, db: Database):
+        await db.insert_tracked_repo(make_tracked_repo())
+        hub._settings.github.username = "watcher"
+        await db.save_relationship_snapshot("watcher", snapshot())
+        data = await build_explore_data(hub, "torvalds", "linux")
+        assert data["relationship"]["status"] == "cached"
+        assert data["discovery_username"] == "watcher"
 
     async def test_last_sync_serialized_when_set(self, hub: ForkHub, db: Database):
-        repo = make_tracked_repo(last_synced_at="2026-06-01T12:00:00+00:00")
-        await db.insert_tracked_repo(repo)
+        await db.insert_tracked_repo(make_tracked_repo(last_synced_at="2026-06-01T12:00:00+00:00"))
         data = await build_explore_data(hub, "torvalds", "linux")
         assert data["repo"]["last_sync"].startswith("2026-06-01T12:00:00")
 

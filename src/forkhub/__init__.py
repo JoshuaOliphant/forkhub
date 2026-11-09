@@ -189,6 +189,11 @@ class ForkHub:
     async def __aexit__(self, *args: object) -> None:
         await self._db.close()
 
+    @property
+    def github_username(self) -> str:
+        """Configured GitHub identity used to scope personal relationship snapshots."""
+        return self._settings.github.username
+
     # --- Public API ---
 
     async def init(self, username: str) -> list[TrackedRepo]:
@@ -227,6 +232,10 @@ class ForkHub:
     ) -> RelationshipSnapshot | None:
         """Read the last discovered relationship snapshot without contacting GitHub."""
         return await self._intelligence_store.get_relationship_snapshot(username, repository)
+
+    async def get_relationship_view(self, username: str, repository: str) -> dict:
+        """Read canonical relationship and scan status, without discovery calls."""
+        return await self._db.get_relationship_view(username, repository)
 
     async def get_repos(self, mode: TrackingMode | None = None) -> list[TrackedRepo]:
         """List tracked repositories, optionally filtered by mode."""

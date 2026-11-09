@@ -21,11 +21,11 @@ if TYPE_CHECKING:
 WEB_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
-# Rendered when no repos are tracked yet — a valid-but-empty constellation.
+# Rendered when no repositories are tracked; no discovery command is applicable.
 _EMPTY: dict[str, Any] = {
-    "repo": {"name": "—", "full_name": "No repos tracked yet", "fork_count": 0, "last_sync": None},
-    "clusters": [],
-    "forks": [],
+    "repo": {"name": "—", "full_name": "No repos tracked yet", "last_sync": None},
+    "discovery_username": None,
+    "relationship": {"status": "not_scanned", "message": "No repository selected."},
 }
 
 
@@ -68,7 +68,7 @@ def create_app(hub: ForkHub | None = None) -> FastAPI:
                 data = await build_explore_data(request.app.state.hub, owner, repo)
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            s.set_attribute("fork_count", data["repo"]["fork_count"])
+            s.set_attribute("relationship_status", data["relationship"]["status"])
             return templates.TemplateResponse(request, "explore.html", {"data": data})
 
     return app
