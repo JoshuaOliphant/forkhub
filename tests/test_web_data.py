@@ -70,9 +70,7 @@ class TestBuildExploreData:
         await db.insert_tracked_repo(make_tracked_repo())
         await db.save_relationship_snapshot("torvalds", snapshot())
         data = await build_explore_data(hub, "torvalds", "linux")
-        assert data["relationship"] == await db.get_relationship_view(
-            "torvalds", "torvalds/linux"
-        )
+        assert data["relationship"] == await db.get_relationship_view("torvalds", "torvalds/linux")
         assert data["relationship"]["status"] == "cached"
         edges = data["relationship"]["snapshot"]["relationships"]
         assert edges[0]["source_repo"] == "example/fork-456"
@@ -95,9 +93,7 @@ class TestBuildExploreData:
         assert relationship["last_attempt_complete"] is False
         assert relationship["snapshot"]["relationships"][0]["source_repo"] == "example/fork-456"
 
-    async def test_configured_username_scopes_watched_repository(
-        self, hub: ForkHub, db: Database
-    ):
+    async def test_configured_username_scopes_watched_repository(self, hub: ForkHub, db: Database):
         await db.insert_tracked_repo(make_tracked_repo())
         hub._settings.github.username = "watcher"
         await db.save_relationship_snapshot("watcher", snapshot())
@@ -105,9 +101,7 @@ class TestBuildExploreData:
         assert data["relationship"]["status"] == "cached"
 
     async def test_last_sync_serialized_when_set(self, hub: ForkHub, db: Database):
-        await db.insert_tracked_repo(
-            make_tracked_repo(last_synced_at="2026-06-01T12:00:00+00:00")
-        )
+        await db.insert_tracked_repo(make_tracked_repo(last_synced_at="2026-06-01T12:00:00+00:00"))
         data = await build_explore_data(hub, "torvalds", "linux")
         assert data["repo"]["last_sync"].startswith("2026-06-01T12:00:00")
 
