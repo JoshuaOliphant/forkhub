@@ -464,6 +464,27 @@ class Database:
             ],
         }
 
+    async def get_relationship_view(self, username: str, repository: str) -> dict[str, Any]:
+        """Return the same scan-state contract used by authenticated MCP readers."""
+        from forkhub.mcp_cache_contract import relationships_result
+
+        key = username.casefold()
+        cursor = await self._db.execute(
+            "SELECT * FROM relationship_snapshots "
+            "WHERE username = ? AND focus_repo = ? COLLATE NOCASE",
+            (key, repository),
+        )
+        row = await self._fetchone(cursor)
+        edges: list[dict[str, Any]] = []
+        if row is not None:
+            cursor = await self._db.execute(
+                "SELECT * FROM repository_relationships "
+                "WHERE username = ? AND focus_github_id = ? ORDER BY rowid",
+                (key, row["focus_github_id"]),
+            )
+            edges = await self._fetchall(cursor)
+        return relationships_result(repository, row, edges)
+
     # ------------------------------------------------------------------
     # TrackedRepo CRUD
     # ------------------------------------------------------------------
