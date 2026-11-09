@@ -68,20 +68,25 @@ class TestExploreApp:
         self, hub: ForkHub, db: Database
     ):
         await _seed_repo(db)
-        await db.save_relationship_snapshot("torvalds", {
-            "focus_github_id": 123456,
-            "focus_repo": "torvalds/linux",
-            "upstream_repo": None,
-            "complete": False,
-            "pages_scanned": 1,
-            "relationships": [{
-                "direction": "downstream",
-                "github_id": 789012,
-                "source_repo": "someone/linux",
-                "target_repo": "torvalds/linux",
-                "is_user_repository": False,
-            }],
-        })
+        await db.save_relationship_snapshot(
+            "torvalds",
+            {
+                "focus_github_id": 123456,
+                "focus_repo": "torvalds/linux",
+                "upstream_repo": None,
+                "complete": False,
+                "pages_scanned": 1,
+                "relationships": [
+                    {
+                        "direction": "downstream",
+                        "github_id": 789012,
+                        "source_repo": "someone/linux",
+                        "target_repo": "torvalds/linux",
+                        "is_user_repository": False,
+                    }
+                ],
+            },
+        )
         app = create_app(hub)
         app.state.hub = hub
         async with _client(app) as client:
@@ -156,20 +161,25 @@ class TestExploreApp:
         await db.insert_tracked_repo(repo)
         fork = make_fork(repo["id"])
         await db.insert_fork(fork)
-        await db.save_relationship_snapshot("torvalds", {
-            "focus_github_id": 123456,
-            "focus_repo": "torvalds/linux",
-            "upstream_repo": None,
-            "complete": True,
-            "pages_scanned": 1,
-            "relationships": [{
-                "direction": "downstream",
-                "github_id": 9001,
-                "source_repo": "</script><img src=x onerror=alert(1)>",
-                "target_repo": "torvalds/linux",
-                "is_user_repository": False,
-            }],
-        })
+        await db.save_relationship_snapshot(
+            "torvalds",
+            {
+                "focus_github_id": 123456,
+                "focus_repo": "torvalds/linux",
+                "upstream_repo": None,
+                "complete": True,
+                "pages_scanned": 1,
+                "relationships": [
+                    {
+                        "direction": "downstream",
+                        "github_id": 9001,
+                        "source_repo": "</script><img src=x onerror=alert(1)>",
+                        "target_repo": "torvalds/linux",
+                        "is_user_repository": False,
+                    }
+                ],
+            },
+        )
         app = create_app(hub)
         app.state.hub = hub
         async with _client(app) as client:
