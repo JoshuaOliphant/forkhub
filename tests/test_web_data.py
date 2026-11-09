@@ -63,6 +63,7 @@ class TestBuildExploreData:
         assert data["repo"]["full_name"] == "torvalds/linux"
         assert data["repo"]["last_sync"] is None
         assert data["relationship"]["status"] == "not_scanned"
+        assert data["discovery_username"] == "torvalds"
         assert "forks" not in data
         assert "clusters" not in data
 
@@ -99,6 +100,7 @@ class TestBuildExploreData:
         await db.save_relationship_snapshot("watcher", snapshot())
         data = await build_explore_data(hub, "torvalds", "linux")
         assert data["relationship"]["status"] == "cached"
+        assert data["discovery_username"] == "watcher"
 
     async def test_last_sync_serialized_when_set(self, hub: ForkHub, db: Database):
         await db.insert_tracked_repo(make_tracked_repo(last_synced_at="2026-06-01T12:00:00+00:00"))
