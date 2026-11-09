@@ -189,6 +189,11 @@ class ForkHub:
     async def __aexit__(self, *args: object) -> None:
         await self._db.close()
 
+    @property
+    def github_username(self) -> str:
+        """Configured GitHub identity used to scope personal relationship snapshots."""
+        return self._settings.github.username
+
     # --- Public API ---
 
     async def init(self, username: str) -> list[TrackedRepo]:
