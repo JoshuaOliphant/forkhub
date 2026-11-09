@@ -1,79 +1,74 @@
 <!DOCTYPE html>
-<!-- ABOUTME: Jinja template for the Explore zone, served by the FastAPI app. -->
-<!-- ABOUTME: Embeds the mapped fork data as JSON, then boots the constellation module. -->
+<!-- ABOUTME: Relationship-first ForkHub Explore view. -->
+<!-- ABOUTME: Renders persisted scan state without claiming discovery or verified signals. -->
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Explore · ForkHub</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', path='css/forkhub.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='css/relationships.css') }}">
 </head>
 <body>
   <div class="app">
     <header class="topbar">
-      <div class="brand">
-        <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/></svg></div>
-        <div class="word">ForkHub</div>
-      </div>
-      <a class="repo-switch"{% if "/" in data.repo.full_name %} href="https://github.com/{{ data.repo.full_name }}" target="_blank" rel="noopener"{% endif %} title="Open on GitHub">
-        <span class="gh"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
+      <div class="brand"><span class="word">ForkHub</span></div>
+      <a class="repo-switch"{% if "/" in data.repo.full_name %} href="https://github.com/{{ data.repo.full_name }}" target="_blank" rel="noopener noreferrer"{% endif %}>
         <span class="name">{{ data.repo.full_name }}</span>
-        <span class="chev"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg></span>
       </a>
       <div class="spacer"></div>
-      <button class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>Sync</button>
+      <span class="scan-label">{{ data.relationship.status | replace("_", " ") }}</span>
     </header>
-
-    <nav class="rail">
-      <a class="active" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16.2 7.8-2.9 6.4-6.4 2.9 2.9-6.4z"/></svg><span>Explore</span></a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>Digest</span></a>
-      <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span>Control</span></a>
-    </nav>
-
-    <main class="zone">
-      <div class="explore">
-        <div class="zone-head">
-          <h1>Explore</h1>
-          <span class="sub">{{ data.forks | length }} forks · {{ data.clusters | length }} clusters</span>
-          <div class="tools">
-            <div class="seg">
-              <button class="on" data-view="map">Map</button>
-              <button data-view="list">List</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="sky-wrap">
-          <svg class="starfield" aria-hidden="true"></svg>
-          <div class="sky-glow"></div>
-          <svg class="constellation" role="img" aria-label="Fork constellation. Use Tab to move between forks, Enter to inspect."></svg>
-          <div class="legend">
-            <span class="item"><span class="dot" style="background:var(--sig-feature)"></span>feature</span>
-            <span class="item"><span class="dot" style="background:var(--sig-fix)"></span>fix</span>
-            <span class="item"><span class="dot" style="background:var(--sig-refactor)"></span>refactor</span>
-            <span class="item"><span class="dot" style="background:var(--sig-adaptation)"></span>adaptation</span>
-            <span class="item"><span class="dot" style="background:var(--sig-dependency)"></span>dependency</span>
-            <span class="item"><span class="dot" style="background:var(--accent)"></span>live</span>
-          </div>
-          <div class="hint">larger = higher significance · linked = cluster</div>
-        </div>
-
-        <div class="listview" hidden></div>
+    <nav class="rail" aria-label="Primary"><a class="active" href="/">Explore</a></nav>
+    <main class="relationship-page">
+      <div class="relationship-header">
+        <h1>Repository relationships</h1>
+        <p>Upstream, downstream and sibling repositories from the last persisted discovery.</p>
       </div>
-
-      <aside class="inspector" aria-label="Fork inspector">
-        <div class="insp-head"></div>
-        <div class="insp-body"></div>
-      </aside>
+      {% set view = data.relationship %}
+      {% if view.status == "not_scanned" %}
+        <section class="relationship-notice" role="status">
+          <h2>Not scanned yet</h2>
+          <p>No cached relationship discovery exists for this repository. A sync timestamp does not establish a relationship scan.</p>
+          <code>forkhub relationships {{ data.repo.full_name }} --username {{ data.repo.full_name.split("/")[0] }}</code>
+        </section>
+      {% elif view.status == "cached" %}
+        <section class="relationship-meta" aria-label="Discovery status">
+          <div><strong>{{ "Complete" if view.last_attempt_complete else "Incomplete" }}</strong><small>Latest discovery attempt</small></div>
+          <div><strong>{{ view.last_attempt_pages_scanned }}</strong><small>Pages scanned in latest attempt</small></div>
+          <div><strong>{{ view.last_attempt_at or "Unknown" }}</strong><small>Last attempt (UTC)</small></div>
+          <div><strong>{{ view.last_complete_at or "None" }}</strong><small>Last complete scan (UTC)</small></div>
+        </section>
+        {% if view.warning %}
+          <section class="relationship-notice" role="status"><h2>Coverage warning</h2><p>{{ view.warning }}</p></section>
+        {% endif %}
+        <div class="relationship-header"><h2>Relationship map</h2><p>Each repository link opens its GitHub page. Relationships are directed toward the selected repository.</p></div>
+        <section class="relationship-map" aria-label="Repository relationship map">
+          <div class="relationship-edges">
+            {% for edge in view.snapshot.relationships %}
+              <a class="relationship-node" href="https://github.com/{{ edge.source_repo }}" target="_blank" rel="noopener noreferrer">
+                <span class="relationship-direction">{{ edge.direction }}</span>
+                <strong>{{ edge.source_repo }}</strong>
+                <small>{{ "Your repository" if edge.is_user_repository else "External repository" }}</small>
+              </a>
+            {% else %}
+              <p class="relationship-empty">No relationships were found in this {{ "complete" if view.snapshot.complete else "incomplete" }} snapshot.</p>
+            {% endfor %}
+          </div>
+          <div class="relationship-focus"><span>Focus repository</span><strong>{{ view.snapshot.focus_repo }}</strong></div>
+        </section>
+        <section class="relationship-table" aria-label="Discovered relationships">
+          <h2>Relationship list</h2>
+          <table><thead><tr><th>Direction</th><th>Source repository</th><th>Target repository</th></tr></thead>
+          <tbody>{% for edge in view.snapshot.relationships %}
+            <tr><td>{{ edge.direction }}</td><td><a href="https://github.com/{{ edge.source_repo }}" target="_blank" rel="noopener noreferrer">{{ edge.source_repo }}</a></td><td>{{ edge.target_repo }}</td></tr>
+          {% else %}<tr><td colspan="3">No cached relationships in this snapshot.</td></tr>{% endfor %}</tbody></table>
+        </section>
+      {% else %}
+        <section class="relationship-notice" role="status"><h2>Relationship data unavailable</h2><p>The repository has no available relationship view.</p></section>
+      {% endif %}
     </main>
   </div>
-
-  <div class="diff-backdrop" hidden></div>
-
   <script id="forkhub-data" type="application/json">{{ data | tojson }}</script>
-  <script type="module" src="{{ url_for('static', path='js/explore.js') }}"></script>
 </body>
 </html>
