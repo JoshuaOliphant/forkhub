@@ -53,3 +53,30 @@ evidence in Worker packaging or the hosted query boundary fails automatically.
 Local final unit run: 966 passed, 4 deselected; 4,019 source statements covered,
 100% statement coverage, no warnings. Ruff lint/format and diff whitespace checks
 passed. The local Workers/D1 integration passed separately (1 test).
+
+## Review and verification follow-through
+
+Independent Standards, Spec, correctness and approach passes reviewed the change.
+The Standards pass found malformed nested cache evidence could crash the website;
+`08642c8` validates it before rendering. A real Git rename-chain regression failed
+when commit patches were combined; `8856e25` preserves commit boundaries, reports
+final paths and rejects changes that cancel out. The PR's model-input comment
+was reproduced before `8918533`: recoverable references are normalized at the
+tool boundary, while unusable references retain the interpretation with partial
+or unavailable evidence. Strict persisted validation remains intact.
+
+Fresh final verification passed: 1,032 unit tests, 4,054/4,054 source statements
+(100%), 114 Ruff files, two integration tests and all 14 cached acceptance rows.
+Production import without development dependencies and isolated Worker dry-run
+bundling passed. The real-source round trip is now a committed integration test.
+The styled website and expanded evidence inspector were observed in the browser
+using a disposable cache copy. No production or operational database was changed.
+
+The host has no compost Workflow tool or native Codex review command, so the
+review ran by hand with independent agents and skeptics; the independent
+correctness pass was a substitute, not a claimed native review. Jev remained
+unavailable and the local telemetry collector was down. No mutation tool is
+configured, so no automated mutation score is claimed. An ambient npm
+allow-scripts warning is documented without changing the user's configuration.
+
+Ruling and acceptance table: https://github.com/JoshuaOliphant/forkhub/issues/35#issuecomment-6772758024
