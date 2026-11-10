@@ -346,12 +346,14 @@ class BackfillService:
                 await self._record_attempt(attempt)
                 return attempt
             for sha in evidence.commit_shas:
+                commit_patches = []
                 for change in evidence.changes:
                     if change.commit_sha == sha and change.filename in signal.files_involved:
                         if change.patch:
-                            patches.append(change.patch)
+                            commit_patches.append(change.patch)
                         if change.filename not in patched_files:
                             patched_files.append(change.filename)
+                patches.append("\n".join(commit_patches))
         else:
             base_ref = f"{tracked['owner']}:{tracked['default_branch']}"
             head_sha = fork_row.get("head_sha")
@@ -421,7 +423,9 @@ class BackfillService:
 
         try:
             # Create branch, apply patch, run tests
-            await self._apply_and_test(attempt, patches, branch_name)
+            await self._apply_and_test(
+                attempt, patches, branch_name, per_commit=signal.evidence is not None
+            )
         except Exception as exc:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = str(exc)
@@ -462,6 +466,8 @@ class BackfillService:
         attempt: BackfillAttempt,
         patches: list[str],
         branch_name: str,
+        *,
+        per_commit: bool = False,
     ) -> None:
         """Create branch, apply patches, and run tests.
 
@@ -470,34 +476,28 @@ class BackfillService:
         # Create the candidate branch
         await self._git.create_branch(branch_name)
 
-        # Apply each patch via stdin to avoid shell injection
-        combined_patch = "\n".join(patches)
-        patch_bytes = combined_patch.encode()
+        patch_groups = patches if per_commit else ["\n".join(patches)]
+        for patch in patch_groups:
+            apply_result = await self._git.apply_3way(patch.encode())
+            if apply_result.returncode != 0:
+                attempt.status = BackfillStatus.CONFLICT
+                attempt.error = f"Patch conflict: {apply_result.stderr}"
+                reset_result = await self._git.reset_hard()
+                if reset_result.returncode != 0:
+                    attempt.error += (
+                        f" [tree reset failed: {reset_result.stderr}; working tree may be dirty]"
+                    )
+                return
 
-        # Apply with a 3-way merge so context drift between the fork's diff base
-        # and the local tree resolves where possible. The reconstructed diffs
-        # carry index blob ids, so git can merge against the recorded base; when
-        # the merge can't resolve, git writes conflict markers and exits non-zero.
-        apply_result = await self._git.apply_3way(patch_bytes)
-
-        if apply_result.returncode != 0:
-            # A failed 3-way leaves conflict markers and unmerged index entries
-            # behind. Reset the tree before returning so the outer finally's
-            # branch switch is clean. Set status first so a reset failure cannot
-            # reclassify this CONFLICT via the outer except.
-            attempt.status = BackfillStatus.CONFLICT
-            attempt.error = f"Patch conflict: {apply_result.stderr}"
-            reset_result = await self._git.reset_hard()
-            if reset_result.returncode != 0:
-                # The tree could not be reset; conflict markers / unmerged
-                # entries may linger. Surface it so the dirty state is visible.
-                attempt.error += (
-                    f" [tree reset failed: {reset_result.stderr}; working tree may be dirty]"
-                )
-            return
-
-        # Stage only the files touched by this patch (not all working-tree changes)
-        await self._git.stage(attempt.files_patched)
+        if per_commit:
+            changed = await self._git.git("diff", "--cached", "--name-only", "--no-renames", "-z")
+            attempt.files_patched = [path for path in changed.split("\0") if path]
+            if not attempt.files_patched:
+                attempt.status = BackfillStatus.PATCH_FAILED
+                attempt.error = "Recorded commits produce no net changes"
+                return
+        else:
+            await self._git.stage(attempt.files_patched)
         commit_msg = (
             f"backfill: {attempt.patch_summary}\n\n"
             f"Signal: {attempt.signal_id}\nFork: {attempt.fork_id}"

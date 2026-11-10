@@ -984,3 +984,113 @@ async def test_backfill_applies_two_cited_commits_without_unrelated_changes(db, 
     assert tree.stdout.splitlines() == ["README.md"]
     assert (tmp_path / "README.md").read_text() == "hello\n"
     assert provider.diff_calls == []
+
+
+@pytest.mark.parametrize("case", ["rename_chain", "add_then_delete", "no_net_changes"])
+async def test_backfill_preserves_commit_boundaries_and_final_paths(db, provider, tmp_path, case):
+    _init_git_repo(tmp_path)
+    repo = await _insert_repo(db)
+    fork = await _insert_fork(db, repo["id"])
+    shas = ["a" * 40, "b" * 40]
+    if case == "rename_chain":
+        changes = [
+            FileChange(
+                filename="middle.md",
+                previous_filename="README.md",
+                status="renamed",
+                additions=1,
+                deletions=1,
+                patch="@@ -1 +1 @@\n-hello\n+first",
+            ),
+            FileChange(
+                filename="final.md",
+                previous_filename="middle.md",
+                status="renamed",
+                additions=1,
+                deletions=1,
+                patch="@@ -1 +1 @@\n-first\n+second",
+            ),
+        ]
+        expected_tree = ["final.md"]
+        expected_paths = ["README.md", "final.md"]
+    else:
+        changes = [
+            FileChange(
+                filename="temporary.md",
+                status="added",
+                additions=1,
+                deletions=0,
+                patch="@@ -0,0 +1 @@\n+temporary",
+            ),
+            FileChange(
+                filename="temporary.md",
+                status="removed",
+                additions=0,
+                deletions=1,
+                patch="@@ -1 +0,0 @@\n-temporary",
+            ),
+        ]
+        expected_tree = ["README.md"]
+        expected_paths = ["README.md"]
+    files = list(dict.fromkeys(change.filename for change in changes))
+    for index, (sha, change) in enumerate(zip(shas, changes, strict=True)):
+        commit_files = [change]
+        if case == "add_then_delete" and index == 1:
+            commit_files.append(
+                FileChange(
+                    filename="README.md",
+                    status="modified",
+                    additions=1,
+                    deletions=1,
+                    patch="@@ -1 +1 @@\n-hello\n+second",
+                )
+            )
+            files.append("README.md")
+        provider.commits[f"forker1/proj@{sha}"] = CommitDetails(sha=sha, files=commit_files)
+    evidence = await capture_evidence(provider, "forker1/proj", shas, files)
+    assert evidence.verification_state == "verified"
+    signal = make_signal(
+        fork["id"],
+        repo["id"],
+        files_involved=json.dumps(files),
+        evidence=evidence.model_dump_json(),
+    )
+    await db.insert_signal(signal)
+    attempt = await BackfillService(
+        db, provider, repo_path=tmp_path, test_command="true"
+    ).apply_signal(signal["id"])
+    if case == "no_net_changes":
+        assert attempt.status == BackfillStatus.PATCH_FAILED
+        assert attempt.error == "Recorded commits produce no net changes"
+        assert attempt.files_patched == []
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert status.stdout == ""
+        return
+    assert attempt.status == BackfillStatus.ACCEPTED, attempt.error
+    assert attempt.files_patched == expected_paths
+    tree = subprocess.run(
+        ["git", "ls-tree", "--name-only", attempt.branch_name],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert tree.stdout.splitlines() == expected_tree
+    content = subprocess.run(
+        ["git", "show", f"{attempt.branch_name}:{expected_tree[0]}"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert content.stdout == "second\n"
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=tmp_path, check=True, capture_output=True, text=True
+    )
+    assert status.stdout == ""
