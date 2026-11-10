@@ -317,6 +317,10 @@ uv run ty check
 
 ## Docs
 
+- [Verification gates](docs/agents/testing.md) — run repeatable local checks and acceptance-test mappings.
+- [Acceptance-test cache](docs/agents/acceptance.md) — retain issue criteria and exact test node identifiers.
+- [Issue tracker](docs/agents/issue-tracker.md) — use GitHub Issues and record review rulings.
+- [Observability status](docs/agents/observability.md) — locate the existing telemetry stack and its current verification limits.
 - [Signal evidence](docs/signal-evidence.md) — capture immutable commit provenance and inspect the same evidence in the website and ChatGPT.
 - [Signal evidence review findings](knowledge/capture/daily/2026-11-10-signal-evidence.md) — real-commit round-trip observations and release boundaries.
 - [Cloudflare Worker deployment](docs/cloudflare-worker-deployment.md) — host the read-only MCP service with Access OAuth and a dedicated D1 cache.
