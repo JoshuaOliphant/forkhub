@@ -10,7 +10,7 @@ from forkhub.models import EvidenceChange, SignalEvidence
 
 if TYPE_CHECKING:
     from forkhub.interfaces import GitProvider
-    from forkhub.models import FileChange
+    from forkhub.models import CommitDetails, FileChange
 
 
 def patch_is_complete(change: FileChange) -> bool:
@@ -38,31 +38,19 @@ def file_patch(change: FileChange) -> str:
     return "\n".join(header) + "\n" + (change.patch or "").rstrip("\n") + "\n"
 
 
-async def capture_evidence(
-    provider: GitProvider,
-    repository: str,
-    commit_shas: list[str],
-    files: list[str],
-    *,
-    now: datetime | None = None,
+def _verify_evidence(
+    evidence: SignalEvidence, retrieved: dict[str, CommitDetails | str]
 ) -> SignalEvidence:
-    evidence = SignalEvidence(
-        source_repository=repository,
-        commit_shas=commit_shas,
-        files=files,
-        captured_at=now or datetime.now(UTC),
-    )
-    if not commit_shas or not files:
+    evidence = evidence.model_copy(deep=True)
+    if not evidence.commit_shas or not evidence.files:
         evidence.warnings.append("No immutable commits or relevant files were supplied.")
         return evidence
-    owner, repo = repository.split("/")
     complete = True
     fetched = False
-    for sha in commit_shas:
-        try:
-            commit = await provider.get_commit(owner, repo, sha)
-        except (ProviderError, OSError, TimeoutError) as exc:
-            evidence.warnings.append(f"Commit {sha} could not be retrieved: {exc}")
+    for sha in evidence.commit_shas:
+        commit = retrieved[sha]
+        if isinstance(commit, str):
+            evidence.warnings.append(commit)
             complete = False
             continue
         fetched = True
@@ -70,7 +58,7 @@ async def capture_evidence(
             evidence.warnings.append(f"Commit {sha} returned a different SHA.")
             complete = False
             continue
-        relevant = [change for change in commit.files if change.filename in files]
+        relevant = [change for change in commit.files if change.filename in evidence.files]
         if not commit.complete or not relevant:
             evidence.warnings.append(f"Commit {sha} has incomplete or unrelated file evidence.")
             complete = False
@@ -90,7 +78,7 @@ async def capture_evidence(
                 )
             )
     covered = {change.filename for change in evidence.changes if change.patch}
-    if not set(files) <= covered:
+    if not set(evidence.files) <= covered:
         evidence.warnings.append("Some relevant files lack complete immutable patches.")
         complete = False
     evidence.verification_state = (
@@ -98,3 +86,29 @@ async def capture_evidence(
     )
     evidence.verified_at = evidence.captured_at if complete else None
     return SignalEvidence.model_validate(evidence.model_dump())
+
+
+async def capture_evidence(
+    provider: GitProvider,
+    repository: str,
+    commit_shas: list[str],
+    files: list[str],
+    *,
+    now: datetime | None = None,
+) -> SignalEvidence:
+    """Retrieve commits; failures return unavailable/partial evidence with warnings."""
+    evidence = SignalEvidence(
+        source_repository=repository,
+        commit_shas=commit_shas,
+        files=files,
+        captured_at=now or datetime.now(UTC),
+    )
+    retrieved: dict[str, CommitDetails | str] = {}
+    if evidence.commit_shas and evidence.files:
+        owner, repo = evidence.source_repository.split("/")
+        for sha in evidence.commit_shas:
+            try:
+                retrieved[sha] = await provider.get_commit(owner, repo, sha)
+            except (ProviderError, OSError, TimeoutError) as exc:
+                retrieved[sha] = f"Commit {sha} could not be retrieved: {exc}"
+    return _verify_evidence(evidence, retrieved)

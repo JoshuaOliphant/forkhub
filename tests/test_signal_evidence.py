@@ -58,7 +58,14 @@ async def test_capture_verifies_only_complete_relevant_commit_evidence(provider,
     assert evidence.source_repository == "alice/repo"
     assert evidence.files == files
     assert evidence.verified_at == (NOW if expected == "verified" else None)
+    assert evidence.captured_at == NOW
+    assert provider.commit_calls == (
+        [] if case in {"missing_files", "missing_shas"} else [f"alice/repo@{SHA}"]
+    )
     assert bool(evidence.warnings) == (expected != "verified")
+    if case == "missing_commit":
+        assert evidence.warnings[0].startswith(f"Commit {SHA} could not be retrieved:")
+        assert "Commit unavailable" in evidence.warnings[0]
     if expected == "verified":
         assert evidence.changes[0].patch is not None
         assert evidence.changes[0].patch.endswith("-old\n+value\n")
