@@ -2,6 +2,7 @@
 # ABOUTME: Provides in-memory database, sample models, and provider stubs.
 
 import json
+import os
 from datetime import UTC, datetime
 
 import jwt
@@ -12,6 +13,7 @@ from examples.chatgpt_mcp_cloudflare_access import AccessSettings
 from examples.seed_mcp_demo import DEMO_USER, seed
 from forkhub.database import Database
 from forkhub.mcp_cloudflare_access import AccessPolicy
+from forkhub.providers.github import GitHubProvider
 
 from .stubs import (
     StubEmbeddingProvider,
@@ -55,6 +57,16 @@ def _clean_forkhub_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip ForkHub-related env vars so tests are isolated from .env files."""
     for var in _FORKHUB_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(scope="session")
+def github_acceptance_provider():
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
+
+    def create_provider():
+        return GitHubProvider(token)
+
+    return create_provider
 
 
 @pytest.fixture(autouse=True)

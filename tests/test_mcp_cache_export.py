@@ -135,9 +135,15 @@ async def test_export_round_trips_contract_and_filters_unrelated_data(db, tmp_pa
     assert imported_reader.get_cached_relationships(
         "ALICE/REPO"
     ) == original_reader.get_cached_relationships("ALICE/REPO")
-    assert imported_reader.list_cached_signals("ALICE/REPO") == original_reader.list_cached_signals(
-        "ALICE/REPO"
-    )
+    signals = imported_reader.list_cached_signals("ALICE/REPO")
+    assert signals == original_reader.list_cached_signals("ALICE/REPO")
+    evidence = signals["signals"][0]["evidence"]
+    if with_evidence:
+        assert evidence["source_repository"] == "alice/fork"
+        assert evidence["commit_shas"] == ["b" * 40]
+        assert evidence["changes"][0]["patch"] == "@@ -1 +1 @@\n-before\n+after"
+    else:
+        assert evidence is None
 
 
 async def test_export_sees_committed_wal_rows_without_modifying_source(db, tmp_path):

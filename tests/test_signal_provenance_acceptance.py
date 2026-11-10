@@ -20,7 +20,6 @@ from forkhub.mcp_cache_export import export_cache
 from forkhub.mcp_d1_queries import D1Queries
 from forkhub.mcp_preview_queries import PreviewQueries
 from forkhub.mcp_worker import WorkerSettings, create_worker_app
-from forkhub.providers.github import GitHubProvider
 from forkhub.web.app import create_app
 from forkhub.web.data import build_explore_data
 from tests.stubs import make_fork, make_tracked_repo
@@ -28,14 +27,22 @@ from tests.stubs import make_fork, make_tracked_repo
 
 @pytest.mark.integration
 async def test_real_commit_signal_matches_website_export_and_authenticated_mcp(
-    tmp_path, embedding_provider, backend, access_policy, signing_keys, sign_assertion, caplog
+    tmp_path,
+    embedding_provider,
+    backend,
+    access_policy,
+    signing_keys,
+    sign_assertion,
+    caplog,
+    github_acceptance_provider,
 ):
     sha = "0795ef197cca04f6a8e7d50d10ed4dc71bd1a0cc"
     filename = "tests/chatgpt-auth.test.ts"
     with caplog.at_level(logging.WARNING):
-        provider = GitHubProvider("")
-    assert len(caplog.records) == 1
-    assert "unauthenticated access" in caplog.records[0].message
+        provider = github_acceptance_provider()
+    if caplog.records:
+        assert len(caplog.records) == 1
+        assert "unauthenticated access" in caplog.records[0].message
     caplog.clear()
     fork = await provider.get_repo("JoshuaOliphant", "learnharness")
     assert fork.parent_full_name == "amosblomqvist/learnharness"
