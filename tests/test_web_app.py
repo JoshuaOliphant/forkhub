@@ -209,7 +209,10 @@ class TestExploreApp:
         assert "&lt;img src=x" in resp.text  # the untrusted name is HTML-escaped
 
 
-@pytest.mark.parametrize("state", [None, "unavailable", "partial", "verified", "mismatched"])
+@pytest.mark.parametrize(
+    "state",
+    [None, "unavailable", "partial", "verified", "mismatched", "bad_warnings", "bad_changes"],
+)
 async def test_signal_evidence_inspection_and_immutable_links(hub, db, state):
     repo = await _seed_repo(db)
     sha = "a" * 40
@@ -228,11 +231,21 @@ async def test_signal_evidence_inspection_and_immutable_links(hub, db, state):
                 }
             ],
             "warnings": ["Patch retrieval was incomplete."] if state == "partial" else [],
-            "verification_state": "verified" if state == "mismatched" else state,
+            "verification_state": (
+                "verified"
+                if state == "mismatched"
+                else "partial"
+                if state in {"bad_warnings", "bad_changes"}
+                else state
+            ),
             "verified_at": (
                 "2026-11-10T12:00:00+00:00" if state in {"verified", "mismatched"} else None
             ),
         }
+        if state == "bad_warnings":
+            evidence["warnings"] = 1
+        elif state == "bad_changes":
+            evidence["changes"] = None
     await db.insert_signal(
         make_signal(
             None,
@@ -248,10 +261,10 @@ async def test_signal_evidence_inspection_and_immutable_links(hub, db, state):
     assert response.status_code == 200
     assert "Model interpretation" in response.text
     assert "Inspect source evidence" in response.text
-    if state in {None, "mismatched"}:
+    if state in {None, "mismatched", "bad_warnings", "bad_changes"}:
         assert "interpretation has no usable recorded immutable provenance" in response.text
         assert "/commit/" not in response.text
-        if state == "mismatched":
+        if state is not None:
             assert "Stored evidence is malformed and cannot be trusted." in response.text
     else:
         assert f"https://github.com/someone/linux/commit/{sha}" in response.text

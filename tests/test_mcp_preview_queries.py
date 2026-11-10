@@ -320,7 +320,14 @@ async def test_signal_evidence_and_cache_freshness_are_separate(
                 "files": ["src/a.py"],
                 "verification_state": "verified",
                 "verified_at": "2026-11-10T12:00:00",
-                "changes": [{"commit_sha": "a" * 40, "filename": "src/a.py", "patch": "patch"}],
+                "changes": [
+                    {
+                        "commit_sha": "a" * 40,
+                        "filename": "src/a.py",
+                        "status": "modified",
+                        "patch": "patch",
+                    }
+                ],
             }
         ),
         json.dumps(
@@ -339,13 +346,42 @@ async def test_signal_evidence_and_cache_freshness_are_separate(
                 "verification_state": "verified",
             }
         ),
+        *[
+            json.dumps(
+                {
+                    "source_repository": "alice/fork",
+                    "commit_shas": ["a" * 40],
+                    "files": ["src/a.py"],
+                    "verification_state": state,
+                    "verified_at": "2026-11-10T12:00:00+00:00",
+                    "changes": [
+                        {
+                            "commit_sha": "a" * 40,
+                            "filename": "src/a.py",
+                            "status": "modified",
+                            "patch": "patch",
+                        }
+                    ],
+                    **{field: value},
+                }
+            )
+            for state in ("unavailable", "partial", "verified")
+            for field, value in (
+                ("warnings", None),
+                ("warnings", 1),
+                ("warnings", [1]),
+                ("changes", None),
+                ("changes", [None]),
+                ("changes", [{"commit_sha": "a" * 40}]),
+            )
+        ],
     ],
 )
 async def test_malformed_cache_evidence_is_unavailable_and_never_linked(preview, malformed):
     db, reader = preview
     repo = make_tracked_repo(full_name="alice/repo")
     await db.insert_tracked_repo(repo)
-    await db.insert_signal(make_signal(None, repo["id"]))
+    await db.insert_signal(make_signal(None, repo["id"], files_involved='["src/a.py"]'))
     await db._db.execute("UPDATE signals SET evidence = ?", (malformed,))
     await db._db.commit()
 
@@ -414,7 +450,9 @@ async def test_cache_evidence_cannot_verify_unrelated_files_or_duplicate_commits
         "files": ["src/a.py"],
         "verification_state": "verified",
         "verified_at": "2026-11-10T12:00:00+00:00",
-        "changes": [{"commit_sha": "a" * 40, "filename": "src/a.py", "patch": "patch"}],
+        "changes": [
+            {"commit_sha": "a" * 40, "filename": "src/a.py", "status": "modified", "patch": "patch"}
+        ],
     }
     if mutation == "duplicate_sha":
         evidence["commit_shas"].append("a" * 40)

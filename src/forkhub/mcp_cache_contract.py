@@ -139,6 +139,8 @@ def _read_evidence(raw: str | None) -> tuple[dict | None, bool]:
         shas = evidence["commit_shas"]
         filenames = evidence["files"]
         state = evidence["verification_state"]
+        warnings = evidence.get("warnings", [])
+        changes = evidence.get("changes", [])
         valid = (
             re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
             and isinstance(shas, list)
@@ -148,13 +150,25 @@ def _read_evidence(raw: str | None) -> tuple[dict | None, bool]:
             and all(isinstance(filename, str) and filename for filename in filenames)
             and len(set(filenames)) == len(filenames)
             and state in ("unavailable", "partial", "verified")
+            and isinstance(warnings, list)
+            and all(isinstance(warning, str) for warning in warnings)
+            and isinstance(changes, list)
+            and all(
+                isinstance(change, dict)
+                and isinstance(change.get("commit_sha"), str)
+                and re.fullmatch(r"[0-9a-f]{40}", change["commit_sha"])
+                and isinstance(change.get("filename"), str)
+                and change["filename"]
+                and isinstance(change.get("status"), str)
+                and (change.get("patch") is None or isinstance(change["patch"], str))
+                for change in changes
+            )
         )
         if not valid:
             return None, True
         if state == "verified":
             if not shas or not filenames:
                 return None, True
-            changes = evidence["changes"]
             if not isinstance(changes, list) or not all(
                 isinstance(change["patch"], str)
                 and change["patch"].strip()
