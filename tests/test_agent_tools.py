@@ -9,11 +9,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from forkhub.agent.tools import create_tools
+
 # Skip this whole module if the optional [claude] extra isn't installed —
 # these tests exercise claude-agent-sdk directly.
 pytest.importorskip("claude_agent_sdk")
 
 from forkhub.models import (  # noqa: E402
+    CommitDetails,
     CommitInfo,
     CompareResult,
     FileChange,
@@ -767,3 +770,62 @@ class TestToolInstrumentation:
         await t.handler(args)
 
         assert [c[0] for c in calls] == [tool_name]
+
+
+@pytest.mark.parametrize(
+    "commits,files,expected",
+    [
+        pytest.param(["a" * 40], ["file.py"], "verified", id="True"),
+        pytest.param([], ["file.py"], "unavailable", id="False"),
+        pytest.param(json.dumps(["a" * 40]), ["file.py"], "verified", id="stringified"),
+        pytest.param(["A" * 40], ["file.py"], "verified", id="uppercase"),
+        pytest.param(["a" * 40] * 2, ["file.py"], "verified", id="duplicate_sha"),
+        pytest.param(["a" * 40], ["file.py"] * 2, "verified", id="duplicate_file"),
+        pytest.param(["abc123"], ["file.py"], "unavailable", id="short_sha"),
+        pytest.param(["a" * 40, "main"], ["file.py"], "partial", id="mixed_refs"),
+        pytest.param("not-json", ["file.py"], "unavailable", id="invalid_string"),
+        pytest.param(None, ["file.py"], "unavailable", id="invalid_shape"),
+    ],
+)
+async def test_store_signal_captures_provenance_independently(tools, db, commits, files, expected):
+    repo = await _insert_tracked_repo(db)
+    await _insert_fork(db, repo.id)
+    provider = StubGitProvider()
+    sha = "a" * 40
+    provider.commits[f"alice/repo@{sha}"] = CommitDetails(
+        sha=sha,
+        files=[
+            FileChange(
+                filename="file.py",
+                status="added",
+                additions=1,
+                deletions=0,
+                patch="@@ -0,0 +1 @@\n+value",
+            )
+        ],
+    )
+    tools = create_tools(db, provider, StubEmbeddingProvider(), clock=_NOW)
+    result = await _find_tool(tools, "store_signal").handler(
+        {
+            "fork_full_name": "alice/repo",
+            "category": "feature",
+            "summary": "Model interpretation",
+            "significance": 7,
+            "files_involved": files,
+            "commit_shas": commits,
+            "verification_state": "verified",
+        }
+    )
+    assert not result.get("is_error")
+    data = json.loads(result["content"][0]["text"])
+    assert data["evidence"]["verification_state"] == expected
+    row = (await db.list_signals(repo.id))[0]
+    assert json.loads(row["evidence"])["verification_state"] == expected
+    assert json.loads(row["evidence"])["source_repository"] == "alice/repo"
+    assert row["summary"] == "Model interpretation"
+    assert json.loads(row["files_involved"]) == ["file.py"]
+    assert data["evidence"]["commit_shas"] == ([sha] if expected != "unavailable" else [])
+    assert provider.commit_calls == ([f"alice/repo@{sha}"] if expected != "unavailable" else [])
+    if expected != "verified":
+        assert data["evidence"]["warnings"]
+        assert data["evidence"]["verified_at"] is None

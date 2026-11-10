@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,7 @@ from tests.stubs import (
     StubGitProvider,
     StubNotificationBackend,
     make_fork,
+    make_signal,
     make_tracked_repo,
 )
 
@@ -205,3 +207,95 @@ class TestExploreApp:
         assert resp.status_code == 200
         assert "<img src=x" not in resp.text  # the injected tag never appears raw
         assert "&lt;img src=x" in resp.text  # the untrusted name is HTML-escaped
+
+
+@pytest.mark.parametrize(
+    "state",
+    [None, "unavailable", "partial", "verified", "mismatched", "bad_warnings", "bad_changes"],
+)
+async def test_signal_evidence_inspection_and_immutable_links(hub, db, state):
+    repo = await _seed_repo(db)
+    sha = "a" * 40
+    evidence = None
+    if state is not None:
+        evidence = {
+            "source_repository": "someone/linux",
+            "commit_shas": [sha],
+            "files": ["src/gpu.py"],
+            "changes": [
+                {
+                    "commit_sha": sha,
+                    "filename": "src/gpu.py",
+                    "status": "modified",
+                    "patch": "+<script>alert(1)</script>",
+                }
+            ],
+            "warnings": ["Patch retrieval was incomplete."] if state == "partial" else [],
+            "verification_state": (
+                "verified"
+                if state == "mismatched"
+                else "partial"
+                if state in {"bad_warnings", "bad_changes"}
+                else state
+            ),
+            "verified_at": (
+                "2026-11-10T12:00:00+00:00" if state in {"verified", "mismatched"} else None
+            ),
+        }
+        if state == "bad_warnings":
+            evidence["warnings"] = 1
+        elif state == "bad_changes":
+            evidence["changes"] = None
+    await db.insert_signal(
+        make_signal(
+            None,
+            repo["id"],
+            files_involved=json.dumps(["other.py" if state == "mismatched" else "src/gpu.py"]),
+            evidence=json.dumps(evidence) if evidence else None,
+        )
+    )
+    app = create_app(hub)
+    app.state.hub = hub
+    async with _client(app) as client:
+        response = await client.get("/torvalds/linux")
+    assert response.status_code == 200
+    assert "Model interpretation" in response.text
+    assert "Inspect source evidence" in response.text
+    if state in {None, "mismatched", "bad_warnings", "bad_changes"}:
+        assert "interpretation has no usable recorded immutable provenance" in response.text
+        assert "/commit/" not in response.text
+        if state is not None:
+            assert "Stored evidence is malformed and cannot be trusted." in response.text
+    else:
+        assert f"https://github.com/someone/linux/commit/{sha}" in response.text
+        assert "src/gpu.py" in response.text
+        assert "+&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
+        assert "+<script>" not in response.text
+        assert f"<dd>{state}</dd>" in response.text
+        if state == "partial":
+            assert "Patch retrieval was incomplete." in response.text
+
+
+async def test_empty_signal_cache_does_not_claim_no_changes(hub, db):
+    await _seed_repo(db)
+    app = create_app(hub)
+    app.state.hub = hub
+    async with _client(app) as client:
+        response = await client.get("/torvalds/linux")
+    assert response.status_code == 200
+    assert "An empty cache does not establish" in response.text
+
+
+async def test_signal_list_shows_truncation_and_stale_warning(hub, db):
+    repo = make_tracked_repo(sync_status="inaccessible")
+    await db.insert_tracked_repo(repo)
+    for index in range(21):
+        await db.insert_signal(make_signal(None, repo["id"], summary=f"Change {index}"))
+    app = create_app(hub)
+    app.state.hub = hub
+    async with _client(app) as client:
+        response = await client.get("/torvalds/linux")
+    assert response.status_code == 200
+    assert response.text.count('<article class="signal-card">') == 20
+    assert "Showing the first 20 signals" in response.text
+    assert "Latest repository sync failed; cached analysis may be stale." in response.text

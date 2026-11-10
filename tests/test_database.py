@@ -6,7 +6,7 @@ from __future__ import annotations
 import aiosqlite
 import pytest
 
-from forkhub.database import Database
+from forkhub.database import _SCHEMA_SQL, Database
 from tests.stubs import (
     make_cluster,
     make_cluster_member,
@@ -278,3 +278,21 @@ class TestVectorSearch:
     async def test_vec_enabled_flag_set(self, db: Database):
         """vec_enabled should be a boolean flag on the database."""
         assert isinstance(db.vec_enabled, bool)
+
+
+async def test_signal_evidence_migration_preserves_legacy_rows(tmp_path):
+    path = tmp_path / "legacy.db"
+    async with aiosqlite.connect(path) as legacy:
+        await legacy.executescript(_SCHEMA_SQL.replace("    evidence TEXT,\n", ""))
+        await legacy.execute(
+            "INSERT INTO signals (id, tracked_repo_id, category, summary) VALUES (?, ?, ?, ?)",
+            ("legacy", "repo", "fix", "Original model interpretation"),
+        )
+        await legacy.commit()
+    async with Database(path) as database:
+        cursor = await database._db.execute("PRAGMA table_info(signals)")
+        assert "evidence" in {row["name"] for row in await cursor.fetchall()}
+        signal = await database.get_signal("legacy")
+        assert signal is not None
+        assert signal["evidence"] is None
+        assert signal["summary"] == "Original model interpretation"

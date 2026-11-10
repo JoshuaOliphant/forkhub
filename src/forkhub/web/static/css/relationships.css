@@ -35,3 +35,20 @@
   .app { grid-template-columns: 1fr; }
   .relationship-page { grid-column: 1; }
 }
+
+.signal-section { margin-top: 36px; }
+.signal-section > p, .signal-meta, .signal-empty { color: var(--muted); }
+.signal-card { margin-top: 18px; padding: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow-wrap: anywhere; }
+.signal-card h3 { font-size: 18px; margin-bottom: 8px; }
+.signal-card p { margin: 10px 0; }
+.signal-meta { font-size: 12px; }
+.signal-warning { border-left: 3px solid var(--accent); padding-left: 12px; }
+.signal-card details { margin-top: 16px; }
+.signal-card summary { cursor: pointer; color: var(--accent); }
+.signal-card dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 16px 0; }
+.signal-card dt { color: var(--muted); }
+.signal-card h4 { margin-top: 16px; }
+.signal-card ul { padding-left: 20px; margin-top: 8px; }
+.signal-card li { margin: 6px 0; }
+
+.signal-patch { max-height: 320px; overflow: auto; padding: 12px; background: var(--sky-deep); white-space: pre; }

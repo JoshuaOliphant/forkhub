@@ -17,7 +17,8 @@ CREATE TABLE signals (
     category TEXT NOT NULL,
     significance INTEGER NOT NULL,
     created_at TEXT NOT NULL,
-    files_involved TEXT NOT NULL
+    files_involved TEXT NOT NULL,
+    evidence TEXT
 );
 CREATE INDEX signals_repository ON signals(tracked_repo_id, significance DESC, created_at DESC, id);
 CREATE TABLE relationship_snapshots (

@@ -9,6 +9,13 @@ For the full project guide (architecture, testing, patterns), see `CLAUDE.md`.
 Historical note: This project previously used beads for local issue tracking.
 See `docs/beads-migration.md` for the migration map from bead IDs to GitHub issue numbers.
 
+## Agent skills
+
+- Tests and verification: `docs/agents/testing.md`; run `uv run python scripts/verify.py`.
+- Acceptance mappings: `docs/agents/acceptance.md` retains open and closed issue rows.
+- Issue tracking and rulings: `docs/agents/issue-tracker.md`.
+- Observability: `docs/agents/observability.md` records the existing stack and health limits.
+
 ## GitHub Issues Quick Reference
 
 Use the `gh` CLI for issue operations:

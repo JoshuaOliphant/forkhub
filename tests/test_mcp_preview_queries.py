@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 
 import pytest
 
@@ -232,3 +233,248 @@ async def test_signal_range_validation(preview, significance, limit):
         await reader(
             "list_cached_signals", "alice/repo", min_significance=significance, limit=limit
         )
+
+
+@pytest.mark.parametrize("state", ["unavailable", "partial", "verified"])
+@pytest.mark.parametrize(
+    "sync_status,last_synced_at,freshness",
+    [
+        ("ok", None, "unknown"),
+        ("ok", "2026-11-10T12:00:00+00:00", "last_sync_succeeded"),
+        ("error", "2026-11-09T12:00:00+00:00", "stale"),
+        ("inaccessible", None, "stale"),
+    ],
+)
+async def test_signal_evidence_and_cache_freshness_are_separate(
+    preview, state, sync_status, last_synced_at, freshness
+):
+    db, reader = preview
+    repo = make_tracked_repo(
+        full_name="alice/repo", sync_status=sync_status, last_synced_at=last_synced_at
+    )
+    await db.insert_tracked_repo(repo)
+    sha = "a" * 40
+    evidence = {
+        "source_repository": "alice/fork",
+        "commit_shas": [sha],
+        "files": ["src/gpu.py"],
+        "changes": [
+            {
+                "commit_sha": sha,
+                "filename": "src/gpu.py",
+                "status": "modified",
+                "patch": "@@ -1 +1 @@\n-old\n+actual",
+            }
+        ],
+        "verification_state": state,
+        "verified_at": "2026-11-10T11:00:00+00:00" if state == "verified" else None,
+    }
+    await db.insert_signal(
+        make_signal(
+            None,
+            repo["id"],
+            files_involved=json.dumps(["src/gpu.py"]),
+            evidence=json.dumps(evidence),
+        )
+    )
+
+    result = await reader("list_cached_signals", "alice/repo")
+
+    signal = result["signals"][0]
+    assert signal["evidence"] == evidence
+    assert signal["commit_links"] == [f"https://github.com/alice/fork/commit/{sha}"]
+    assert signal["verified_against_immutable_sha_evidence"] is (state == "verified")
+    assert signal["interpretation_is_model_generated"] is True
+    assert signal["warning"]
+    assert result["freshness"] == freshness
+    assert result["last_synced_at"] == last_synced_at
+    assert result["sync_status"] == sync_status
+    assert "current branch equivalence" in result["warning"]
+    if freshness == "stale":
+        assert "may be stale" in result["warning"]
+    empty = await reader("list_cached_signals", "alice/repo", min_significance=10)
+    assert empty["signals"] == []
+    assert empty["freshness"] == freshness
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        "{broken",
+        "null",
+        "[]",
+        "{}",
+        json.dumps(
+            {
+                "source_repository": "alice/fork",
+                "commit_shas": [],
+                "files": [],
+                "verification_state": "verified",
+                "verified_at": None,
+            }
+        ),
+        json.dumps(
+            {
+                "source_repository": "alice/fork",
+                "commit_shas": ["a" * 40],
+                "files": ["src/a.py"],
+                "verification_state": "verified",
+                "verified_at": "2026-11-10T12:00:00",
+                "changes": [
+                    {
+                        "commit_sha": "a" * 40,
+                        "filename": "src/a.py",
+                        "status": "modified",
+                        "patch": "patch",
+                    }
+                ],
+            }
+        ),
+        json.dumps(
+            {
+                "source_repository": "alice/fork",
+                "commit_shas": ["main"],
+                "files": ["src/a.py"],
+                "verification_state": "verified",
+            }
+        ),
+        json.dumps(
+            {
+                "source_repository": "alice/fork/../../evil",
+                "commit_shas": ["a" * 40],
+                "files": ["src/a.py"],
+                "verification_state": "verified",
+            }
+        ),
+        *[
+            json.dumps(
+                {
+                    "source_repository": "alice/fork",
+                    "commit_shas": ["a" * 40],
+                    "files": ["src/a.py"],
+                    "verification_state": state,
+                    "verified_at": "2026-11-10T12:00:00+00:00",
+                    "changes": [
+                        {
+                            "commit_sha": "a" * 40,
+                            "filename": "src/a.py",
+                            "status": "modified",
+                            "patch": "patch",
+                        }
+                    ],
+                    **{field: value},
+                }
+            )
+            for state in ("unavailable", "partial", "verified")
+            for field, value in (
+                ("warnings", None),
+                ("warnings", 1),
+                ("warnings", [1]),
+                ("changes", None),
+                ("changes", [None]),
+                ("changes", [{"commit_sha": "a" * 40}]),
+            )
+        ],
+    ],
+)
+async def test_malformed_cache_evidence_is_unavailable_and_never_linked(preview, malformed):
+    db, reader = preview
+    repo = make_tracked_repo(full_name="alice/repo")
+    await db.insert_tracked_repo(repo)
+    await db.insert_signal(make_signal(None, repo["id"], files_involved='["src/a.py"]'))
+    await db._db.execute("UPDATE signals SET evidence = ?", (malformed,))
+    await db._db.commit()
+
+    result = await reader("list_cached_signals", "alice/repo")
+
+    signal = result["signals"][0]
+    assert signal["evidence"] is None
+    assert signal["commit_links"] == []
+    assert signal["verified_against_immutable_sha_evidence"] is False
+    assert "malformed" in signal["warning"]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        None,
+        [],
+        [{"commit_sha": "a" * 40, "filename": "src/a.py", "status": "modified", "patch": None}],
+        [{"commit_sha": "a" * 40, "filename": "src/a.py", "status": "modified", "patch": " "}],
+        [{"commit_sha": "b" * 40, "filename": "src/a.py", "status": "modified", "patch": "patch"}],
+        [
+            {
+                "commit_sha": "a" * 40,
+                "filename": "src/else.py",
+                "status": "modified",
+                "patch": "patch",
+            }
+        ],
+        [{"commit_sha": "a" * 40, "filename": "src/a.py", "status": "modified", "patch": "patch"}],
+    ],
+)
+async def test_verified_cache_evidence_requires_exact_commit_file_patch_coverage(preview, changes):
+    db, reader = preview
+    repo = make_tracked_repo(full_name="alice/repo")
+    await db.insert_tracked_repo(repo)
+    await db.insert_signal(make_signal(None, repo["id"]))
+    evidence = {
+        "source_repository": "alice/fork",
+        "commit_shas": ["a" * 40, "b" * 40],
+        "files": ["src/a.py", "src/b.py"],
+        "verification_state": "verified",
+        "verified_at": "2026-11-10T12:00:00+00:00",
+    }
+    if changes is not None:
+        evidence["changes"] = changes
+    await db._db.execute("UPDATE signals SET evidence = ?", (json.dumps(evidence),))
+    await db._db.commit()
+
+    result = await reader("list_cached_signals", "alice/repo")
+
+    assert result["signals"][0]["evidence"] is None
+    assert result["signals"][0]["verified_against_immutable_sha_evidence"] is False
+    assert "malformed" in result["signals"][0]["warning"]
+
+
+@pytest.mark.parametrize(
+    "mutation", ["duplicate_sha", "duplicate_sha_case", "duplicate_file", "files_mismatch"]
+)
+async def test_cache_evidence_cannot_verify_unrelated_files_or_duplicate_commits(preview, mutation):
+    db, reader = preview
+    repo = make_tracked_repo(full_name="alice/repo")
+    await db.insert_tracked_repo(repo)
+    evidence = {
+        "source_repository": "alice/fork",
+        "commit_shas": ["a" * 40],
+        "files": ["src/a.py"],
+        "verification_state": "verified",
+        "verified_at": "2026-11-10T12:00:00+00:00",
+        "changes": [
+            {"commit_sha": "a" * 40, "filename": "src/a.py", "status": "modified", "patch": "patch"}
+        ],
+    }
+    if mutation == "duplicate_sha":
+        evidence["commit_shas"].append("a" * 40)
+    elif mutation == "duplicate_sha_case":
+        evidence["commit_shas"].append("A" * 40)
+    elif mutation == "duplicate_file":
+        evidence["files"].append("src/a.py")
+    await db.insert_signal(
+        make_signal(
+            None,
+            repo["id"],
+            files_involved=json.dumps(
+                ["src/else.py"] if mutation == "files_mismatch" else ["src/a.py"]
+            ),
+            evidence=json.dumps(evidence),
+        )
+    )
+
+    result = await reader("list_cached_signals", "alice/repo")
+
+    signal = result["signals"][0]
+    assert signal["evidence"] is None
+    assert signal["commit_links"] == []
+    assert signal["verified_against_immutable_sha_evidence"] is False
+    assert "malformed" in signal["warning"]

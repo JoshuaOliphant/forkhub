@@ -307,6 +307,11 @@ class ForkHub:
             raise ValueError(f"Repository {full_name} is not tracked")
         return await self._cluster.get_clusters(repo_row["id"], min_size=min_size)
 
+    async def get_signal_view(
+        self, repository: str, min_significance: int = 5, limit: int = 20
+    ) -> dict:
+        return await self._db.get_signal_view(repository, min_significance, limit)
+
     async def get_signals(self, owner: str, repo: str) -> list[Signal]:
         """Get classified signals for a tracked repository."""
         import json

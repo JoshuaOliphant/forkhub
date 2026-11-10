@@ -11,6 +11,7 @@ from githubkit.exception import RequestError, RequestFailed
 
 from forkhub.interfaces import ProviderError
 from forkhub.models import (
+    CommitDetails,
     CommitInfo,
     CompareResult,
     FileChange,
@@ -329,6 +330,16 @@ class GitHubProvider:
         lines = [*header, old_line, new_line]
         body = patch if patch.endswith("\n") else patch + "\n"
         return "\n".join(lines) + "\n" + body
+
+    async def get_commit(self, owner: str, repo: str, sha: str) -> CommitDetails:
+        data, headers = await self._get_with_headers(
+            f"/repos/{owner}/{repo}/commits/{sha}", params={"per_page": 100}
+        )
+        return CommitDetails(
+            sha=data["sha"],
+            files=[FileChange(**item) for item in data.get("files", [])],
+            complete="files" in data and not self._has_next_page(headers),
+        )
 
     async def get_head_sha(self, owner: str, repo: str, branch: str) -> str:
         """Fetch the HEAD commit SHA for a branch.

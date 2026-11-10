@@ -23,7 +23,8 @@ async def _snapshot(db, path):
     return path
 
 
-async def test_export_round_trips_contract_and_filters_unrelated_data(db, tmp_path):
+@pytest.mark.parametrize("with_evidence", [False, True])
+async def test_export_round_trips_contract_and_filters_unrelated_data(db, tmp_path, with_evidence):
     repo = make_tracked_repo(full_name="alice/repo", owner="alice", name="repo", webhook_id=999)
     await db.insert_tracked_repo(repo)
     await db.insert_signal(
@@ -33,6 +34,26 @@ async def test_export_round_trips_contract_and_filters_unrelated_data(db, tmp_pa
             summary="A 'quoted' change; DROP TABLE signals; — café",
             detail="NUL\x00remains",
             embedding=b"private-vector",
+            files_involved=json.dumps(["src/actual.py"]),
+            evidence=json.dumps(
+                {
+                    "source_repository": "alice/fork",
+                    "commit_shas": ["b" * 40],
+                    "files": ["src/actual.py"],
+                    "changes": [
+                        {
+                            "commit_sha": "b" * 40,
+                            "filename": "src/actual.py",
+                            "status": "modified",
+                            "patch": "@@ -1 +1 @@\n-before\n+after",
+                        }
+                    ],
+                    "verification_state": "verified",
+                    "verified_at": "2026-11-10T12:00:00+00:00",
+                }
+            )
+            if with_evidence
+            else None,
         )
     )
     for username in ("alice", "bob"):
@@ -114,9 +135,15 @@ async def test_export_round_trips_contract_and_filters_unrelated_data(db, tmp_pa
     assert imported_reader.get_cached_relationships(
         "ALICE/REPO"
     ) == original_reader.get_cached_relationships("ALICE/REPO")
-    assert imported_reader.list_cached_signals("ALICE/REPO") == original_reader.list_cached_signals(
-        "ALICE/REPO"
-    )
+    signals = imported_reader.list_cached_signals("ALICE/REPO")
+    assert signals == original_reader.list_cached_signals("ALICE/REPO")
+    evidence = signals["signals"][0]["evidence"]
+    if with_evidence:
+        assert evidence["source_repository"] == "alice/fork"
+        assert evidence["commit_shas"] == ["b" * 40]
+        assert evidence["changes"][0]["patch"] == "@@ -1 +1 @@\n-before\n+after"
+    else:
+        assert evidence is None
 
 
 async def test_export_sees_committed_wal_rows_without_modifying_source(db, tmp_path):

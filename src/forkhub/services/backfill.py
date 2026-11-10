@@ -167,7 +167,6 @@ class BackfillService:
 
     @staticmethod
     def _row_to_signal(row: dict) -> Signal:
-        """Convert a signals DB row dict into a Signal Pydantic model."""
         files = json.loads(row["files_involved"]) if row["files_involved"] else []
         return Signal(
             id=row["id"],
@@ -177,6 +176,7 @@ class BackfillService:
             summary=row["summary"],
             detail=row["detail"],
             files_involved=files,
+            evidence=row.get("evidence"),
             significance=row["significance"],
             embedding=row["embedding"],
             is_upstream=bool(row["is_upstream"]),
@@ -328,49 +328,57 @@ class BackfillService:
                 attempt.error = (attempt.error or "") + f" [attempt not persisted: {exc}]"
             return attempt
 
-        # Pin the diff's head ref to the fork's head SHA recorded at sync time,
-        # when available. A fork's branch keeps moving after analysis; comparing
-        # against the floating branch name would fetch whatever the fork looks
-        # like at backfill time, which may include changes the signal never
-        # classified. Pinning to the recorded head_sha makes the fetched diff
-        # match the snapshot the signal was derived from. A full SHA is a valid
-        # ref for the cross-repo compare API, so the "owner:sha" form is
-        # accepted exactly like "owner:branch". (Scoping further to the signal's
-        # exact commits needs commit data the Signal model does not carry — that
-        # is forkhub-7k1.) Older rows and providers that do not populate head_sha
-        # fall back to the default branch.
-        base_ref = f"{tracked['owner']}:{tracked['default_branch']}"
-        head_sha = fork_row.get("head_sha")
-        if head_sha:
-            head_ref = f"{fork_row['owner']}:{head_sha}"
-            logger.debug("Backfill diff pinned to fork head_sha: %s", head_ref)
-        else:
-            head_ref = f"{fork_row['owner']}:{fork_row['default_branch']}"
-            logger.debug("Backfill diff using fork default branch (no head_sha): %s", head_ref)
-
-        # Fetch the diffs for files involved in this signal. Backfill is
-        # all-or-nothing: if any expected file's diff can't be fetched, fail the
-        # whole attempt rather than committing a half-applied change set. An
-        # empty diff (binary/pure-rename) means "no patch needed" — skip it.
         patches: list[str] = []
         patched_files: list[str] = []
         failed_files: list[str] = []
-        for filepath in signal.files_involved:
-            try:
-                diff = await self._provider.get_file_diff(
-                    tracked["owner"],
-                    tracked["name"],
-                    base_ref,
-                    head_ref,
-                    filepath,
+        if signal.evidence is not None:
+            evidence = signal.evidence
+            if (
+                evidence.verification_state != "verified"
+                or evidence.source_repository != fork_row["full_name"]
+                or set(evidence.files) != set(signal.files_involved)
+            ):
+                attempt.status = BackfillStatus.PATCH_FAILED
+                attempt.error = (
+                    "Immutable commit evidence is incomplete or does not match this signal"
                 )
-            except (OSError, ConnectionError, TimeoutError, RuntimeError, ProviderError) as exc:
-                logger.warning("Failed to fetch diff for %s: %s", filepath, exc)
-                failed_files.append(filepath)
-                continue
-            if diff:
-                patches.append(diff)
-                patched_files.append(filepath)
+                await self._record_attempt(attempt)
+                return attempt
+            for sha in evidence.commit_shas:
+                commit_patches = []
+                for change in evidence.changes:
+                    if change.commit_sha == sha and change.filename in signal.files_involved:
+                        if change.patch:
+                            commit_patches.append(change.patch)
+                        if change.filename not in patched_files:
+                            patched_files.append(change.filename)
+                patches.append("\n".join(commit_patches))
+        else:
+            base_ref = f"{tracked['owner']}:{tracked['default_branch']}"
+            head_sha = fork_row.get("head_sha")
+            if head_sha:
+                head_ref = f"{fork_row['owner']}:{head_sha}"
+                logger.debug("Backfill diff pinned to fork head_sha: %s", head_ref)
+            else:
+                head_ref = f"{fork_row['owner']}:{fork_row['default_branch']}"
+                logger.debug("Backfill diff using fork default branch (no head_sha): %s", head_ref)
+
+            for filepath in signal.files_involved:
+                try:
+                    diff = await self._provider.get_file_diff(
+                        tracked["owner"],
+                        tracked["name"],
+                        base_ref,
+                        head_ref,
+                        filepath,
+                    )
+                except (OSError, ConnectionError, TimeoutError, RuntimeError, ProviderError) as exc:
+                    logger.warning("Failed to fetch diff for %s: %s", filepath, exc)
+                    failed_files.append(filepath)
+                    continue
+                if diff:
+                    patches.append(diff)
+                    patched_files.append(filepath)
 
         if failed_files:
             attempt.status = BackfillStatus.PATCH_FAILED
@@ -414,7 +422,9 @@ class BackfillService:
 
         try:
             # Create branch, apply patch, run tests
-            await self._apply_and_test(attempt, patches, branch_name)
+            await self._apply_and_test(
+                attempt, patches, branch_name, per_commit=signal.evidence is not None
+            )
         except Exception as exc:
             attempt.status = BackfillStatus.PATCH_FAILED
             attempt.error = str(exc)
@@ -455,42 +465,34 @@ class BackfillService:
         attempt: BackfillAttempt,
         patches: list[str],
         branch_name: str,
+        *,
+        per_commit: bool = False,
     ) -> None:
-        """Create branch, apply patches, and run tests.
-
-        Modifies the attempt in-place with results.
-        """
         # Create the candidate branch
         await self._git.create_branch(branch_name)
 
-        # Apply each patch via stdin to avoid shell injection
-        combined_patch = "\n".join(patches)
-        patch_bytes = combined_patch.encode()
+        patch_groups = patches if per_commit else ["\n".join(patches)]
+        for patch in patch_groups:
+            apply_result = await self._git.apply_3way(patch.encode())
+            if apply_result.returncode != 0:
+                attempt.status = BackfillStatus.CONFLICT
+                attempt.error = f"Patch conflict: {apply_result.stderr}"
+                reset_result = await self._git.reset_hard()
+                if reset_result.returncode != 0:
+                    attempt.error += (
+                        f" [tree reset failed: {reset_result.stderr}; working tree may be dirty]"
+                    )
+                return
 
-        # Apply with a 3-way merge so context drift between the fork's diff base
-        # and the local tree resolves where possible. The reconstructed diffs
-        # carry index blob ids, so git can merge against the recorded base; when
-        # the merge can't resolve, git writes conflict markers and exits non-zero.
-        apply_result = await self._git.apply_3way(patch_bytes)
-
-        if apply_result.returncode != 0:
-            # A failed 3-way leaves conflict markers and unmerged index entries
-            # behind. Reset the tree before returning so the outer finally's
-            # branch switch is clean. Set status first so a reset failure cannot
-            # reclassify this CONFLICT via the outer except.
-            attempt.status = BackfillStatus.CONFLICT
-            attempt.error = f"Patch conflict: {apply_result.stderr}"
-            reset_result = await self._git.reset_hard()
-            if reset_result.returncode != 0:
-                # The tree could not be reset; conflict markers / unmerged
-                # entries may linger. Surface it so the dirty state is visible.
-                attempt.error += (
-                    f" [tree reset failed: {reset_result.stderr}; working tree may be dirty]"
-                )
-            return
-
-        # Stage only the files touched by this patch (not all working-tree changes)
-        await self._git.stage(attempt.files_patched)
+        if per_commit:
+            changed = await self._git.git("diff", "--cached", "--name-only", "--no-renames", "-z")
+            attempt.files_patched = [path for path in changed.split("\0") if path]
+            if not attempt.files_patched:
+                attempt.status = BackfillStatus.PATCH_FAILED
+                attempt.error = "Recorded commits produce no net changes"
+                return
+        else:
+            await self._git.stage(attempt.files_patched)
         commit_msg = (
             f"backfill: {attempt.patch_summary}\n\n"
             f"Signal: {attempt.signal_id}\nFork: {attempt.fork_id}"

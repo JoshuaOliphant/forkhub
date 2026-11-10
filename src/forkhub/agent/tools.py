@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import functools
 import json
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -19,6 +20,7 @@ except ImportError:  # pragma: no cover
 
 import forkhub.otel as otel
 from forkhub.models import Signal, SignalCategory
+from forkhub.services.evidence import capture_evidence
 
 if TYPE_CHECKING:
     from claude_agent_sdk import SdkMcpTool
@@ -35,6 +37,26 @@ def _ok(data: dict[str, Any]) -> dict[str, Any]:
 def _err(message: str) -> dict[str, Any]:
     """Format an error tool response."""
     return {"content": [{"type": "text", "text": f"Error: {message}"}], "is_error": True}
+
+
+def _commit_references(value: Any) -> tuple[list[str], bool]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return [], True
+    if not isinstance(value, list):
+        return [], True
+    shas = []
+    unusable = False
+    for item in value:
+        if isinstance(item, str) and re.fullmatch(r"[0-9a-fA-F]{40}", item):
+            sha = item.lower()
+            if sha not in shas:
+                shas.append(sha)
+        else:
+            unusable = True
+    return shas, unusable
 
 
 def _instrument(handler):  # noqa: ANN001, ANN202 — wraps a tool handler
@@ -69,7 +91,7 @@ def create_tools(
     embedding_provider: EmbeddingProvider,
     clock: datetime | None = None,
 ) -> list[SdkMcpTool]:
-    """Create all ForkHub agent tools with injected dependencies."""
+    """Bind handlers without running their I/O; raise ImportError without the Claude SDK."""
     if not _CLAUDE_SDK_AVAILABLE:
         raise ImportError(
             "create_tools requires the 'claude' extra. "
@@ -317,6 +339,10 @@ def create_tools(
                 "significance": {"type": "integer"},
                 "files_involved": {"type": "array", "items": {"type": "string"}},
                 "detail": {"type": "string"},
+                "commit_shas": {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                },
             },
             "required": ["fork_full_name", "category", "summary", "significance"],
         },
@@ -337,6 +363,8 @@ def create_tools(
                     files_involved = json.loads(files_involved)
                 except json.JSONDecodeError:
                     files_involved = [files_involved] if files_involved else []
+            files_involved = list(dict.fromkeys(files_involved))
+            commit_shas, unusable_references = _commit_references(args.get("commit_shas", []))
             detail = args.get("detail", "")
 
             # Validate category
@@ -352,7 +380,20 @@ def create_tools(
             if fork_row is None:
                 return _err(f"Fork not found in database: {fork_full_name}")
 
-            # Build and persist the signal
+            evidence = await capture_evidence(
+                provider,
+                fork_row["full_name"],
+                commit_shas,
+                files_involved,
+                now=clock,
+            )
+            if unusable_references:
+                evidence.warnings.append(
+                    "Some supplied commit references were unusable; evidence is incomplete."
+                )
+                if evidence.verification_state == "verified":
+                    evidence.verification_state = "partial"
+                    evidence.verified_at = None
             signal = Signal(
                 fork_id=fork_row["id"],
                 tracked_repo_id=fork_row["tracked_repo_id"],
@@ -361,6 +402,7 @@ def create_tools(
                 detail=detail if detail else None,
                 files_involved=files_involved,
                 significance=significance,
+                evidence=evidence,
             )
 
             # Generate embedding for similarity search
@@ -381,7 +423,7 @@ def create_tools(
             await db.insert_signal(signal_dict)
 
             otel.record_signal_stored(category_str)
-            return _ok({"signal_id": signal.id})
+            return _ok({"signal_id": signal.id, "evidence": evidence.model_dump(mode="json")})
         except Exception as exc:
             return _err(str(exc))
 

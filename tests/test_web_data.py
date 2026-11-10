@@ -9,11 +9,13 @@ import pytest
 
 from forkhub import ForkHub
 from forkhub.config import ForkHubSettings
+from forkhub.mcp_cache_contract import signals_result
 from forkhub.web.data import build_explore_data
 from tests.stubs import (
     StubEmbeddingProvider,
     StubGitProvider,
     StubNotificationBackend,
+    make_signal,
     make_tracked_repo,
 )
 
@@ -110,3 +112,21 @@ class TestBuildExploreData:
     async def test_untracked_repo_raises(self, hub: ForkHub):
         with pytest.raises(ValueError, match="not tracked"):
             await build_explore_data(hub, "nobody", "nothing")
+
+
+@pytest.mark.parametrize("sync_status", ["ok", "inaccessible"])
+async def test_signal_view_matches_shared_cache_contract(hub, db, sync_status):
+    repo = make_tracked_repo(sync_status=sync_status)
+    await db.insert_tracked_repo(repo)
+    signal = make_signal(None, repo["id"])
+    await db.insert_signal(signal)
+    rows = await db.list_signals(repo["id"])
+    data = await build_explore_data(hub, "torvalds", "linux")
+    assert data["signals"] == signals_result("torvalds/linux", rows, 20, repo)
+    assert data["signals"]["signals"][0]["evidence"] is None
+
+
+async def test_signal_view_excludes_untracked_and_excluded(hub, db):
+    assert (await hub.get_signal_view("missing/repo"))["status"] == "not_tracked"
+    await db.insert_tracked_repo(make_tracked_repo(excluded=True))
+    assert (await hub.get_signal_view("torvalds/linux"))["status"] == "not_tracked"

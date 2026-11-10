@@ -72,6 +72,48 @@
       {% else %}
         <section class="relationship-notice" role="status"><h2>Relationship data unavailable</h2><p>The repository has no available relationship view.</p></section>
       {% endif %}
+      <section class="signal-section" aria-labelledby="signals-heading">
+        <h2 id="signals-heading">Signals and evidence</h2>
+        <p>Model interpretations of changes, with independently checked source evidence when available.</p>
+        {% set signals = data.signals %}
+        {% if signals.warning %}<p class="signal-warning" role="status">{{ signals.warning }}</p>{% endif %}
+        {% for signal in signals.signals %}
+          <article class="signal-card">
+            <h3>{{ signal.summary }}</h3>
+            <p class="signal-meta">{{ signal.category }} · Significance {{ signal.significance }}/10 · {{ signal.created_at }}</p>
+            <p><strong>Model interpretation</strong></p>
+            <p>{{ signal.detail }}</p>
+            {% if signal.warning %}<p class="signal-warning">{{ signal.warning }}</p>{% endif %}
+            <details>
+              <summary>Inspect source evidence · {{ signal.evidence.verification_state if signal.evidence else "unavailable" }}</summary>
+              {% if signal.evidence %}
+                {% for warning in signal.evidence.warnings %}<p class="signal-warning">{{ warning }}</p>{% endfor %}
+                <dl>
+                  <dt>Source repository</dt><dd>{{ signal.evidence.source_repository }}</dd>
+                  <dt>Verification state</dt><dd>{{ signal.evidence.verification_state }}</dd>
+                  <dt>Checked at (UTC)</dt><dd>{{ signal.evidence.verified_at or "Not independently checked" }}</dd>
+                </dl>
+                <h4>Immutable commits</h4>
+                <ul>{% for link in signal.commit_links %}
+                  <li><a href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ signal.evidence.commit_shas[loop.index0] }}</a></li>
+                {% else %}<li>No immutable commit evidence available.</li>{% endfor %}</ul>
+                <h4>Recorded changes</h4>
+                {% for change in signal.evidence.changes %}
+                  <p><code>{{ change.filename }}</code> · {{ change.status }} · <code>{{ change.commit_sha }}</code></p>
+                  {% if change.patch %}<pre class="signal-patch"><code>{{ change.patch }}</code></pre>{% else %}<p>Patch unavailable for this file.</p>{% endif %}
+                {% else %}<p>No per-file changes recorded.</p>{% endfor %}
+                <h4>Relevant files</h4>
+                <ul>{% for file in signal.evidence.files %}<li><code>{{ file }}</code></li>{% else %}<li>No relevant files recorded.</li>{% endfor %}</ul>
+              {% else %}
+                <p>Source evidence unavailable. This interpretation has no usable recorded immutable provenance.</p>
+              {% endif %}
+            </details>
+          </article>
+        {% else %}
+          <p class="signal-empty">{{ signals.message or "No cached signals meet the significance threshold (5/10). An empty cache does not establish that no meaningful changes exist." }}</p>
+        {% endfor %}
+        {% if signals.truncated %}<p>Showing the first 20 signals. More cached signals are available.</p>{% endif %}
+      </section>
     </main>
   </div>
 </body>

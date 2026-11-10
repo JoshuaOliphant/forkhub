@@ -28,6 +28,7 @@ _COLUMNS = {
         "significance",
         "created_at",
         "files_involved",
+        "evidence",
     ),
     "relationship_snapshots": (
         "username",

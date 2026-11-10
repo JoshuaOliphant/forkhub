@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 
 TRACKED_REPOSITORIES_SQL = (
     "SELECT full_name, tracking_mode, last_synced_at, sync_status "
@@ -21,10 +23,12 @@ RELATIONSHIP_EDGES_SQL = (
     "WHERE username = ? AND focus_github_id = ? ORDER BY rowid"
 )
 TRACKED_REPOSITORY_SQL = (
-    "SELECT id FROM tracked_repos WHERE full_name = ? COLLATE NOCASE AND excluded = 0"
+    "SELECT id, last_synced_at, sync_status FROM tracked_repos "
+    "WHERE full_name = ? COLLATE NOCASE AND excluded = 0"
 )
 SIGNALS_SQL = (
-    "SELECT id, summary, detail, category, significance, created_at, files_involved FROM signals "
+    "SELECT id, summary, detail, category, significance, created_at, files_involved, "
+    "evidence FROM signals "
     "WHERE tracked_repo_id = ? AND significance >= ? "
     "ORDER BY significance DESC, created_at DESC, id LIMIT ?"
 )
@@ -126,7 +130,110 @@ def relationships_result(repository: str, row: dict | None, edges: list[dict]) -
     }
 
 
-def signals_result(repository: str, rows: list[dict] | None, limit: int) -> dict:
+def _read_evidence(raw: str | None) -> tuple[dict | None, bool]:
+    if not raw:
+        return None, False
+    try:
+        evidence = json.loads(raw)
+        repository = evidence["source_repository"]
+        shas = evidence["commit_shas"]
+        filenames = evidence["files"]
+        state = evidence["verification_state"]
+        warnings = evidence.get("warnings", [])
+        changes = evidence.get("changes", [])
+        valid = (
+            re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+            and isinstance(shas, list)
+            and all(isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha) for sha in shas)
+            and len(set(shas)) == len(shas)
+            and isinstance(filenames, list)
+            and all(isinstance(filename, str) and filename for filename in filenames)
+            and len(set(filenames)) == len(filenames)
+            and state in ("unavailable", "partial", "verified")
+            and isinstance(warnings, list)
+            and all(isinstance(warning, str) for warning in warnings)
+            and isinstance(changes, list)
+            and all(
+                isinstance(change, dict)
+                and isinstance(change.get("commit_sha"), str)
+                and re.fullmatch(r"[0-9a-f]{40}", change["commit_sha"])
+                and isinstance(change.get("filename"), str)
+                and change["filename"]
+                and isinstance(change.get("status"), str)
+                and (change.get("patch") is None or isinstance(change["patch"], str))
+                for change in changes
+            )
+        )
+        if not valid:
+            return None, True
+        if state == "verified":
+            if not shas or not filenames:
+                return None, True
+            if not isinstance(changes, list) or not all(
+                isinstance(change["patch"], str)
+                and change["patch"].strip()
+                and change["commit_sha"] in shas
+                and change["filename"] in filenames
+                for change in changes
+            ):
+                return None, True
+            if {change["commit_sha"] for change in changes} != set(shas) or {
+                change["filename"] for change in changes
+            } != set(filenames):
+                return None, True
+            verified_at = datetime.fromisoformat(evidence["verified_at"])
+            if verified_at.tzinfo is None:
+                return None, True
+        return evidence, False
+    except (ValueError, KeyError, TypeError):
+        return None, True
+
+
+def _signal_result(row: dict) -> dict:
+    evidence, invalid = _read_evidence(row.get("evidence"))
+    files_involved = json.loads(row["files_involved"])
+    if (
+        evidence
+        and evidence["verification_state"] == "verified"
+        and set(evidence["files"]) != set(files_involved)
+    ):
+        evidence, invalid = None, True
+    state = evidence["verification_state"] if evidence else "unavailable"
+    verified = state == "verified"
+    warning = {
+        "verified": (
+            "Immutable commit and file evidence was checked; the model's interpretation "
+            "and significance are not independently verified."
+        ),
+        "partial": "SHA-level evidence is partial; do not treat this interpretation as verified.",
+        "unavailable": "SHA-level evidence is unavailable; this interpretation is unverified.",
+    }[state]
+    if invalid:
+        warning += " Stored evidence is malformed and cannot be trusted."
+    return {
+        "id": row["id"],
+        "summary": row["summary"],
+        "detail": row["detail"],
+        "category": row["category"],
+        "significance": row["significance"],
+        "created_at": row["created_at"],
+        "files_involved": files_involved,
+        "interpretation_is_model_generated": True,
+        "verified_against_immutable_sha_evidence": verified,
+        "evidence": evidence,
+        "commit_links": [
+            f"https://github.com/{evidence['source_repository']}/commit/{sha}"
+            for sha in evidence["commit_shas"]
+        ]
+        if evidence
+        else [],
+        "warning": warning,
+    }
+
+
+def signals_result(
+    repository: str, rows: list[dict] | None, limit: int, tracked: dict | None = None
+) -> dict:
     if rows is None:
         return {
             "repository": repository,
@@ -134,27 +241,33 @@ def signals_result(repository: str, rows: list[dict] | None, limit: int) -> dict
             "signals": [],
             "message": "Repository is not tracked by ForkHub.",
         }
+    last_synced_at = tracked.get("last_synced_at") if tracked else None
+    sync_status = tracked.get("sync_status") if tracked else None
+    freshness = (
+        "stale"
+        if sync_status and sync_status != "ok"
+        else "last_sync_succeeded"
+        if last_synced_at
+        else "unknown"
+    )
+    signals = [_signal_result(row) for row in rows[:limit]]
+    warning = (
+        "Model interpretations and significance are not independently verified. "
+        "Inspect each signal's SHA-level evidence and verification state. "
+        "Immutable commit evidence does not establish current branch equivalence."
+    )
+    if freshness == "stale":
+        warning += " Latest repository sync failed; cached analysis may be stale."
+    elif freshness == "unknown":
+        warning += " Repository sync freshness is unknown."
     return {
         "repository": repository,
         "status": "cached",
-        "signals": [
-            {
-                "id": row["id"],
-                "summary": row["summary"],
-                "detail": row["detail"],
-                "category": row["category"],
-                "significance": row["significance"],
-                "created_at": row["created_at"],
-                "files_involved": json.loads(row["files_involved"]),
-                "interpretation_is_model_generated": True,
-                "verified_against_immutable_sha_evidence": False,
-            }
-            for row in rows[:limit]
-        ],
+        "signals": signals,
         "truncated": len(rows) > limit,
         "source": "forkhub_cache",
-        "warning": (
-            "Existing model interpretations, not independently verified. "
-            "SHA-level provenance is not yet available in this preview."
-        ),
+        "last_synced_at": last_synced_at,
+        "sync_status": sync_status,
+        "freshness": freshness,
+        "warning": warning,
     }

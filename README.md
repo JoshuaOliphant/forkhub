@@ -317,6 +317,13 @@ uv run ty check
 
 ## Docs
 
+- [Jev review follow-through](docs/agents/jev-review.md) — rerun results, fixes and evidence-based lint dispositions for PR #67.
+- [Verification gates](docs/agents/testing.md) — run repeatable local checks and acceptance-test mappings.
+- [Acceptance-test cache](docs/agents/acceptance.md) — retain issue criteria and exact test node identifiers.
+- [Issue tracker](docs/agents/issue-tracker.md) — use GitHub Issues and record review rulings.
+- [Observability status](docs/agents/observability.md) — locate the existing telemetry stack and its current verification limits.
+- [Signal evidence](docs/signal-evidence.md) — capture immutable commit provenance and inspect the same evidence in the website and ChatGPT.
+- [Signal evidence review findings](knowledge/capture/daily/2026-11-10-signal-evidence.md) — real-commit round-trip observations and release boundaries.
 - [Cloudflare Worker deployment](docs/cloudflare-worker-deployment.md) — host the read-only MCP service with Access OAuth and a dedicated D1 cache.
 - [Cloudflare MCP runtime findings](knowledge/capture/daily/2026-11-08-cloudflare-mcp.md) — measured Python, D1, and packaging constraints from the deployment work.
 - [Cloudflare Access Managed OAuth pilot](docs/cloudflare-managed-oauth-pilot.md) — authenticate private, read-only MCP cache access through Cloudflare Access.

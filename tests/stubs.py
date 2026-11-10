@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from forkhub.models import (
+    CommitDetails,
     CommitInfo,
     CompareResult,
     DeliveryResult,
@@ -278,6 +279,8 @@ class StubGitProvider:
         # Files whose diff fetch raises a provider-level error (e.g. a deleted
         # fork's 404), distinct from _error_files which raises RuntimeError.
         self._provider_error_files: set[str] = set()
+        self.commits: dict[str, CommitDetails] = {}
+        self.commit_calls: list[str] = []
         self.diff_calls: list[dict[str, str]] = []
         # Call recording so tests can assert the API-budget property:
         # an unchanged, already-baselined fork must trigger zero extra calls.
@@ -403,6 +406,13 @@ class StubGitProvider:
         if self._raise_on_rate_limit:
             raise ConnectionError("Rate limit check failed")
         return self._rate_limit
+
+    async def get_commit(self, owner: str, repo: str, sha: str) -> CommitDetails:
+        key = f"{owner}/{repo}@{sha}"
+        self.commit_calls.append(key)
+        if key not in self.commits:
+            raise GitHubProviderError(404, "Commit unavailable")
+        return self.commits[key]
 
     async def get_head_sha(self, owner: str, repo: str, branch: str) -> str:
         """Return the canned HEAD SHA for ``{owner}/{repo}``.

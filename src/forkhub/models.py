@@ -3,9 +3,10 @@
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ── Enums ────────────────────────────────────────────────────
 
@@ -126,6 +127,54 @@ class Fork(BaseModel):
     updated_at: datetime = Field(default_factory=_utc_now)
 
 
+CommitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+EvidenceFile = Annotated[str, Field(min_length=1)]
+
+
+class EvidenceChange(BaseModel):
+    commit_sha: CommitSha
+    filename: EvidenceFile
+    status: str
+    patch: str | None = None
+
+
+class SignalEvidence(BaseModel):
+    source_repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    commit_shas: list[CommitSha] = Field(default_factory=list)
+    files: list[EvidenceFile] = Field(default_factory=list)
+    changes: list[EvidenceChange] = Field(default_factory=list)
+    verification_state: Literal["unavailable", "partial", "verified"] = "unavailable"
+    verified_at: datetime | None = None
+    captured_at: datetime = Field(default_factory=_utc_now)
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_verification(self) -> "SignalEvidence":
+        if len(self.commit_shas) != len(set(self.commit_shas)):
+            raise ValueError("Commit SHAs must be unique")
+        if len(self.files) != len(set(self.files)):
+            raise ValueError("Evidence files must be unique")
+        if self.verification_state == "verified":
+            if not self.commit_shas or not self.files or self.verified_at is None:
+                raise ValueError("Verified evidence requires commits, files and verification time")
+            if any(
+                not change.patch
+                or change.filename not in self.files
+                or change.commit_sha not in self.commit_shas
+                for change in self.changes
+            ):
+                raise ValueError("Verified changes must have patches and match cited commits/files")
+            if self.verified_at.utcoffset() is None:
+                raise ValueError("Verified evidence requires a timezone-aware verification time")
+            covered = {change.filename for change in self.changes if change.patch}
+            commits = {change.commit_sha for change in self.changes if change.patch}
+            if not set(self.files) <= covered or not set(self.commit_shas) <= commits:
+                raise ValueError(
+                    "Verified evidence requires patches for every cited file and commit"
+                )
+        return self
+
+
 class Signal(BaseModel):
     """A classified change detected by the analysis agent."""
 
@@ -136,11 +185,29 @@ class Signal(BaseModel):
     summary: str
     detail: str | None = None
     files_involved: list[str] = Field(default_factory=list)
+    evidence: SignalEvidence | None = None
     significance: int = Field(default=5, ge=1, le=10)
     embedding: bytes | None = None
     is_upstream: bool = Field(default=False)
     release_tag: str | None = None
     created_at: datetime = Field(default_factory=_utc_now)
+
+    @model_validator(mode="after")
+    def validate_evidence_files(self) -> "Signal":
+        if (
+            self.evidence is not None
+            and self.evidence.verification_state == "verified"
+            and set(self.evidence.files) != set(self.files_involved)
+        ):
+            raise ValueError("Verified evidence files must match signal files_involved")
+        return self
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def parse_evidence(cls, value):
+        if isinstance(value, str):
+            return SignalEvidence.model_validate_json(value)
+        return value
 
 
 class Cluster(BaseModel):
@@ -297,6 +364,13 @@ class FileChange(BaseModel):
     additions: int
     deletions: int
     patch: str | None = None
+    previous_filename: str | None = None
+
+
+class CommitDetails(BaseModel):
+    sha: CommitSha
+    files: list[FileChange]
+    complete: bool = True
 
 
 class CommitInfo(BaseModel):
