@@ -82,3 +82,6 @@ connection. Production deployment, either hosted database, and the operational
 local cache remain outside this review's write scope. Milestone 2 acceptance
 requires a separately approved hosted rollout and fresh authenticated ChatGPT
 comparison.
+
+For the concrete release bundle command, paired D1/Worker rollout, live tool
+comparison and rollback record, follow [Milestone 2 acceptance](signal-evidence-e2e-acceptance.md).
