@@ -26,20 +26,26 @@ def acceptance_rows(text: str) -> list[tuple[str, str, str]]:
     return rows
 
 
-def junit_results(paths: list[Path]) -> dict[str, bool]:
+def junit_case_results(cases: list[ET.Element]) -> dict[str, bool]:
     results = {}
-    for path in paths:
-        cases = list(ET.parse(path).getroot().iter("testcase"))
-        if not cases:
-            raise ValueError(f"No tests measured in {path}")
-        for case in cases:
-            filename = case.attrib["file"]
-            module = filename.removesuffix(".py").replace("/", ".")
-            classes = case.attrib["classname"].removeprefix(module).strip(".").replace(".", "::")
-            name = "::".join(part for part in (filename, classes, case.attrib["name"]) if part)
-            passed = not any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))
-            results[name] = results.get(name, True) and passed
+    for case in cases:
+        filename = case.attrib["file"]
+        module = filename.removesuffix(".py").replace("/", ".")
+        classes = case.attrib["classname"].removeprefix(module).strip(".").replace(".", "::")
+        name = "::".join(part for part in (filename, classes, case.attrib["name"]) if part)
+        passed = not any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))
+        results[name] = results.get(name, True) and passed
     return results
+
+
+def read_junit_results(paths: list[Path]) -> dict[str, bool]:
+    cases = []
+    for path in paths:
+        report = list(ET.parse(path).getroot().iter("testcase"))
+        if not report:
+            raise ValueError(f"No tests measured in {path}")
+        cases.extend(report)
+    return junit_case_results(cases)
 
 
 def check_acceptance(text: str, results: dict[str, bool]) -> list[str]:
@@ -72,6 +78,35 @@ def cache_freshness(text: str, comments: list[dict]) -> str | None:
     return None
 
 
+def fetch_remote_cache_warning(text: str, root: Path, environment: dict[str, str]) -> str | None:
+    """Return an advisory warning on CLI failure; invalid local cache metadata raises."""
+    cache_freshness(text, [])
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "api",
+                "repos/JoshuaOliphant/forkhub/issues/comments?per_page=100",
+                "--paginate",
+                "--slurp",
+            ],
+            cwd=root,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    except FileNotFoundError:
+        return "Remote AC-table freshness is unknown: GitHub CLI is not installed"
+    except subprocess.CalledProcessError:
+        return "Remote AC-table freshness is unknown: GitHub CLI request failed"
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return "Remote AC-table freshness is unknown: GitHub CLI returned invalid JSON"
+    return cache_freshness(text, [comment for page in pages for comment in page])
+
+
 def run(command: list[str], cwd: Path, environment: dict[str, str]) -> None:
     print("+ " + " ".join(command), flush=True)
     subprocess.run(command, cwd=cwd, env=environment, check=True)
@@ -85,23 +120,6 @@ def verify(root: Path, output: Path) -> None:
     integration = output / "workers.xml"
     coverage = output / "coverage.json"
     table = (root / "docs/agents/acceptance.md").read_text()
-    pages = json.loads(
-        subprocess.check_output(
-            [
-                "gh",
-                "api",
-                "repos/JoshuaOliphant/forkhub/issues/comments?per_page=100",
-                "--paginate",
-                "--slurp",
-            ],
-            cwd=root,
-            env=environment,
-            text=True,
-        )
-    )
-    warning = cache_freshness(table, [comment for page in pages for comment in page])
-    if warning:
-        print("WARNING: " + warning, flush=True)
     run(["uv", "sync", "--frozen", "--extra", "claude", "--extra", "mcp"], root, environment)
     run(
         [
@@ -206,8 +224,11 @@ def verify(root: Path, output: Path) -> None:
     )
     if not any(path.is_file() for path in bundle.rglob("*")):
         raise ValueError("Worker dry-run produced no bundle files")
-    for result in check_acceptance(table, junit_results([unit, integration])):
+    for result in check_acceptance(table, read_junit_results([unit, integration])):
         print(result)
+    warning = fetch_remote_cache_warning(table, root, environment)
+    if warning:
+        print("WARNING: " + warning, flush=True)
     print(f"Verified {measured['num_statements']} statements at 100%; artifacts: {output}")
 
 

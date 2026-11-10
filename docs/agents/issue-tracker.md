@@ -5,8 +5,7 @@ Repository: `JoshuaOliphant/forkhub`. GitHub Issues are enabled, verified throug
 `documentation`, `duplicate`, `enhancement`, `good first issue`, `help wanted`,
 `invalid`, `question`, and `wontfix`. This verification setup creates no labels.
 
-Read issues with GitHub REST, because GraphQL authentication is unavailable in
-this session:
+Use GitHub REST for the repository's documented issue-reading commands:
 
 ```sh
 gh api repos/JoshuaOliphant/forkhub/issues/35
