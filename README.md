@@ -317,6 +317,7 @@ uv run ty check
 
 ## Docs
 
+- [Jev review follow-through](docs/agents/jev-review.md) — rerun results, fixes and evidence-based lint dispositions for PR #67.
 - [Verification gates](docs/agents/testing.md) — run repeatable local checks and acceptance-test mappings.
 - [Acceptance-test cache](docs/agents/acceptance.md) — retain issue criteria and exact test node identifiers.
 - [Issue tracker](docs/agents/issue-tracker.md) — use GitHub Issues and record review rulings.

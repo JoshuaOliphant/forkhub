@@ -80,3 +80,23 @@ configured, so no automated mutation score is claimed. An ambient npm
 allow-scripts warning is documented without changing the user's configuration.
 
 Ruling and acceptance table: https://github.com/JoshuaOliphant/forkhub/issues/35#issuecomment-6772758024
+
+## Jev credential inheritance and rerun
+
+The local TypeSafe key already existed; Codex's noninteractive command environment
+had not inherited it. Running the tools through the interactive shell succeeded
+without changing or printing the credential. All skipped Jev checks now ran.
+The full outcome and explicit source-lint dispositions are in
+`docs/agents/jev-review.md`; earlier unavailable statements are historical, not
+the current status.
+
+Jev-driven fixes separated pure evidence verification and JUnit interpretation
+from I/O, strengthened direct exported-evidence assertions, preserved credentials
+for the real-source integration, and addressed all three new PR nits. Final
+verification: 1,038 unit tests, 4,063/4,063 source statements (100%), 114 Ruff
+files, two integrations and 14 acceptance mappings; production import and Worker
+dry-run passed. Diff lint has zero findings; the broader source pass retains
+13 explicitly reviewed/refuted flags and is not called clean.
+
+Production, both hosted databases and the operational local cache remain
+unchanged. No credential or global configuration was persisted or modified.

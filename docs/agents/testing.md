@@ -25,7 +25,7 @@ exists, ran, and passed; missing, skipped, xfailed or failed criteria are failur
 
 | Gate | Command | Recorded status |
 |---|---|---|
-| Unit suite and coverage | `uv run pytest -x -q` | 2026-11-10: 1,032 passed, 5 deselected; 4,054/4,054 source statements covered |
+| Unit suite and coverage | `uv run pytest -x -q` | 2026-11-10: 1,038 passed, 5 deselected; 4,063/4,063 source statements covered |
 | Lint | `uv run ruff check src/ tests/ examples/ deploy/cloudflare/src/ scripts/verify.py` | 2026-11-10: passed, 114 files selected |
 | Format | `uv run ruff format --check src/ tests/ examples/ deploy/cloudflare/src/ scripts/verify.py` | 2026-11-10: 114 files already formatted |
 | Workers/D1 transport | `uv run pytest tests/test_cloudflare_runtime.py -o addopts='' -m integration -x -q` | 2026-11-10: passed in the 2-test integration gate |

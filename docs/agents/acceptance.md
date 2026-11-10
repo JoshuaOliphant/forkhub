@@ -1,6 +1,6 @@
 # Acceptance-test cache
 
-Cache refreshed: 2026-11-10T16:22:28Z
+Cache refreshed: 2026-11-10T17:36:42Z
 
 This committed bulk cache retains mappings for open and closed issues. Add new
 issue rows without deleting earlier rows. When a later issue replaces a criterion,
