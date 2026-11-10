@@ -177,6 +177,7 @@ class BackfillService:
             summary=row["summary"],
             detail=row["detail"],
             files_involved=files,
+            evidence=row.get("evidence"),
             significance=row["significance"],
             embedding=row["embedding"],
             is_upstream=bool(row["is_upstream"]),
@@ -328,49 +329,55 @@ class BackfillService:
                 attempt.error = (attempt.error or "") + f" [attempt not persisted: {exc}]"
             return attempt
 
-        # Pin the diff's head ref to the fork's head SHA recorded at sync time,
-        # when available. A fork's branch keeps moving after analysis; comparing
-        # against the floating branch name would fetch whatever the fork looks
-        # like at backfill time, which may include changes the signal never
-        # classified. Pinning to the recorded head_sha makes the fetched diff
-        # match the snapshot the signal was derived from. A full SHA is a valid
-        # ref for the cross-repo compare API, so the "owner:sha" form is
-        # accepted exactly like "owner:branch". (Scoping further to the signal's
-        # exact commits needs commit data the Signal model does not carry — that
-        # is forkhub-7k1.) Older rows and providers that do not populate head_sha
-        # fall back to the default branch.
-        base_ref = f"{tracked['owner']}:{tracked['default_branch']}"
-        head_sha = fork_row.get("head_sha")
-        if head_sha:
-            head_ref = f"{fork_row['owner']}:{head_sha}"
-            logger.debug("Backfill diff pinned to fork head_sha: %s", head_ref)
-        else:
-            head_ref = f"{fork_row['owner']}:{fork_row['default_branch']}"
-            logger.debug("Backfill diff using fork default branch (no head_sha): %s", head_ref)
-
-        # Fetch the diffs for files involved in this signal. Backfill is
-        # all-or-nothing: if any expected file's diff can't be fetched, fail the
-        # whole attempt rather than committing a half-applied change set. An
-        # empty diff (binary/pure-rename) means "no patch needed" — skip it.
         patches: list[str] = []
         patched_files: list[str] = []
         failed_files: list[str] = []
-        for filepath in signal.files_involved:
-            try:
-                diff = await self._provider.get_file_diff(
-                    tracked["owner"],
-                    tracked["name"],
-                    base_ref,
-                    head_ref,
-                    filepath,
+        if signal.evidence is not None:
+            evidence = signal.evidence
+            if (
+                evidence.verification_state != "verified"
+                or evidence.source_repository != fork_row["full_name"]
+                or set(evidence.files) != set(signal.files_involved)
+            ):
+                attempt.status = BackfillStatus.PATCH_FAILED
+                attempt.error = (
+                    "Immutable commit evidence is incomplete or does not match this signal"
                 )
-            except (OSError, ConnectionError, TimeoutError, RuntimeError, ProviderError) as exc:
-                logger.warning("Failed to fetch diff for %s: %s", filepath, exc)
-                failed_files.append(filepath)
-                continue
-            if diff:
-                patches.append(diff)
-                patched_files.append(filepath)
+                await self._record_attempt(attempt)
+                return attempt
+            for sha in evidence.commit_shas:
+                for change in evidence.changes:
+                    if change.commit_sha == sha and change.filename in signal.files_involved:
+                        if change.patch:
+                            patches.append(change.patch)
+                        if change.filename not in patched_files:
+                            patched_files.append(change.filename)
+        else:
+            base_ref = f"{tracked['owner']}:{tracked['default_branch']}"
+            head_sha = fork_row.get("head_sha")
+            if head_sha:
+                head_ref = f"{fork_row['owner']}:{head_sha}"
+                logger.debug("Backfill diff pinned to fork head_sha: %s", head_ref)
+            else:
+                head_ref = f"{fork_row['owner']}:{fork_row['default_branch']}"
+                logger.debug("Backfill diff using fork default branch (no head_sha): %s", head_ref)
+
+            for filepath in signal.files_involved:
+                try:
+                    diff = await self._provider.get_file_diff(
+                        tracked["owner"],
+                        tracked["name"],
+                        base_ref,
+                        head_ref,
+                        filepath,
+                    )
+                except (OSError, ConnectionError, TimeoutError, RuntimeError, ProviderError) as exc:
+                    logger.warning("Failed to fetch diff for %s: %s", filepath, exc)
+                    failed_files.append(filepath)
+                    continue
+                if diff:
+                    patches.append(diff)
+                    patched_files.append(filepath)
 
         if failed_files:
             attempt.status = BackfillStatus.PATCH_FAILED

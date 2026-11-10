@@ -109,7 +109,7 @@ def create_worker_app(
     async def list_cached_signals(
         repository: str, min_significance: int = 5, limit: int = 20
     ) -> dict:
-        """Return previous classifications with their provenance limitations."""
+        """Return SHA evidence, verification state, and model-interpretation uncertainty."""
         require_access_identity()
         return await reader.list_cached_signals(repository, min_significance, limit)
 

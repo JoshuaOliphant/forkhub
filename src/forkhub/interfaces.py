@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from forkhub.models import (
+        CommitDetails,
         CommitInfo,
         CompareResult,
         DeliveryResult,
@@ -57,6 +58,8 @@ class GitProvider(Protocol):
     async def get_file_diff(
         self, owner: str, repo: str, base: str, head: str, path: str
     ) -> str: ...
+
+    async def get_commit(self, owner: str, repo: str, sha: str) -> CommitDetails: ...
 
     async def get_head_sha(self, owner: str, repo: str, branch: str) -> str: ...
 

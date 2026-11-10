@@ -32,4 +32,5 @@ async def build_explore_data(forkhub: ForkHub, owner: str, repo: str) -> dict[st
         },
         "discovery_username": username,
         "relationship": relationship,
+        "signals": await forkhub.get_signal_view(tracked.full_name),
     }

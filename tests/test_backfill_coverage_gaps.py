@@ -14,8 +14,16 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from forkhub.models import BackfillAttempt, BackfillStatus, FixEdit, FixSuggestion
+from forkhub.models import (
+    BackfillAttempt,
+    BackfillStatus,
+    CommitDetails,
+    FileChange,
+    FixEdit,
+    FixSuggestion,
+)
 from forkhub.services.backfill import BackfillService
+from forkhub.services.evidence import capture_evidence
 
 from .stubs import StubGitProvider, StubTestFixer, make_fork, make_signal, make_tracked_repo
 
@@ -921,3 +929,58 @@ class TestConfigPathImplMissingFile:
 
         combined = "\n".join(output_lines)
         assert "not found" in combined.lower()
+
+
+async def test_backfill_applies_two_cited_commits_without_unrelated_changes(db, provider, tmp_path):
+    _init_git_repo(tmp_path)
+    repo = await _insert_repo(db)
+    fork = await _insert_fork(db, repo["id"])
+    shas = ["a" * 40, "b" * 40]
+    for sha, before, after in zip(shas, ["hello", "first"], ["first", "second"], strict=True):
+        provider.commits[f"forker1/proj@{sha}"] = CommitDetails(
+            sha=sha,
+            files=[
+                FileChange(
+                    filename="README.md",
+                    status="modified",
+                    additions=1,
+                    deletions=1,
+                    patch=f"@@ -1 +1 @@\n-{before}\n+{after}",
+                ),
+                FileChange(
+                    filename="unrelated.py",
+                    status="added",
+                    additions=1,
+                    deletions=0,
+                    patch="@@ -0,0 +1 @@\n+unrelated",
+                ),
+            ],
+        )
+    evidence = await capture_evidence(provider, "forker1/proj", shas, ["README.md"])
+    signal = make_signal(
+        fork["id"], repo["id"], files_involved='["README.md"]', evidence=evidence.model_dump_json()
+    )
+    await db.insert_signal(signal)
+    attempt = await BackfillService(
+        db, provider, repo_path=tmp_path, test_command="true"
+    ).apply_signal(signal["id"])
+    assert attempt.status == BackfillStatus.ACCEPTED
+    assert attempt.branch_name is not None
+    actual = subprocess.run(
+        ["git", "show", f"{attempt.branch_name}:README.md"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert actual.stdout == "second\n"
+    tree = subprocess.run(
+        ["git", "ls-tree", "--name-only", attempt.branch_name],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert tree.stdout.splitlines() == ["README.md"]
+    assert (tmp_path / "README.md").read_text() == "hello\n"
+    assert provider.diff_calls == []

@@ -647,3 +647,33 @@ class TestAuthentication:
             GitHubProvider(token="abc123")
 
         assert caplog.records == []
+
+
+@pytest.mark.parametrize("paginated", [True, False])
+async def test_get_commit_uses_immutable_endpoint_and_reports_file_truncation(
+    provider, mock_github, paginated
+):
+    sha = "a" * 40
+    route = mock_github.get(f"/repos/alice/repo/commits/{sha}", params={"per_page": 100}).respond(
+        200,
+        json={
+            "sha": sha,
+            "files": [
+                {
+                    "filename": "file.py",
+                    "status": "renamed",
+                    "previous_filename": "old.py",
+                    "additions": 1,
+                    "deletions": 1,
+                    "patch": "@@ -1 +1 @@\n-old\n+value",
+                }
+            ],
+        },
+        headers={"Link": '<https://api.github.com/next>; rel="next"'} if paginated else {},
+    )
+    result = await provider.get_commit("alice", "repo", sha)
+    assert route.called
+    assert result.sha == sha
+    assert result.complete is not paginated
+    assert result.files[0].previous_filename == "old.py"
+    assert result.files[0].patch.endswith("+value")

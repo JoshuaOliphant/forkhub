@@ -26,6 +26,7 @@ _EMPTY: dict[str, Any] = {
     "repo": {"name": "—", "full_name": "No repos tracked yet", "last_sync": None},
     "discovery_username": None,
     "relationship": {"status": "not_scanned", "message": "No repository selected."},
+    "signals": {"status": "not_tracked", "signals": [], "message": "No repository selected."},
 }
 
 

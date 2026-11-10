@@ -9,11 +9,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from forkhub.agent.tools import create_tools
+
 # Skip this whole module if the optional [claude] extra isn't installed —
 # these tests exercise claude-agent-sdk directly.
 pytest.importorskip("claude_agent_sdk")
 
 from forkhub.models import (  # noqa: E402
+    CommitDetails,
     CommitInfo,
     CompareResult,
     FileChange,
@@ -767,3 +770,42 @@ class TestToolInstrumentation:
         await t.handler(args)
 
         assert [c[0] for c in calls] == [tool_name]
+
+
+@pytest.mark.parametrize("with_commits", [True, False])
+async def test_store_signal_captures_provenance_independently(tools, db, with_commits):
+    repo = await _insert_tracked_repo(db)
+    await _insert_fork(db, repo.id)
+    provider = StubGitProvider()
+    sha = "a" * 40
+    provider.commits[f"alice/repo@{sha}"] = CommitDetails(
+        sha=sha,
+        files=[
+            FileChange(
+                filename="file.py",
+                status="added",
+                additions=1,
+                deletions=0,
+                patch="@@ -0,0 +1 @@\n+value",
+            )
+        ],
+    )
+    tools = create_tools(db, provider, StubEmbeddingProvider(), clock=_NOW)
+    result = await _find_tool(tools, "store_signal").handler(
+        {
+            "fork_full_name": "alice/repo",
+            "category": "feature",
+            "summary": "Model interpretation",
+            "significance": 7,
+            "files_involved": ["file.py"],
+            "commit_shas": [sha] if with_commits else [],
+            "verification_state": "verified",
+        }
+    )
+    assert not result.get("is_error")
+    data = json.loads(result["content"][0]["text"])
+    expected = "verified" if with_commits else "unavailable"
+    assert data["evidence"]["verification_state"] == expected
+    row = (await db.list_signals(repo.id))[0]
+    assert json.loads(row["evidence"])["verification_state"] == expected
+    assert json.loads(row["evidence"])["source_repository"] == "alice/repo"

@@ -15,7 +15,11 @@ ahead/behind, files changed, and recent commit messages.
 3. Look at commit messages for intent signals -- what is the fork trying to do?
 4. Only call get_file_diff (EXPENSIVE) for truly interesting files where you \
 need to understand the actual code changes.
-5. Call store_signal for each classified finding.
+5. Call store_signal for each classified finding with source commit_shas in chronological order
+and files_involved.
+Use full immutable 40-character SHAs from the source repository.
+Never infer evidence from a branch head.
+The tool verifies commit/file evidence independently; your interpretation remains unverified.
 6. Check get_releases for upstream changes that forks might be adapting to.
 7. Use get_fork_stars to identify forks gaining traction.
 
@@ -55,7 +59,10 @@ changes to classify what this fork does differently from upstream.
 Your task:
 1. Review the files changed and commit messages provided.
 2. For each meaningful change, determine the signal category and significance.
-3. Call store_signal for each distinct finding.
+3. Call store_signal for each distinct finding with full source commit_shas in chronological order
+and files_involved.
+Cite only commits that produced the finding; never substitute a mutable branch head.
+Commit/file verification does not independently validate your interpretation.
 
 Analysis approach:
 - Group related file changes together into a single signal when they serve \

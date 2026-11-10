@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover
 
 import forkhub.otel as otel
 from forkhub.models import Signal, SignalCategory
+from forkhub.services.evidence import capture_evidence
 
 if TYPE_CHECKING:
     from claude_agent_sdk import SdkMcpTool
@@ -317,6 +318,10 @@ def create_tools(
                 "significance": {"type": "integer"},
                 "files_involved": {"type": "array", "items": {"type": "string"}},
                 "detail": {"type": "string"},
+                "commit_shas": {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                },
             },
             "required": ["fork_full_name", "category", "summary", "significance"],
         },
@@ -352,7 +357,13 @@ def create_tools(
             if fork_row is None:
                 return _err(f"Fork not found in database: {fork_full_name}")
 
-            # Build and persist the signal
+            evidence = await capture_evidence(
+                provider,
+                fork_row["full_name"],
+                args.get("commit_shas", []),
+                files_involved,
+                now=clock,
+            )
             signal = Signal(
                 fork_id=fork_row["id"],
                 tracked_repo_id=fork_row["tracked_repo_id"],
@@ -361,6 +372,7 @@ def create_tools(
                 detail=detail if detail else None,
                 files_involved=files_involved,
                 significance=significance,
+                evidence=evidence,
             )
 
             # Generate embedding for similarity search
@@ -381,7 +393,7 @@ def create_tools(
             await db.insert_signal(signal_dict)
 
             otel.record_signal_stored(category_str)
-            return _ok({"signal_id": signal.id})
+            return _ok({"signal_id": signal.id, "evidence": evidence.model_dump(mode="json")})
         except Exception as exc:
             return _err(str(exc))
 

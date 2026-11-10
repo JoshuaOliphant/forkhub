@@ -71,5 +71,8 @@ class PreviewQueries:
                 else None
             )
         return signals_result(
-            repository, [dict(row) for row in rows] if rows is not None else None, limit
+            repository,
+            [dict(row) for row in rows] if rows is not None else None,
+            limit,
+            dict(tracked) if tracked is not None else None,
         )

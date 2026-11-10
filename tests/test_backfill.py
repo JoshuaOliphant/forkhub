@@ -13,8 +13,11 @@ from forkhub.models import (
     BackfillAttempt,
     BackfillResult,
     BackfillStatus,
+    CommitDetails,
+    FileChange,
 )
 from forkhub.services.backfill import BackfillService
+from forkhub.services.evidence import capture_evidence
 
 from .stubs import (
     StubGitProvider,
@@ -1986,3 +1989,43 @@ class TestRunBackfillRegressions:
         assert branch_name not in result.stdout, (
             f"Regression: candidate branch '{branch_name}' was NOT deleted by run_backfill"
         )
+
+
+@pytest.mark.parametrize("verified", [True, False])
+async def test_backfill_uses_captured_commit_patches_and_never_mutable_head(db, provider, verified):
+    repo = await _insert_tracked_repo(db)
+    fork = await _insert_fork(db, repo["id"])
+    sha = "a" * 40
+    provider.commits[f"forker1/project@{sha}"] = CommitDetails(
+        sha=sha,
+        files=[
+            FileChange(
+                filename="file.py",
+                status="added",
+                additions=1,
+                deletions=0,
+                patch="@@ -0,0 +1 @@\n+value",
+            )
+        ],
+    )
+    evidence = await capture_evidence(
+        provider, "forker1/project", [sha] if verified else [], ["file.py"]
+    )
+    signal = make_signal(
+        fork["id"],
+        repo["id"],
+        files_involved='["file.py"]',
+        evidence=evidence.model_dump(mode="json"),
+    )
+    await db.insert_signal(signal)
+    attempt = await BackfillService(db, provider).apply_signal(signal["id"], dry_run=True)
+    assert attempt.status == (BackfillStatus.PENDING if verified else BackfillStatus.PATCH_FAILED)
+    assert provider.diff_calls == []
+    assert provider.commit_calls == ([f"forker1/project@{sha}"] if verified else [])
+    if verified:
+        assert attempt.files_patched == ["file.py"]
+        assert attempt.patch_summary is not None
+        assert "1 patches" in attempt.patch_summary
+    else:
+        assert attempt.error is not None
+        assert "incomplete" in attempt.error

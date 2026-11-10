@@ -19,13 +19,17 @@ import httpx
 import pytest
 
 from examples.seed_mcp_demo import DEMO_REPO
+from forkhub.database import Database
 from forkhub.mcp_cache_export import export_cache
 from forkhub.mcp_preview_queries import PreviewQueries
+from forkhub.models import CommitDetails, FileChange
+from forkhub.services.evidence import capture_evidence
+from tests.stubs import make_signal
 
 
 @pytest.mark.integration
 async def test_local_workers_and_d1_preserve_authenticated_cache_contract(
-    tmp_path, access_settings, signing_keys, sign_assertion, access_claims
+    tmp_path, access_settings, signing_keys, sign_assertion, access_claims, provider
 ):
     root = Path(__file__).resolve().parents[1]
     checkout = tmp_path / "checkout"
@@ -48,6 +52,36 @@ async def test_local_workers_and_d1_preserve_authenticated_cache_contract(
     )
     shutil.copyfile(root / "tests/cloudflare/entry.py", project / "src/integration_worker.py")
     source = Path(access_settings.database_path)
+    sha = "a" * 40
+    provider.commits[f"{DEMO_REPO}@{sha}"] = CommitDetails(
+        sha=sha,
+        files=[
+            FileChange(
+                filename="evidence.txt",
+                status="added",
+                additions=1,
+                deletions=0,
+                patch="@@ -0,0 +1 @@\n+checked content\n",
+            )
+        ],
+    )
+    evidence = await capture_evidence(provider, DEMO_REPO, [sha], ["evidence.txt"])
+    assert evidence.verification_state == "verified"
+    database = Database(source)
+    await database.connect()
+    try:
+        tracked = await database.get_tracked_repo_by_name(DEMO_REPO)
+        await database.insert_signal(
+            make_signal(
+                None,
+                tracked["id"],
+                significance=10,
+                files_involved=json.dumps(["evidence.txt"]),
+                evidence=evidence.model_dump(mode="json"),
+            )
+        )
+    finally:
+        await database.close()
     source_before = hashlib.sha256(source.read_bytes()).digest()
     sql = tmp_path / "synthetic.sql"
     export_cache(source, sql, access_settings.github_username, confirm_single_user=True)
@@ -178,6 +212,9 @@ async def test_local_workers_and_d1_preserve_authenticated_cache_contract(
                     "list_cached_signals",
                 }
                 reader = PreviewQueries(source, access_settings.github_username)
+                checked = reader.list_cached_signals(DEMO_REPO)["signals"][0]
+                assert checked["verified_against_immutable_sha_evidence"] is True
+                assert checked["evidence"] == evidence.model_dump(mode="json")
                 calls = [
                     ("list_tracked_repositories", {}, reader.list_tracked_repositories()),
                     (

@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any, cast
 
 import aiosqlite
+
+from forkhub.mcp_cache_contract import SIGNALS_SQL, signals_result, validate_signal_query
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -100,6 +103,7 @@ CREATE TABLE IF NOT EXISTS signals (
     embedding BLOB,
     is_upstream BOOLEAN NOT NULL DEFAULT 0,
     release_tag TEXT,
+    evidence TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_signals_repo ON signals(tracked_repo_id);
@@ -251,6 +255,7 @@ class Database:
         ALTER TABLE to gain the column. These migrations are strictly additive
         (ADD COLUMN with a default) so they are safe to run on every connect.
         """
+        await self._add_column_if_missing("signals", "evidence", "TEXT")
         await self._add_column_if_missing(
             "forks", "baseline_attempts", "INTEGER NOT NULL DEFAULT 0"
         )
@@ -652,16 +657,19 @@ class Database:
     # ------------------------------------------------------------------
 
     async def insert_signal(self, signal: dict[str, Any]) -> None:
+        signal = {"evidence": None, **signal}
+        if isinstance(signal["evidence"], dict):
+            signal["evidence"] = json.dumps(signal["evidence"], default=str)
         await self._db.execute(
             """
             INSERT INTO signals
                 (id, fork_id, tracked_repo_id, category, summary, detail,
                  files_involved, significance, embedding, is_upstream,
-                 release_tag, created_at)
+                 release_tag, evidence, created_at)
             VALUES
                 (:id, :fork_id, :tracked_repo_id, :category, :summary, :detail,
                  :files_involved, :significance, :embedding, :is_upstream,
-                 :release_tag, :created_at)
+                 :release_tag, :evidence, :created_at)
             """,
             signal,
         )
@@ -925,3 +933,16 @@ class Database:
             (key, value),
         )
         await self._db.commit()
+
+    async def get_signal_view(
+        self, repository: str, min_significance: int = 5, limit: int = 20
+    ) -> dict:
+        validate_signal_query(repository, min_significance, limit)
+        tracked = await self.get_tracked_repo_by_name(repository)
+        rows = None
+        if tracked is not None and not tracked["excluded"]:
+            cursor = await self._db.execute(
+                SIGNALS_SQL, (tracked["id"], min_significance, limit + 1)
+            )
+            rows = await self._fetchall(cursor)
+        return signals_result(repository, rows, limit, tracked)

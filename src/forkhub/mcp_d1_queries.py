@@ -55,4 +55,4 @@ class D1Queries:
             if tracked
             else None
         )
-        return signals_result(repository, rows, limit)
+        return signals_result(repository, rows, limit, tracked[0] if tracked else None)

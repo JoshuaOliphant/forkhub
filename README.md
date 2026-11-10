@@ -317,6 +317,8 @@ uv run ty check
 
 ## Docs
 
+- [Signal evidence](docs/signal-evidence.md) — capture immutable commit provenance and inspect the same evidence in the website and ChatGPT.
+- [Signal evidence review findings](knowledge/capture/daily/2026-11-10-signal-evidence.md) — real-commit round-trip observations and release boundaries.
 - [Cloudflare Worker deployment](docs/cloudflare-worker-deployment.md) — host the read-only MCP service with Access OAuth and a dedicated D1 cache.
 - [Cloudflare MCP runtime findings](knowledge/capture/daily/2026-11-08-cloudflare-mcp.md) — measured Python, D1, and packaging constraints from the deployment work.
 - [Cloudflare Access Managed OAuth pilot](docs/cloudflare-managed-oauth-pilot.md) — authenticate private, read-only MCP cache access through Cloudflare Access.
