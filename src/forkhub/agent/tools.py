@@ -91,7 +91,7 @@ def create_tools(
     embedding_provider: EmbeddingProvider,
     clock: datetime | None = None,
 ) -> list[SdkMcpTool]:
-    """Create all ForkHub agent tools with injected dependencies."""
+    """Bind handlers without running their I/O; raise ImportError without the Claude SDK."""
     if not _CLAUDE_SDK_AVAILABLE:
         raise ImportError(
             "create_tools requires the 'claude' extra. "

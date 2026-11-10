@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 
 async def build_explore_data(forkhub: ForkHub, owner: str, repo: str) -> dict[str, Any]:
-    """Read a persisted relationship snapshot without performing discovery."""
+    """Read persisted relationship/evidence views; raise ValueError when untracked."""
     full_name = f"{owner}/{repo}"
     tracked = next(
         (r for r in await forkhub.get_repos() if r.full_name.casefold() == full_name.casefold()),

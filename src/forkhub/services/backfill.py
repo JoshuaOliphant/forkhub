@@ -167,7 +167,6 @@ class BackfillService:
 
     @staticmethod
     def _row_to_signal(row: dict) -> Signal:
-        """Convert a signals DB row dict into a Signal Pydantic model."""
         files = json.loads(row["files_involved"]) if row["files_involved"] else []
         return Signal(
             id=row["id"],
@@ -469,10 +468,6 @@ class BackfillService:
         *,
         per_commit: bool = False,
     ) -> None:
-        """Create branch, apply patches, and run tests.
-
-        Modifies the attempt in-place with results.
-        """
         # Create the candidate branch
         await self._git.create_branch(branch_name)
 
