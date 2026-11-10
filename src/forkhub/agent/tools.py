@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import functools
 import json
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -36,6 +37,26 @@ def _ok(data: dict[str, Any]) -> dict[str, Any]:
 def _err(message: str) -> dict[str, Any]:
     """Format an error tool response."""
     return {"content": [{"type": "text", "text": f"Error: {message}"}], "is_error": True}
+
+
+def _commit_references(value: Any) -> tuple[list[str], bool]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return [], True
+    if not isinstance(value, list):
+        return [], True
+    shas = []
+    unusable = False
+    for item in value:
+        if isinstance(item, str) and re.fullmatch(r"[0-9a-fA-F]{40}", item):
+            sha = item.lower()
+            if sha not in shas:
+                shas.append(sha)
+        else:
+            unusable = True
+    return shas, unusable
 
 
 def _instrument(handler):  # noqa: ANN001, ANN202 — wraps a tool handler
@@ -342,6 +363,8 @@ def create_tools(
                     files_involved = json.loads(files_involved)
                 except json.JSONDecodeError:
                     files_involved = [files_involved] if files_involved else []
+            files_involved = list(dict.fromkeys(files_involved))
+            commit_shas, unusable_references = _commit_references(args.get("commit_shas", []))
             detail = args.get("detail", "")
 
             # Validate category
@@ -360,10 +383,17 @@ def create_tools(
             evidence = await capture_evidence(
                 provider,
                 fork_row["full_name"],
-                args.get("commit_shas", []),
+                commit_shas,
                 files_involved,
                 now=clock,
             )
+            if unusable_references:
+                evidence.warnings.append(
+                    "Some supplied commit references were unusable; evidence is incomplete."
+                )
+                if evidence.verification_state == "verified":
+                    evidence.verification_state = "partial"
+                    evidence.verified_at = None
             signal = Signal(
                 fork_id=fork_row["id"],
                 tracked_repo_id=fork_row["tracked_repo_id"],

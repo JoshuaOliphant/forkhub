@@ -12,6 +12,11 @@ identity. The shared `capture_evidence` service fetches each cited commit by SHA
 checks the returned SHA, and records relevant file changes and textual patches.
 External analysis tools can reuse this service without the Claude SDK.
 
+At the agent-tool boundary, JSON-encoded SHA arrays are decoded, full hexadecimal
+SHAs are lowercased, and duplicate SHAs/files are removed in input order. Unusable
+references retain the interpretation with an explicit warning and unavailable or
+partial evidence. A valid subset is never presented as complete evidence.
+
 The evidence record includes `source_repository`, `commit_shas`, `files`,
 `changes`, `captured_at`, `verified_at`, `verification_state`, and `warnings`.
 Each change identifies its commit, filename, status, and available patch.
@@ -64,6 +69,13 @@ This code does not update hosted schemas by itself. Before release, review the
 exported schema and prepare an approved release/import with rollback. Starting
 the library against an existing writable database applies additive migrations;
 do not point review experiments at an operational database.
+
+The new readers select `signals.evidence`. They cannot read a cache exported
+before this schema: `list_cached_signals` fails with a missing-column error.
+Release must pair the code with a fresh export imported into a new D1 database;
+never deploy this Worker against the current database binding first. Rolling the
+Worker back while keeping the fresh database is safe because the old query
+ignores the added column.
 
 Local transport verification does not establish acceptance in the live ChatGPT
 connection. Production deployment, either hosted database, and the operational
