@@ -20,6 +20,7 @@ from forkhub.mcp_cache_export import export_cache
 from forkhub.mcp_d1_queries import D1Queries
 from forkhub.mcp_preview_queries import PreviewQueries
 from forkhub.mcp_worker import WorkerSettings, create_worker_app
+from forkhub.services.signal_release import prepare_signal_release
 from forkhub.web.app import create_app
 from forkhub.web.data import build_explore_data
 from tests.stubs import make_fork, make_tracked_repo
@@ -119,6 +120,13 @@ async def test_real_commit_signal_matches_website_export_and_authenticated_mcp(
                 css = await client.get("/static/css/" + stylesheet)
                 assert css.status_code == 200 and "text/css" in css.headers["content-type"]
                 assert len(css.content) > 100
+    bundle = tmp_path / "release"
+    release = prepare_signal_release(
+        source, bundle, fork.owner, upstream.full_name, confirm_single_user=True
+    )
+    assert release["counts"]["signals"] == 1
+    assert release["authenticated_chatgpt_acceptance"] == "pending"
+    assert json.loads((bundle / "expected.json").read_text())["list_cached_signals"] == expected
     before = hashlib.sha256(source.read_bytes()).digest()
     sql = tmp_path / "export.sql"
     counts = export_cache(source, sql, fork.owner, confirm_single_user=True)
