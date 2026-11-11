@@ -84,6 +84,10 @@ Open `http://127.0.0.1:8000/<owner>/<repo>` using `$release_repo` as the
 if preparing a different user's bundle. The comparison above checks checksums
 only against the saved expected bodies; it is not hosted acceptance. Keep
 `snapshot.db` unchanged and discard the website copy after inspection.
+`snapshot.db` is the bundle's most sensitive artifact: it contains the full
+application database, including data such as embeddings and sync errors that
+`cache.sql` omits; delete it and any remaining website copies once the acceptance
+record is complete.
 `cache.db` is the minimal MCP schema and must not be opened as a writable full
 application database.
 
