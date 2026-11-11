@@ -50,6 +50,7 @@ scan, invoke models, migrate the source, or deploy.
 
 | Artifact | Purpose |
 |---|---|
+| `snapshot.db` | Exact full application backup for disposable website inspection; checksummed |
 | `cache.sql` | Minimal fresh-schema import for a new D1 database |
 | `cache.db` | Local reimport for contract comparison; not a full application database |
 | `expected.json` | Exact response bodies, including evidence, timestamps and warnings |
@@ -62,9 +63,29 @@ Checksums detect accidental changes; they are not signatures or proof of origin.
 
 ## Website inspection
 
-Launch the website against the same dedicated application snapshot used for the
-release, using the selected username. `cache.db` is the minimal MCP schema and
-must not be opened as a writable full application database.
+The bundle retains `snapshot.db`, the exact full application backup used for
+`expected.json`. Verify the bundle before inspection, then launch against a
+**disposable copy**, since application startup can migrate or write the database.
+From the reviewed checkout, with the same absolute `release_dir` and `release_repo`:
+
+```sh
+uv run python examples/prepare_signal_release.py compare \
+  --bundle "$release_dir" --actual "$release_dir/expected.json"
+website_dir=$(mktemp -d)
+chmod 700 "$website_dir"
+(umask 077; cp -f "$release_dir/snapshot.db" "$website_dir/website.db")
+chmod 600 "$website_dir/website.db"
+FORKHUB_DATABASE_PATH="$website_dir/website.db" GITHUB_USERNAME=JoshuaOliphant \
+  uv run forkhub web --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000/<owner>/<repo>` using `$release_repo` as the
+`<owner>/<repo>` path. Substitute the manifest's username for `JoshuaOliphant`
+if preparing a different user's bundle. The comparison above checks checksums
+only against the saved expected bodies; it is not hosted acceptance. Keep
+`snapshot.db` unchanged and discard the website copy after inspection.
+`cache.db` is the minimal MCP schema and must not be opened as a writable full
+application database.
 
 Inspect the actual target page: expand the evidence inspector, follow the
 immutable commit links, and compare source repository, SHAs, files, patches,
@@ -144,7 +165,7 @@ inspection; do not delete either database during rollback.
 | Reviewed release | Full code SHA, lockfile hashes, fresh verifier output | Pending |
 | Dedicated real source | Confirmed single-user scope; interpretation origin | Pending |
 | Private local package | Manifest counts, checksums, quick_check and exact parity | Pending |
-| Actual website | Inspector, immutable links, patches and warnings match | Pending |
+| Actual website | Disposable `snapshot.db` copy; rendered signal IDs, source, SHAs, files, patches, verification and warnings match `expected.json`; screenshots and username recorded | Pending |
 | Protected hosted release | New D1 ID/schema/counts, Worker version, denial checks | Pending |
 | Authenticated ChatGPT | Three fresh call records and exact comparison pass | Pending |
 | Edge states | Disposable empty/stale/partial/unavailable regression results | Pending |
