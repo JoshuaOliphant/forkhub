@@ -2,6 +2,7 @@
 
 Status: proposed planning package, 2026-11-13. No implementation or production change authorized by this document.
 Baseline: main at f6e9872. Parent roadmap: [#63](https://github.com/JoshuaOliphant/forkhub/issues/63).
+Tracker: [workflow plan #71](https://github.com/JoshuaOliphant/forkhub/issues/71); first full specification: [safe backfill #72](https://github.com/JoshuaOliphant/forkhub/issues/72).
 
 ## Clarifications
 

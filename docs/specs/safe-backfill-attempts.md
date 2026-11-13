@@ -3,6 +3,7 @@
 **Class:** architectural. Backfill execution, local Git ownership, persisted outcomes, and caller status must share explicit transition rules.
 
 Status: proposed specification; implementation awaits approval. Part of the [workflow state plan](../workflow-state-plan.md).
+Tracker: [specification #72](https://github.com/JoshuaOliphant/forkhub/issues/72), part of [plan #71](https://github.com/JoshuaOliphant/forkhub/issues/71).
 
 ## Clarifications
 

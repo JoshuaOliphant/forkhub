@@ -47,3 +47,11 @@ add another workflow engine or a separate test-fixture family.
 Planning output is proposed, not an implementation pass. Existing baseline tests
 do not satisfy the new acceptance criteria. Production schema/data rollout and
 build approval remain separate.
+
+Published the portfolio as #71 and the first architectural specification as #72.
+The package has 45 criteria. Jev flagged five initial criteria; revisions and
+the three added reconciliation/cleanup criteria were checked, with no remaining
+rewrite flags. A second builder pass found no build-blocking contradictions.
+Documentation is committed on docs/workflow-state-spec. The default Git HTTPS
+credential lookup failed; a per-command GitHub CLI credential helper pushed the
+branch without changing global configuration or printing credentials.
