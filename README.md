@@ -317,6 +317,11 @@ uv run ty check
 
 ## Docs
 
+- [Workflow state plan](docs/workflow-state-plan.md) — prioritize explicit transitions, recovery, and shared application status.
+- [Safe backfill specification](docs/specs/safe-backfill-attempts.md) — separate preview, execution evidence, Git ownership, cleanup, and review.
+- [Domain language](CONTEXT.md) — shared workflow terms and semantic invariants.
+- [Explicit workflow transitions](docs/adr/explicit-workflow-transitions.md) — proposed design and alternatives for recoverable service workflows.
+- [Workflow planning journal](knowledge/capture/daily/2026-11-13-workflow-states.md) — evidence, review findings, and verification limits from the state-machine investigation.
 - [Jev review follow-through](docs/agents/jev-review.md) — rerun results, fixes and evidence-based lint dispositions for PR #67.
 - [Verification gates](docs/agents/testing.md) — run repeatable local checks and acceptance-test mappings.
 - [Acceptance-test cache](docs/agents/acceptance.md) — retain issue criteria and exact test node identifiers.
