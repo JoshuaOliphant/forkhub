@@ -158,4 +158,4 @@ class TestAnalyzeRepoIntegration:
         explicitly enabled with -m integration.
         """
         # This would actually call the Agent SDK, so we skip in unit tests
-        pytest.skip("Requires ANTHROPIC_API_KEY and live API access")  # ty: ignore[invalid-argument-type, too-many-positional-arguments]
+        pytest.skip("Requires ANTHROPIC_API_KEY and live API access")

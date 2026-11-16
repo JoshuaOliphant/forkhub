@@ -385,23 +385,20 @@ class TestLocalEmbeddingProvider:
         import sys
         import types
 
+        import numpy as np
+
         from forkhub.embeddings.local import LocalEmbeddingProvider
-
-        class FakeArr:
-            def __init__(self, values: list[float]):
-                self._values = values
-
-            def tolist(self) -> list[float]:
-                return self._values
 
         class FakeModel:
             def __init__(self, model_name: str) -> None:
                 self.model_name = model_name
                 self.calls: list[list[str]] = []
 
-            def encode(self, texts: list[str]):
+            def encode(self, texts: list[str], *, convert_to_numpy: bool):
+                # Mirrors SentenceTransformer.encode: a 2-D ndarray for a list input.
                 self.calls.append(list(texts))
-                return [FakeArr([float(len(t))]) for t in texts]
+                assert convert_to_numpy
+                return np.array([[float(len(t))] for t in texts])
 
         # Inject a fake `sentence_transformers` module so the import inside
         # `_load_model` resolves to FakeModel without downloading anything.

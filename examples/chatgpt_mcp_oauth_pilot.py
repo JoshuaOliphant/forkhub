@@ -129,6 +129,7 @@ def create_server(settings: PilotSettings) -> FastMCP:
             issuer_url=issuer_url,
             resource_server_url=AnyHttpUrl(settings.resource),
             required_scopes=["forkhub:read"],
+            validate_token_resource=True,
         ),
     )
     read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
