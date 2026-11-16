@@ -935,6 +935,8 @@ class TestClaudeAnalyzerRunner:
         result = await analyzer.analyze(repo, [fork], [])
         # The session was driven through the fake client.
         assert _FakeSDKClient.instances, "ClaudeSDKClient was not invoked"
+        # Sessions stay isolated from the operator's CLAUDE.md, hooks and plugins.
+        assert _FakeSDKClient.instances[-1].options.setting_sources == []
         # The pre-existing signal should NOT be returned because it was created
         # BEFORE session_start; verify that analyze still completes cleanly.
         assert isinstance(result, list)
@@ -1260,6 +1262,8 @@ class TestClaudeTestFixer:
             test_file_contents={"tests/t.py": "def test_a(): assert False"},
         )
         assert result.should_reject is False
+        # One-shot queries stay isolated from the operator's filesystem settings.
+        assert _FakeFixerSDKClient.instances[-1].options.setting_sources == []
 
     async def test_suggest_fixes_handles_invalid_json(self, monkeypatch: pytest.MonkeyPatch):
         """Bad JSON in the agent response -> rejected suggestion."""

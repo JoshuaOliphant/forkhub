@@ -69,6 +69,8 @@ class ClaudeTestFixer:
             max_budget_usd=self._budget_usd,
             permission_mode="bypassPermissions",
             max_turns=1,
+            # An unset value loads the operator's filesystem settings; keep the query isolated.
+            setting_sources=[],
         )
 
         client = ClaudeSDKClient(options=options)
