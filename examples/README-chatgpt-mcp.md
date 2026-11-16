@@ -20,7 +20,7 @@ export FORKHUB_MCP_USER="your-github-username"
 # Required: explicitly select an existing ForkHub database.
 export FORKHUB_MCP_DATABASE_PATH="$HOME/.local/share/forkhub/forkhub.db"
 
-uv run --with 'mcp>=1.26,<2' python examples/chatgpt_mcp_preview.py
+uv run --with 'mcp>=1.30,<2' python examples/chatgpt_mcp_preview.py
 ```
 
 The experimental server binds to `127.0.0.1:8765` and serves

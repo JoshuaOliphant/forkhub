@@ -5,9 +5,9 @@ description = "Authenticated read-only ForkHub MCP service on Cloudflare Workers
 requires-python = ">=3.14"
 dependencies = [
     "forkhub-worker-library",
-    "mcp==1.26.0",
+    "mcp==1.30.0",
     "httpx==0.28.1",
-    "pyjwt[crypto]>=2.10,<3",
+    "pyjwt[crypto]>=2.15,<3",
 ]
 
 [tool.uv.sources]

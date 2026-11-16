@@ -38,8 +38,11 @@ class LocalEmbeddingProvider:
         self._load_model()
         assert self._model is not None
         loop = asyncio.get_event_loop()
-        embeddings = await loop.run_in_executor(None, self._model.encode, texts)
-        return [emb.tolist() for emb in embeddings]
+        model = self._model
+        embeddings = await loop.run_in_executor(
+            None, lambda: model.encode(texts, convert_to_numpy=True)
+        )
+        return embeddings.tolist()
 
     def dimensions(self) -> int:
         """Return the embedding dimension (384 for all-MiniLM-L6-v2)."""

@@ -314,4 +314,7 @@ class ClaudeAnalyzer:
             model=self._settings.anthropic.model,
             permission_mode="bypassPermissions",
             max_turns=50,
+            # Since claude-agent-sdk 0.1.53 an unset value loads the operator's
+            # user and project settings (CLAUDE.md, hooks, plugins); keep sessions isolated.
+            setting_sources=[],
         )
