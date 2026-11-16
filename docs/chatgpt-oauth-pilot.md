@@ -97,8 +97,10 @@ end-to-end connection from unit tests alone.
 Issue #51 remains a separate data-quality blocker: a partial refresh
 currently overwrites the last complete relationship snapshot.
 
-The MCP SDK is an explicit development/test dependency (`mcp>=1.26,<2`)
-in `pyproject.toml`, not a transitive dependency. Pydantic 2.12+ is
+The MCP SDK is an explicit development/test dependency (`mcp>=1.30,<2`)
+in `pyproject.toml`, not a transitive dependency. The pilot sets
+`AuthSettings(validate_token_resource=True)`, which requires mcp 1.30 or
+later. Pydantic 2.12+ is
 required for `UrlConstraints(preserve_empty_path=True)`. The pilot uses
 that constraint to publish a bare-origin issuer without adding a slash,
 while keeping the exact IdP-published `iss` comparison. HTTP-level tests
